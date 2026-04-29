@@ -6,8 +6,8 @@ sys.path.append(str(root_path))
 
 import math
 from typing import Dict, Callable
-from calculations.Utils.JsonDBReader import JsonDBReader
-from calculations.Utils.Constants import CONSTANT_R
+from _src.Utils.JsonDBReader import JsonDBReader
+from _src.Utils.Constants import CONSTANT_R
 
 
 class CriticalTemperatureCorrelation:

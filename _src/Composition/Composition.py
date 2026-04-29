@@ -10,11 +10,11 @@ from typing import List
 root_path = Path(__file__).parent.parent.parent
 sys.path.append(str(root_path))
 
-from calculations.Composition.PlusComponentCorrelations import PlusComponentProperties
-from calculations.Utils.JsonDBReader import JsonDBReader
-from calculations.Utils.Errors import NoComponentError, CompositionSumError
-from calculations.Composition.component import Component
-from calculations.Composition.bips import BIPSCalculator
+from _src.Composition.PlusComponentCorrelations import PlusComponentProperties
+from _src.Utils.JsonDBReader import JsonDBReader
+from _src.Utils.Errors import NoComponentError, CompositionSumError
+from _src.Composition.component import Component
+from _src.Composition.bips import BIPSCalculator
 
 
 

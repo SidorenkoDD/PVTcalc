@@ -2,7 +2,7 @@
 module to import composition and create dict
 '''
 from abc import ABC, abstractmethod
-from calculations.Utils.Errors import InvalidExcelComponentType, InvalidExcelValueType
+from _src.Utils.Errors import InvalidExcelComponentType, InvalidExcelValueType
 import pandas as pd
 
 class CompositionLoader(ABC):

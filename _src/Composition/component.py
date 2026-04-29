@@ -6,9 +6,9 @@ import re
 import pandas as pd
 root_path = Path(__file__).parent.parent.parent
 sys.path.append(str(root_path))
-from calculations.Utils.Errors import NoComponentError, InvalidMolarFractionError
-from calculations.Utils.JsonDBReader import JsonDBReader
-from calculations.Composition.PlusComponentCorrelations import PlusComponentProperties
+from _src.Utils.Errors import NoComponentError, InvalidMolarFractionError
+from _src.Utils.JsonDBReader import JsonDBReader
+from _src.Composition.PlusComponentCorrelations import PlusComponentProperties
 
 
 class Component:
