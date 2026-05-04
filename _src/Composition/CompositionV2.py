@@ -5,8 +5,8 @@ from _src.Utils.JsonDBReader import JsonDBReader
 from _src.Utils import BRS_EOS_DB_V2 as BRSDB
 from _src.Utils.Errors import NoComponentError, InvalidMolarFractionError
 from _src.EOS.BaseEOS import EOSType
-import logging
-logger = logging.getLogger('MBALPVT.PVTDataModel.PVTCore.Composition')
+# import logging
+# logger = logging.getLogger('MBALPVT.PVTDataModel.PVTCore.Composition')
 db = JsonDBReader().load_database('DB_V2.json')
 
 

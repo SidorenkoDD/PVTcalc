@@ -1,10 +1,10 @@
 '''Module doc
 '''
-from calculations.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
-from calculations.VLE.PhaseEquilibrium import PhaseEquilibrium
-from calculations.Utils.JsonDBReader import JsonDBReader
-from calculations.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
-from calculations.Utils.Constants import CONSTANT_R
+from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
+from _src.VLE.PhaseEquilibrium import PhaseEquilibrium
+from _src.Utils.JsonDBReader import JsonDBReader
+from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
+from _src.Utils.Constants import CONSTANT_R
 
 class FluidProperties:
     '''Class for calculation fluid properties'''
