@@ -27,7 +27,7 @@ class SaturationPressure:
         letuch_z = {c: float(phase_stability._mixture_fugacities_arr[i]) for i, c in enumerate(comps)}
 
         # Проверка на стабильность / тривиальное решение
-        if (phase_stability.S_l - 1) < 1e-4 and (phase_stability.S_v - 1) < 1e-4:
+        if (phase_stability.S_l - 1) < 1e-5 and (phase_stability.S_v - 1) < 1e-5:
             y_sp = {c: 0 for c in comps}
             return {'s_sp': 0, 'y_sp': y_sp, 'k_sp': None, 'r_sp': None, 
                     'letuch_sp': None, 'letuch_z': letuch_z}
@@ -107,7 +107,7 @@ class SaturationPressure:
         self.sp_process()
         if self.p_max_bub - self.p_min_bub < 1e-5:
             return None
-        while not (abs(1 - self.sum_y_sp) < 1e-3 or math.pow(self.Ykz, 2) < 1e-4):
+        while not (abs(1 - self.sum_y_sp) < 1e-4 or math.pow(self.Ykz, 2) < 1e-4):
             self.sp_process()
             if self.p_max_bub - self.p_min_bub < 1e-5:
                 return None
@@ -189,7 +189,7 @@ class SaturationPressure:
                           for component in self.zi.keys())
         self.Ykz_dp = sum(y_dp[component] / self.zi[component] for component in self.zi.keys())
 
-        if abs(1 - self.sum_y_dp) < 1e-4 or math.pow(self.Ykz_dp, 2) < 1e-3:
+        if abs(1 - self.sum_y_dp) < 1e-3 or math.pow(self.Ykz_dp, 2) < 1e-3:
             print(f'Pdew найдено: {self.p_i}')
         else:
             self.p_max_dew = self.p_i
@@ -199,7 +199,7 @@ class SaturationPressure:
         self.dp_process()
         if self.p_max_dew - self.p_min_dew < 1e-5:
             return None
-        while not (abs(1 - self.sum_y_dp) < 1e-4 or math.pow(self.Ykz_dp, 2) < 1e-4):
+        while not (abs(1 - self.sum_y_dp) < 1e-3 or math.pow(self.Ykz_dp, 2) < 1e-3):
             self.dp_process()
             if self.p_max_dew - self.p_min_dew < 1e-5:
                 return None
