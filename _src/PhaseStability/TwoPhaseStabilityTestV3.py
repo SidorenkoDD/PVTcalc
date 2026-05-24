@@ -218,17 +218,17 @@ class TwoPhaseStabilityTest:
             self.vapour_eos.calc_eos()
             vapour_fugacities = self.vapour_eos.fugacities
 
-            ri_v = self._calc_ri_vapour(
+            self.ri_v = self._calc_ri_vapour(
                 vapour_fugacities=vapour_fugacities,
                 mixture_fugacities=self._mixture_fugacities_arr,
                 S_v=self.S_v,
             )
 
-            if self._check_convergence(ri_v):
+            if self._check_convergence(self.ri_v):
                 self.convergence_v = True
                 break
 
-            self._k_v_arr = self._update_k_values(self._k_v_arr, ri_v)
+            self._k_v_arr = self._update_k_values(self._k_v_arr, self.ri_v)
             self.k_values_vapour = self._array_to_dict(self._k_v_arr)
 
             if self._check_trivial_solution(self._k_v_arr):
@@ -259,17 +259,17 @@ class TwoPhaseStabilityTest:
             self.liquid_eos.calc_eos()
             liquid_fugacities = self.liquid_eos.fugacities
 
-            ri_l = self._calc_ri_liquid(
+            self.ri_l = self._calc_ri_liquid(
                 liquid_fugacities=liquid_fugacities,
                 mixture_fugacities=self._mixture_fugacities_arr,
                 S_l=self.S_l,
             )
 
-            if self._check_convergence(ri_l):
+            if self._check_convergence(self.ri_l):
                 self.convergence_l = True
                 break
 
-            self._k_l_arr = self._update_k_values(self._k_l_arr, ri_l)
+            self._k_l_arr = self._update_k_values(self._k_l_arr, self.ri_l)
             self.k_values_liquid = self._array_to_dict(self._k_l_arr)
 
             if self._check_trivial_solution(self._k_l_arr):

@@ -4,6 +4,20 @@ from _src.Utils.Viscosity import ViscosityFactory
 
 
 class FluidPropertiesCalculator:
+    '''
+    Модуль для расчета свойств фазы после флеша
+
+    Args:
+        composition: dict с мольными долями состава фазы
+        composition_properties: dict со свойствами компонент фазы
+        eos_object: объект EOS для доступа к z и шифт параметру
+        P: давление в БАР
+        t: температура в К
+        viscosity_method: метод для расчета вязкости, по умолчанию LBС
+
+    TODO:
+        Надо разобраться с тем, почему где то используется 8.31, а где то 83.1
+    '''
     def __init__(self, composition: dict, composition_properties: dict, eos_object: BrusilovskiyEOS, p: float, T: float,
                  viscosity_method: str = 'LBC'):
         self._composition = composition
@@ -24,7 +38,7 @@ class FluidPropertiesCalculator:
 
     @property
     def molar_volume(self):
-        return CONSTANT_R * self._T * self._eos.z / self._p - self._eos.shift_parametr
+        return (CONSTANT_R * 10 * self._T * self._eos.z / self._p - self._eos.shift_parametr)
 
     @property
     def molar_density(self):
@@ -36,7 +50,7 @@ class FluidPropertiesCalculator:
 
     @property
     def z_shift(self):
-        return self._eos.z - self._p * self._eos.shift_parametr / (self._T * CONSTANT_R)
+        return self._eos.z - self._p * self._eos.shift_parametr / (self._T * CONSTANT_R * 10)
 
     @property
     def viscosity(self):
@@ -50,13 +64,3 @@ class FluidPropertiesCalculator:
                     alpha4=0.0007456476450897753,
                     ).calculate()
 
-        # return visc(mole_fractions=self._composition, composition_data=self._composition_properties,
-        #             phase_density=self.density, mw=self.molar_mass, temperature=self._T,
-        #             alpha0=0.1314433068037033,
-        #             alpha1=0.015912599861621857,
-        #             alpha2=0.05853300169110298,
-        #             alpha3=-0.04075799882411957,
-        #             alpha4=0.009332399815320969,
-        #             ).calculate()
-        # return visc(mole_fractions=self._composition, composition_data=self._composition_properties,
-        #             phase_density=self.density, mw=self.molar_mass, temperature=self._T).calculate()
