@@ -11,6 +11,7 @@ from _src.Utils.Constants import (
 
 class TwoPhaseStabilityTest:
     def __init__(self, composition: Composition, p: float, t: float):
+        
         self.p = float(p)
         self.t = float(t)
 
@@ -30,7 +31,7 @@ class TwoPhaseStabilityTest:
         self._composition = composition
         self.zi = composition.composition
         self.composition_data = composition.composition_data
-
+        print(f"[TPST {id(self)}] composition_data id: {id(composition.composition_data)}")
         # Векторное внутреннее представление
         self._components = tuple(self.zi.keys())
         self._component_index = {comp: i for i, comp in enumerate(self._components)}
@@ -148,32 +149,35 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _interpetate_stability_analysis(self):
+        self.S_v_rounded = round(self.S_v, 2)
+        self.S_l_rounded = round(self.S_l, 2)
+
         if (
             (self.convergence_trivial_solution_v and self.convergence_trivial_solution_l)
-            or ((self.S_v <= 1.0) and self.convergence_trivial_solution_l)
-            or (self.convergence_trivial_solution_v and (self.S_l <= 1.0))
-            or ((self.S_v <= 1.0) and (self.S_l <= 1.0))
+            or ((self.S_v_rounded <= 1.0) and self.convergence_trivial_solution_l)
+            or (self.convergence_trivial_solution_v and (self.S_l_rounded <= 1.0))
+            or ((self.S_v_rounded <= 1.0) and (self.S_l_rounded <= 1.0))
         ):
             self.stable = True
             self._k_flash_arr = None
             self.k_values_for_flash = None
 
-        elif (self.S_v > 1.0) and self.convergence_trivial_solution_l:
+        elif (self.S_v_rounded > 1.0) and self.convergence_trivial_solution_l:
             self.stable = False
             self._k_flash_arr = self._k_v_arr.copy()
             self.k_values_for_flash = self._array_to_dict(self._k_flash_arr)
 
-        elif self.convergence_trivial_solution_v and (self.S_l > 1.0):
+        elif self.convergence_trivial_solution_v and (self.S_l_rounded > 1.0):
             self.stable = False
             self._k_flash_arr = self._k_l_arr.copy()
             self.k_values_for_flash = self._array_to_dict(self._k_flash_arr)
 
-        elif (self.S_v > 1.0) and (self.S_l > 1.0):
+        elif (self.S_v_rounded > 1.0) and (self.S_l_rounded > 1.0):
             self.stable = False
             self._k_flash_arr = self._k_v_arr * self._k_l_arr
             self.k_values_for_flash = self._array_to_dict(self._k_flash_arr)
 
-        elif (self.S_v > 1.0) and (self.S_l <= 1.0):
+        elif (self.S_v_rounded > 1.0) and (self.S_l_rounded <= 1.0):
             self.stable = False
             self._k_flash_arr = self._k_v_arr.copy()
             self.k_values_for_flash = self._array_to_dict(self._k_flash_arr)
