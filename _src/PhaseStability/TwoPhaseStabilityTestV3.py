@@ -31,7 +31,6 @@ class TwoPhaseStabilityTest:
         self._composition = composition
         self.zi = composition.composition
         self.composition_data = composition.composition_data
-        print(f"[TPST {id(self)}] composition_data id: {id(composition.composition_data)}")
         # Векторное внутреннее представление
         self._components = tuple(self.zi.keys())
         self._component_index = {comp: i for i, comp in enumerate(self._components)}

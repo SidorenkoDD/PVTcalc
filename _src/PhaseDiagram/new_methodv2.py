@@ -8,7 +8,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(name)s | %(level
 
 class SaturationPressure:
     def __init__(self, composition: Composition, t_K: float, p_max_bar: float = 1000, p_min_bar: float = 0.01):
-        self.composition_object = composition
+        self.composition = composition
+        self.composition.T = t_K
+        #self.composition_object = composition.new_composition(composition.composition, deep_copy=True)
         self.t_K = t_K
         self.p_max_bar_sat = p_max_bar
         self.p_min_bar_sat = p_min_bar
@@ -25,7 +27,7 @@ class SaturationPressure:
 
     def _find_S(self, p: float) -> dict:
         """Точная копия логики выбора фазы из PhaseDiagram_v4.py, векторизованная."""
-        phase_stability = TwoPhaseStabilityTest(self.composition_object, p, t=self.t_K)
+        phase_stability = TwoPhaseStabilityTest(self.composition, p, t=self.t_K)
         phase_stability.calculate_phase_stability()
         
         S_l, S_v = phase_stability.S_l, phase_stability.S_v
@@ -84,31 +86,31 @@ class SaturationPressure:
         if stable_low == stable_high:
             if stable_high:  # Обе стабильны → ищем unstable ниже
                 p_search = p_high_init
-                for step in range(30):
+                for step in range(10):
                     p_search *= 0.5
                     if p_search < p_low_init * 0.1:
-                        logger.warning("⚠️ Не найдена unstable точка при снижении")
+                        logger.warning("Не найдена unstable точка при снижении")
                         return p_low_init, p_high_init
                     if not self._find_S(p_search)['stable']:
                         p_unstable = p_search
                         p_stable = p_search * 2.0  # Возвращаемся на шаг вверх
                         break
                 else:
-                    logger.warning("⚠️ Превышен лимит поиска unstable")
+                    logger.warning("Превышен лимит поиска unstable")
                     return p_low_init, p_high_init
             else:  # Обе нестабильны → ищем stable выше
                 p_search = p_high_init
-                for step in range(30):
+                for step in range(10):
                     p_search *= 1.5
                     if p_search > 3000:
-                        logger.warning("⚠️ Не найдена stable точка при повышении")
+                        logger.warning("Не найдена stable точка при повышении")
                         return p_low_init, p_high_init
                     if self._find_S(p_search)['stable']:
                         p_stable = p_search
                         p_unstable = p_search / 1.5  # Возвращаемся на шаг вниз
                         break
                 else:
-                    logger.warning("⚠️ Превышен лимит поиска stable")
+                    logger.warning("Превышен лимит поиска stable")
                     return p_low_init, p_high_init
         else:
             # Статусы разные — определяем, какая граница какая
@@ -123,7 +125,7 @@ class SaturationPressure:
 
         # 4. Сужаем интервал бисекцией (но с проверкой, что он не нулевой)
         if abs(p_stable - p_unstable) < 1e-6:
-            logger.warning(f"⚠️ Интервал слишком мал после поиска: {p_stable:.4f} vs {p_unstable:.4f}")
+            logger.warning(f"Интервал слишком мал после поиска: {p_stable:.4f} vs {p_unstable:.4f}")
             # Расширяем искусственно для дальнейшего поиска
             p_unstable *= 0.99
             p_stable *= 1.01
@@ -138,7 +140,7 @@ class SaturationPressure:
             if abs(p_stable - p_unstable) < 1e-8:
                 break
                 
-        logger.info(f"✅ Суженный bracket: unstable={p_unstable:.4f} bar -> stable={p_stable:.4f} bar")
+        logger.info(f"Диапазон поиска: unstable={p_unstable:.4f} bar -> stable={p_stable:.4f} bar")
         return p_unstable, p_stable
 
     def sp_process(self, lambd: float = 1.0) -> bool | None:
@@ -188,7 +190,7 @@ class SaturationPressure:
             return False
 
     def sp_convergence_loop(self, max_iter: int = 100) -> float | None:
-        logger.info("🚀 Запуск поиска давления насыщения...")
+        logger.info("Запуск поиска давления насыщения")
         
         bracket = self._find_stability_bracket(self.p_min_bar_sat, self.p_max_bar_sat)
         if bracket and bracket[0] is not None and abs(bracket[1] - bracket[0]) > 1e-6:
@@ -196,9 +198,9 @@ class SaturationPressure:
             self.p_min_bar_sat = p_unstable
             self.p_max_bar_sat = p_stable
             self.p_i = (p_stable + p_unstable) / 2.0
-            logger.info(f"🎯 Старт бисекции с P={self.p_i:.4f} bar, интервал={p_stable - p_unstable:.4f} bar")
+            logger.info(f"Старт бисекции с P={self.p_i:.4f} bar, интервал={p_stable - p_unstable:.4f} bar")
         else:
-            logger.warning("⚠️ Bracket не найден или нулевой, используем исходные границы")
+            logger.warning("Границы не найдены или нулевые, используем исходные границы")
             # Если bracket не удался, пробуем хотя бы запустить с исходными границами
             self.p_min_bar_sat = 0.01
             self.p_max_bar_sat = 1000.0
@@ -209,23 +211,23 @@ class SaturationPressure:
         for i in range(1, max_iter + 1):
             # Проверка на "залипание"
             if prev_p is not None and abs(self.p_i - prev_p) < 1e-10:
-                logger.warning(f"⚠️ Давление застыло на итерации {i}. P={self.p_i:.6f}")
+                logger.warning(f"Давление застряло на итерации {i}. P={self.p_i:.6f}")
                 break
             prev_p = self.p_i
             
             if (self.p_max_bar_sat - self.p_min_bar_sat) < 1e-6:
-                logger.info(f"✅ Интервал схлопнулся на итерации {i}. Возврат P={self.p_i:.4f} bar")
+                logger.info(f"Интервал схлопнулся на итерации {i}. Возврат P={self.p_i:.4f} bar")
                 return self.p_i
                 
             res = self.sp_process()
             if res is None:
-                logger.warning(f"⚠️ sp_process вернул None на итерации {i}")
+                logger.warning(f"sp_process вернул None на итерации {i}")
                 return self.p_i
             if res:
-                logger.info(f"✅ Сходимость достигнута на итерации {i}. P_sat={self.p_i:.4f} bar")
+                logger.info(f"Сходимость достигнута на итерации {i}. P_sat={self.p_i:.4f} bar")
                 return self.p_i
                 
-        logger.warning(f"⚠️ Превышен лимит итераций ({max_iter}). Последнее P={self.p_i:.4f} bar, интервал={self.p_max_bar_sat - self.p_min_bar_sat:.4e}")
+        logger.warning(f" Превышен лимит итераций ({max_iter}). Последнее P={self.p_i:.4f} bar, интервал={self.p_max_bar_sat - self.p_min_bar_sat:.4e}")
         return self.p_i
 
 class SaturationPressureFromFlash:

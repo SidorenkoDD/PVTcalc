@@ -2,11 +2,18 @@ from abc import ABC, abstractmethod
 import sys
 import numpy as np
 from pathlib import Path
+import json
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, Any
+
 root_path = Path(__file__).parent.parent.parent
 sys.path.append(str(root_path))
 
-from calculations.Composition.Composition import Composition
-from calculations.CompositionalModel.CompositionalModel import CompositionalModel
+from _src.Utils.Results2 import ResultStore
+from _src.CompositionalModel.CompositionalModelV2 import CompositionalModel
+# from calculations.Composition.Composition import Composition
+# from calculations.CompositionalModel.CompositionalModel import CompositionalModel
 
 # class ExportFacade:
 #     def __init__(self):
@@ -16,6 +23,67 @@ class Export(ABC):
     @abstractmethod
     def export(self):
         ...
+
+class DB(Export):
+    def __init__(self, filepath: str = "models.json"):
+        self.filepath = Path(filepath)
+        self._db: Dict[str, Dict[str, Any]] = {}  # id_модели → её данные
+
+    def export(self, model_id: str,
+               name: str,
+               composition: Dict[str, Any],
+               composition_data : Dict[str, Any],
+               eos,
+               results: ResultStore = None,
+               field: str = None):
+        
+
+        """Кладёт модель в оперативную память 'базы'."""
+        # Превращаем результаты в обычные словари/списки
+        res_serialized = [
+            {
+                "id": r.id,
+                "module": r.module,
+                "params": r.params,
+                "data": self._safe_json(r.data),
+                "timestamp": r.timestamp.isoformat(),
+            }
+
+            for r in results
+        ]
+
+        self._db[model_id] = {
+            "Model_name": name,
+            "Field" : field,
+            "composition": composition,
+            "composition_data" : composition_data,
+            "eos" : eos, 
+            "created_at": datetime.now().isoformat(),
+            "results": res_serialized
+        }
+    
+    
+    def save(self):
+        """Записывает все накопленные модели в один файл."""
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.filepath, "w", encoding="utf-8") as f:
+            # indent=2 для читаемости, default=str страховка от редких не-сериализуемых объектов
+            json.dump(self._db, f, indent=2, default=str, ensure_ascii=False)
+
+    def load(self):
+        """Загружает файл вместо текущего содержимого."""
+        if self.filepath.exists():
+            with open(self.filepath, "r", encoding="utf-8") as f:
+                self._db = json.load(f)
+
+    @staticmethod
+    def _safe_json(data: Any) -> Any:
+        """Превращает numpy/pandas в list/dict, чтобы JSON не падал."""
+        if hasattr(data, "tolist"): return data.tolist()
+        if hasattr(data, "to_dict"): return data.to_dict(orient="list")
+        return data
+
+
 
 
 class E300(Export):
@@ -153,12 +221,3 @@ class E300(Export):
             self._write_zi(result_file)
             self._write_bic(result_file)
 
-
-
-
-
-if __name__ == '__main__':
-    comp = Composition({'C1':0.5, 'C2':0.5})
-    model = CompositionalModel(comp)
-    e300_exporter = E300(model)
-    e300_exporter.export('first')

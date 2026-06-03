@@ -24,3 +24,6 @@ class InvalidExcelValueType(Exception):
 
 class StopIterationError(Exception):
     pass
+
+class ConvergenceError(Exception):
+    pass
