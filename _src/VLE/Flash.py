@@ -1,158 +1,56 @@
-from calculations.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
-from calculations.VLE.PhaseEquilibrium import PhaseEquilibrium
-from calculations.Utils.fluid_properties import FluidProperties, OnePhaseProperties
-from calculations.Utils.BaseClasses import Calculator
-from calculations.Utils.Results import TwoPhaseFlashResults
-from calculations.Utils.Viscosity import LBC
-from calculations.EOS.PenelouxVolumeCorrection import PenelouxVolumeCorrection
-
-class FlashFactory:
-
-    def __init__(self, composition, eos, viscosity_method = 'LBC'):
-        self.composition = composition
-        self.eos = eos
-        self.viscosity_method = viscosity_method
-
-    def create_flash(self, flash_type):
-        if flash_type == 'TwoPhaseFlash':
-            return TwoPhaseFlash(composition=self.composition,
-                                 eos = self.eos)
-        raise ValueError(f'Unknown flash: {flash_type}')
+from _src.Composition.CompositionV2 import Composition
+from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
+from _src.VLE.PhaseEquilibriumNewtonV2 import PhaseEquilibriumNewton
+from _src.Utils.Conditions import Conditions
+from _src.Utils.FluidPropertiesCalculatorV2 import FluidPropertiesCalculator
 
 
-class TwoPhaseFlash(Calculator):
-    def __init__(self, composition, eos, viscosity_method = 'LBC'):
-        self.composition = composition
-        self.eos = eos
-        self.viscosity_method = viscosity_method
-        self._conditions = None
-        self.phase_stability = None
-        self.phase_equilibrium = None
-        self.fluid_properties = None
-
-    def calculate(self, conditions):
-        self._conditions = conditions
-        self.phase_stability = TwoPhaseStabilityTest(self.composition, self._conditions.p,
-                                                     self._conditions.t, self.eos)
-        self.phase_stability.calculate_phase_stability()
-        # Развилка по условию стабильности/нестабильности системы
-        if self.phase_stability.stable is True:
-
-            one_phase_props = OnePhaseProperties(self.phase_stability)
-
-            results = TwoPhaseFlashResults(temperature=self._conditions.t,
-                                           pressure= self._conditions.p,
-                                           stable=self.phase_stability.stable,
-                                           EOS= str(self.eos),
-                                           Fv= None,
-                                           Fl= None,
-                                           Ki= None,
-
-                                           liquid_composition=self.phase_stability.xi_l,
-                                           vapour_composition= self.phase_stability.yi_v,
-                                           liquid_z= self.phase_stability.liquid_eos.z,
-                                           vapour_z= self.phase_stability.vapour_eos.z,
-
-                                           vapour_molecular_mass = one_phase_props.molecular_mass_one_phase,
-                                           liquid_molecular_mass = one_phase_props.molecular_mass_one_phase,
-                                            vapour_molar_volume = 1,
-                                            liquid_molar_volume = 1,
-                                           vapour_volume = one_phase_props.volume_one_phase,
-                                           liquid_volume = one_phase_props.volume_one_phase,
-                                           vapour_density = one_phase_props.density,
-                                           liquid_density = one_phase_props.density,
-                                           liquid_viscosity = None,
-                                           vapour_viscosity = None)
+class Flash:
+    def __init__(self, composition_object : Composition, conditions_object : Conditions):
+        self.composition = composition_object
+        self.conditions = conditions_object
+        self.composition.T = conditions_object.t
 
 
+    def calculate(self):
+        phase_stability_object = TwoPhaseStabilityTest(self.composition, self.conditions.p, self.conditions.t)
+        phase_stability_object.calculate_phase_stability()
 
-        # Если система нестабильна, то передаем К из анализа стабильности и запускаем расчет flash
+
+        if phase_stability_object.stable == False:
+
+            phase_equil_object = PhaseEquilibriumNewton(self.composition,
+                                                        self.conditions.p,
+                                                        self.conditions.t,
+                                                        phase_stability_object.k_values_for_flash)
+
+            self.phase_equil_result = phase_equil_object.find_solve_loop()
+
+            liquid_phase_props_object = FluidPropertiesCalculator(self.phase_equil_result['xi_l'],
+                                                        self.composition.composition_data,
+                                                        phase_equil_object.eos_liquid,
+                                                        self.conditions.p,
+                                                        self.conditions.t)
+            self.liquid_phase_props = liquid_phase_props_object.calc_all_properties()
+
+            vapour_phase_props_object = FluidPropertiesCalculator(self.phase_equil_result['yi_v'],
+                                                        self.composition.composition_data,
+                                                        phase_equil_object.eos_vapour,
+                                                        self.conditions.p,
+                                                        self.conditions.t)
+            self.vapour_phase_props = vapour_phase_props_object.calc_all_properties()
+
+            return {'phase_equil' : self.phase_equil_result,
+                    'liquid_props' : self.liquid_phase_props,
+                    'vapour_props' : self.vapour_phase_props}
+
         else:
 
-            if (self.phase_stability.S_l > 1) and (self.phase_stability.S_v > 1):
-                if self.phase_stability.S_l > self.phase_stability.S_v:
-                    self.phase_equilibrium = PhaseEquilibrium(self.composition, self._conditions.p,
-                                                               self._conditions.t,
-                                                               self.phase_stability.k_values_liquid,
-                                                               self.eos)
-                    self.phase_equilibrium.find_solve_loop()
-                else:
-                    self.phase_equilibrium = PhaseEquilibrium(self.composition, self._conditions.p,
-                                                               self._conditions.t,
-                                                               self.phase_stability.k_values_vapour,
-                                                               self.eos)
-                    self.phase_equilibrium.find_solve_loop()
-            if self.phase_stability.S_l < 1 < self.phase_stability.S_v:
-                self.phase_equilibrium = PhaseEquilibrium(self.composition, self._conditions.p,
-                                                               self._conditions.t,
-                                                               self.phase_stability.k_values_vapour,
-                                                               self.eos)
-                self.phase_equilibrium.find_solve_loop()
-            if self.phase_stability.S_v < 1 < self.phase_stability.S_l:
-                self.phase_equilibrium = PhaseEquilibrium(self.composition, self._conditions.p,
-                                                               self._conditions.t,
-                                                               self.phase_stability.k_values_liquid,
-                                                               self.eos)
-                self.phase_equilibrium.find_solve_loop()
-            self.phase_equilibrium.find_solve_loop()
+            self.one_phase_stability_props = FluidPropertiesCalculator(self.composition.composition,
+                                                                       self.composition.composition_data,
+                                                                       phase_stability_object.vapour_eos,
+                                                                       self.conditions.p,
+                                                                       self.conditions.t)
+            self.one_phase_stability_props.calc_all_properties()
 
-            ## Далее алгоритм с учетом поправки Peneloux. Алгоритм встроен здесь, чтобы не нарушить формирование результатов
-            ### 1. Пересчет УРС -> получаем новый z (до 113 строки)
-            ### 2. Расчет V сразу с учетом поправки для V и с обновленным z (до)
-            ### 3. Перерасчет Z из PV=ZvRT
-
-            self.pen_vol_corr_liquid = PenelouxVolumeCorrection(self.phase_equilibrium.xi_l, 
-                                                    self.composition._composition_data, 
-                                                    p = self._conditions.p,
-                                                    t = self._conditions.t,
-                                                    eos = self.eos)
-
-            self.pen_vol_corr_vapour = PenelouxVolumeCorrection(self.phase_equilibrium.yi_v, 
-                                                    self.composition._composition_data, 
-                                                    p = self._conditions.p,
-                                                    t = self._conditions.t,
-                                                    eos = self.eos)
-
-            self.fluid_properties = FluidProperties(self._conditions.p,
-                                                    self._conditions.t,
-                                                    equil_obj= self.phase_equilibrium)
-
-            # Расчет вязкости
-            self.viscosity_liquid = LBC(mole_fractions = self.phase_equilibrium.xi_l,
-                                        composition_data = self.composition._composition_data,
-                                        phase_density = self.fluid_properties.liquid_density,
-                                        mw = self.fluid_properties.molecular_mass_liquid,
-                                        temperature = self._conditions.t).calculate()
-
-            self.viscosity_gas = LBC(mole_fractions = self.phase_equilibrium.yi_v,
-                                        composition_data = self.composition._composition_data,
-                                        phase_density = self.fluid_properties.vapour_density,
-                                        mw = self.fluid_properties.molecular_mass_vapour,
-                                        temperature = self._conditions.t).calculate()
-
-
-            results = TwoPhaseFlashResults(temperature = self._conditions.t,
-                                pressure = self._conditions.p,
-                                EOS = str(self.eos),
-                                stable = self.phase_stability.stable,
-                                Fv = self.phase_equilibrium.fv,
-                                Fl = (1 - self.phase_equilibrium.fv),
-                                Ki = self.phase_equilibrium.k_values,
-                                liquid_composition = self.phase_equilibrium.xi_l,
-                                vapour_composition = self.phase_equilibrium.yi_v,
-                                liquid_z = self.pen_vol_corr_liquid.update_z(volume = self.fluid_properties.liquid_volume,
-                                                                             F = (1-self.phase_equilibrium.fv)),
-                                vapour_z = self.pen_vol_corr_vapour.update_z(volume = self.fluid_properties.vapour_volume,
-                                                                             F = self.phase_equilibrium.fv),
-                                liquid_molecular_mass = self.fluid_properties.molecular_mass_liquid,
-                                vapour_molecular_mass = self.fluid_properties.molecular_mass_vapour,
-                                vapour_volume = self.fluid_properties.vapour_volume,
-                                liquid_volume = self.fluid_properties.liquid_volume,
-                                vapour_molar_volume = self.fluid_properties.vapour_molar_volume,
-                                liquid_molar_volume = self.fluid_properties.liquid_molar_volume,
-                                vapour_density = self.fluid_properties.vapour_density,
-                                liquid_density = self.fluid_properties.liquid_density,
-                                liquid_viscosity = self.viscosity_liquid,
-                                vapour_viscosity = self.viscosity_gas)
-
-        return results
+            return {'one_phase_props' : self.one_phase_stability_props}

@@ -60,3 +60,11 @@ class FluidPropertiesCalculator:
         #             ).calculate()
         # return visc(mole_fractions=self._composition, composition_data=self._composition_properties,
         #             phase_density=self.density, mw=self.molar_mass, temperature=self._T).calculate()
+    
+    def calc_all_properties(self):
+        
+        return {'molecular_ weight': self.molar_mass,
+                'molar_volume': self.molar_volume,
+                'molar_density': self.molar_density,
+                'density': self.density,
+                'viscosity': self.viscosity}

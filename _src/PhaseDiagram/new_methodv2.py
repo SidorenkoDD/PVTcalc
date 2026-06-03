@@ -16,6 +16,16 @@ class SaturationPressure:
         self.p_min_bar_sat = p_min_bar
         self.p_i = (p_max_bar + p_min_bar) / 2.0
         
+       # Границы и состояние для Dew Point (строго как в PhaseDiagram_v4.py)
+        self.p_min_bar_dew = 0.0
+        self.p_max_bar_dew = p_max_bar
+        self.p_i_dew = (p_max_bar + p_min_bar) / 2.0
+        self._last_sum_y_dp = 0.0
+        self._last_Ykz_dp = 0.0
+        self.Sum_dp = 0.0
+
+
+
         self.zi = composition.composition
         self._components = tuple(self.zi.keys())
         self._z_arr = np.array(list(self.zi.values()))
@@ -64,7 +74,6 @@ class SaturationPressure:
 
         S_sp = float(np.sum(yi))
         return {'S': S_sp, 'yi': yi, 'letuch_sp': letuch_sp, 'letuch_z': letuch_z, 'stable': phase_stability.stable}
-    
 
     def _find_stability_bracket(self, p_low_init=0.01, p_high_init=1000.0) -> tuple[float, float]:
         """
@@ -230,44 +239,78 @@ class SaturationPressure:
         logger.warning(f" Превышен лимит итераций ({max_iter}). Последнее P={self.p_i:.4f} bar, интервал={self.p_max_bar_sat - self.p_min_bar_sat:.4e}")
         return self.p_i
 
-class SaturationPressureFromFlash:
-    def __init__(self, composition: Composition, t_K: float, p_max_bar: float = 1000, p_min_bar:float = 0.1):
-        self.composition = composition
-        self.t_K = t_K
-        self.p_max_bar = p_max_bar
-        self.p_min_bar = p_min_bar
-        self.p_i = self.p_max_bar / 2.0
 
-    def loop(self):
-        phase_stability_object = TwoPhaseStabilityTest(composition=self.composition, p=self.p_i, t=self.t_K)
-        phase_stability_object.calculate_phase_stability()
+###
+### Блок для DEW
+###
 
-        while phase_stability_object.stable:
-            self.p_max_bar = self.p_i
-            self.p_i = (self.p_max_bar + self.p_min_bar) / 2.0
-            logger.debug(f"Flash stable=True, new P={self.p_i:.4f}")
-            phase_stability_object = TwoPhaseStabilityTest(composition=self.composition, p=self.p_i, t=self.t_K)
-            phase_stability_object.calculate_phase_stability()
 
-        from _src.VLE.PhaseEquilibriumNewtonV2 import PhaseEquilibriumNewton
-        phase_equil_object = PhaseEquilibriumNewton(self.composition, p=self.p_i, t=self.t_K, k_values=phase_stability_object.k_values_for_flash)
-        flash_result = phase_equil_object.find_solve_loop()
-        logger.debug(f"Flash Fl={flash_result['Fl']:.6f} at P={self.p_i:.4f}")
+    def dp_process(self, lambd: float = 1.0) -> bool | None:
+        """
+        Точная векторизованная копия dp_process из PhaseDiagram_v4.py.
+        Логика обновления границ сохранена 1:1.
+        """
+        cur_s_dp = self._find_S(self.p_i_dew)
 
-        while flash_result['Fl'] < 0.99:
-            self.p_min_bar = self.p_i
-            self.p_i = (self.p_max_bar + self.p_min_bar) / 2.0
-            phase_stability_object = TwoPhaseStabilityTest(composition=self.composition, p=self.p_i, t=self.t_K)
-            phase_stability_object.calculate_phase_stability()
-            
-            if phase_stability_object.stable:
-                self.p_max_bar = self.p_i
-                self.p_i = (self.p_max_bar + self.p_min_bar) / 2.0
-            else:
-                phase_equil_object = PhaseEquilibriumNewton(self.composition, p=self.p_i, t=self.t_K, k_values=phase_stability_object.k_values_for_flash)
-                flash_result = phase_equil_object.find_solve_loop()
-                logger.debug(f"Upd P={self.p_i:.4f}, Fl={flash_result['Fl']:.6f}")
+        # В оригинале: while cur_s_dp['s_dp'] == 0:
+        while np.isclose(cur_s_dp['S'], 0.0, atol=1e-6):
+            self.p_min_bar_dew = self.p_i_dew
+            self.p_i_dew = (self.p_max_bar_dew + self.p_min_bar_dew) / 2.0
 
-        self.p_bub = self.p_i
-        logger.info(f"✅ Bubble Point from Flash найден: P={self.p_bub:.4f} bar")
-        return self.p_bub
+            if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-5:
+                return None
+
+            cur_s_dp = self._find_S(self.p_i_dew)
+
+        s_dp_val = cur_s_dp['S']
+        f_z = cur_s_dp['letuch_z']
+        f_dp = cur_s_dp['letuch_sp']  # _find_S всегда возвращает fugacities тестовой фазы под этим ключом
+
+        # Формула r_dp из оригинала: exp(f_z) / (exp(f_dp) * S)
+        r_dp = np.exp(f_z - f_dp) / s_dp_val
+        y_dp = cur_s_dp['yi'] * np.power(r_dp, lambd)
+
+        self._last_sum_y_dp = float(np.sum(y_dp))
+
+        # Расчет Sum_dp и Ykz_dp строго по формулам v4
+        ratio = y_dp / self._z_arr
+        with np.errstate(divide='ignore', invalid='ignore'):
+            log_ratio = np.log(ratio)
+            safe_denom = np.where(np.abs(log_ratio) > 1e-12, log_ratio, 1.0)
+            self.Sum_dp = float(np.sum(np.log(np.clip(r_dp, 1e-12, None)) / safe_denom))
+
+        self._last_Ykz_dp = float(np.sum(ratio))
+        logger.debug(f"Dew P={self.p_i_dew:.4f} | sum_y={self._last_sum_y_dp:.6f} | Ykz²={self._last_Ykz_dp**2:.2e}")
+
+        # Критерий сходимости (1e-3 как в оригинале v4)
+        if (abs(1.0 - self._last_sum_y_dp) < 1e-3) or (self._last_Ykz_dp ** 2 < 1e-3):
+            return True
+        else:
+            # 🔑 В оригинале ВСЕГДА обновляется только ВЕРХНЯЯ граница
+            self.p_max_bar_dew = self.p_i_dew
+            self.p_i_dew = (self.p_max_bar_dew + self.p_min_bar_dew) / 2.0
+            return False
+
+    def dp_convergence_loop(self, max_iter: int = 100) -> float | None:
+        """
+        Структура цикла полностью повторяет dp_convergence_loop из PhaseDiagram_v4.py.
+        Замена while not (...) на for с max_iter добавлена только для защиты от бесконечных зависаний,
+        последовательность вызовов и проверки идентичны.
+        """
+        logger.info("Запуск поиска давления начала конденсации (Dew Point)")
+
+        self.dp_process(lambd=1.0)
+        if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-5:
+            return None
+
+        for _ in range(max_iter):
+            if (abs(1.0 - self._last_sum_y_dp) < 1e-3) or (self._last_Ykz_dp ** 2 < 1e-3):
+                break
+
+            self.dp_process(lambd=1.0)
+            if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-5:
+                return None
+
+        self.p_dew = self.p_i_dew
+        logger.info(f"Dew Point найден: {self.p_dew:.4f} bar")
+        return self.p_dew
