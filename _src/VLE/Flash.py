@@ -46,11 +46,12 @@ class Flash:
 
         else:
 
-            self.one_phase_stability_props = FluidPropertiesCalculator(self.composition.composition,
+            one_phase_stability_props_object = FluidPropertiesCalculator(self.composition.composition,
                                                                        self.composition.composition_data,
                                                                        phase_stability_object.vapour_eos,
                                                                        self.conditions.p,
                                                                        self.conditions.t)
-            self.one_phase_stability_props.calc_all_properties()
+            
+            self.one_phase_stability_props = one_phase_stability_props_object.calc_all_properties()
 
             return {'one_phase_props' : self.one_phase_stability_props}
