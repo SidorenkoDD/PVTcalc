@@ -24,7 +24,7 @@ class FluidPropertiesCalculator:
 
     @property
     def molar_volume(self):
-        return CONSTANT_R * self._T * self._eos.z / self._p - self._eos.shift_parametr
+        return CONSTANT_R * 10 * self._T * self._eos.z / self._p - self._eos.shift_parametr
 
     @property
     def molar_density(self):
@@ -36,7 +36,7 @@ class FluidPropertiesCalculator:
 
     @property
     def z_shift(self):
-        return self._eos.z - self._p * self._eos.shift_parametr / (self._T * CONSTANT_R)
+        return self._eos.z - self._p * self._eos.shift_parametr / (self._T * CONSTANT_R * 10)
 
     @property
     def viscosity(self):
@@ -62,7 +62,7 @@ class FluidPropertiesCalculator:
         #             phase_density=self.density, mw=self.molar_mass, temperature=self._T).calculate()
     
     def calc_all_properties(self):
-        
+
         return {'molecular_ weight': self.molar_mass,
                 'molar_volume': self.molar_volume,
                 'molar_density': self.molar_density,
