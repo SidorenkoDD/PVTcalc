@@ -45,7 +45,7 @@ class Flash:
             )
             self.vapour_phase_props = vapour_phase_props_object.calc_all_properties()
 
-            return FlashResult(
+            return FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
                 vapor=PhaseState(mole_fraction=vapor_frac, composition=self.phase_equil_result['yi_v'], properties=self.vapour_phase_props),
                 liquid=PhaseState(mole_fraction=liquid_frac, composition=self.phase_equil_result['xi_l'], properties=self.liquid_phase_props),
                 is_two_phase=True
@@ -63,7 +63,7 @@ class Flash:
             # а "пару" даем долю 0.0 и тот же состав. 
             # Для DLE это математически идеально: газа выделилось 0, осталась вся жидкость.
             # (Если нужно определить, газ это или жидкость, можно добавить простую проверку плотности)
-            return FlashResult(
+            return FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
                 vapor=PhaseState(mole_fraction=0.0, composition=self.composition.composition, properties={}),
                 liquid=PhaseState(mole_fraction=1.0, composition=self.composition.composition, properties=self.one_phase_stability_props),
                 is_two_phase=False

@@ -14,9 +14,11 @@ class FlashResult:
     Унифицированный результат флеша.
     ВСЕГДА содержит и vapor, и liquid.
     """
-    vapor: PhaseState
-    liquid: PhaseState
-    is_two_phase: bool
+    pressure : float
+    temperature : float
+    vapor : PhaseState
+    liquid : PhaseState
+    is_two_phase : bool
 
     @property
     def liquid_composition(self) -> Any:

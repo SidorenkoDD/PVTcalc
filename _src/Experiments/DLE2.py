@@ -93,17 +93,28 @@ class DLE:
     def calculate(self):
             result = []
             
-            ## 1. Расчет для пластовых условий
+            ## Расчет для пластовых условий
             reservoir_conditions = Conditions(self.reservoir_pressure, self.reservoir_temperature)
             reservoir_flash_object = Flash(self.composition, reservoir_conditions)
             reservoir_flash_result = reservoir_flash_object.calculate()
-
             result.append(reservoir_flash_result)
-
-
             self._liquid_molar_fractions = reservoir_flash_result.liquid_composition
+            
+            ## Расчет для Рнас
 
-            ## 2. ОСНОВНОЙ ЦИКЛ РАСЧЕТА ПО СТУПЕНЯМ
+            self.composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
+            sat_pressure_obj = SaturationPressure(self.composition, reservoir_conditions.t)
+            saturation_pressure = sat_pressure_obj.sp_convergence_loop()
+
+
+            saturation_conditions = Conditions(saturation_pressure, self.reservoir_temperature)
+            saturation_flash_object = Flash(self.composition, saturation_conditions)
+            saturation_flash_result = saturation_flash_object.calculate()
+
+            result.append(saturation_flash_result)
+            self._liquid_molar_fractions = saturation_flash_result.liquid_composition
+
+            ## ОСНОВНОЙ ЦИКЛ РАСЧЕТА ПО СТУПЕНЯМ
             for stage_pressure in self.pressure_arr:
                 # Обновляем состав объекта композиции перед новым флешем
                 self.composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
@@ -114,7 +125,7 @@ class DLE:
                 # Снова безопасно берем состав жидкости для следующей итерации
                 self._liquid_molar_fractions = self._stage_result.liquid_composition
 
-            ## 3. Расчет на стандартные условия
+            ## Расчет на стандартные условия
             stc_conditions = StandardConditions()
             # Передаем финальный состав жидкости на стандартные условия
             final_composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
