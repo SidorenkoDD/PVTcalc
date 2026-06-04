@@ -11,5 +11,5 @@ class StandardConditions:
     Class for standard conditions
     '''
     def __init__(self):
-        self.p = 0.101325
+        self.p = 1.01325
         self.t = 293.14
