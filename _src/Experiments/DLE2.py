@@ -5,7 +5,10 @@ from _src.PhaseDiagram.new_methodv2 import SaturationPressure
 from _src.Utils.Conditions import Conditions, StandardConditions
 from _src.Utils.Errors import LenthMissMatchError
 import numpy as np
-
+import pandas as pd
+import numpy as np
+from typing import List
+from _src.VLE.Flash import FlashResult 
 
 class DLE:
     def __init__(self, composition: Composition, pressure_arr_bar: list,
@@ -14,7 +17,7 @@ class DLE:
         self.pressure_arr = pressure_arr_bar
         self.reservoir_pressure = reservoir_pressure_bar
         self.reservoir_temperature = reservoir_temperature_c
-
+        self.stc_conditions = StandardConditions()
     @staticmethod
     def _is_descending(arr):
         if all(arr[i] < arr[i-1] for i in range(1, len(arr))) is False:
@@ -61,12 +64,12 @@ class DLE:
 
     def _gas_vol_to_stc(self, p_stage: np.ndarray, t_stage: np.ndarray, 
                         z_stage: np.ndarray, v_stage: np.ndarray, z_stc: float) -> np.ndarray:
-        return (p_stage * v_stage * z_stc * self.T_STC) / (self.P_STC * z_stage * t_stage)
+        return (p_stage * v_stage * z_stc * self.stc_conditions.t) / (self.stc_conditions.p * z_stage * t_stage)
 
 
     def _calculate_rs(self, p_arr: np.ndarray, z_arr: np.ndarray, t_arr: np.ndarray, 
                       gas_vol_arr: np.ndarray, fl_arr: np.ndarray, p_sat: float) -> np.ndarray:
-        
+
         fl_arr = np.where(np.isnan(fl_arr) | (fl_arr == None), 1.0, fl_arr).astype(float)
         gas_vol_arr = np.array(gas_vol_arr, dtype=float)
         p_arr = np.array(p_arr, dtype=float)
@@ -89,6 +92,64 @@ class DLE:
         
         return gas_stc_acc_reverted / self.oil_residual_volume
 
+
+    @staticmethod
+    def _vectorize_dle_results(flash_results: List['FlashResult']) -> pd.DataFrame:
+        """
+        Преобразует список объектов FlashResult в векторизованный Pandas DataFrame.
+        Скалярные свойства разворачиваются в колонки, составы остаются как dict.
+        """
+        records = []
+        
+        # 1. Динамически собираем все возможные ключи свойств из всех результатов
+        # Это делает функцию устойчивой к изменениям в FluidPropertiesCalculator
+        all_prop_keys = set()
+        for res in flash_results:
+            if res.vapor.properties:
+                all_prop_keys.update(res.vapor.properties.keys())
+            if res.liquid.properties:
+                all_prop_keys.update(res.liquid.properties.keys())
+                
+        prop_keys = sorted(list(all_prop_keys)) 
+        # Например: ['density', 'molar_density', 'molecular_weight', 'molar_volume', 'viscosity']
+
+        # 2. Проходим по каждому шагу и формируем строку данных
+        for res in flash_results:
+            record = {
+                # Базовые условия
+                'pressure': res.pressure,
+                'temperature': res.temperature,
+                'is_two_phase': res.is_two_phase,
+                
+                # Мольные доли фаз (всегда есть, даже если 0.0)
+                'vapor_mole_frac': res.vapor.mole_fraction,
+                'liquid_mole_frac': res.liquid.mole_fraction,
+                
+                # Составы оставляем как есть (объекты dict), как вы и просили
+                'vapor_composition': res.vapor.composition,
+                'liquid_composition': res.liquid.composition,
+            }
+            
+            # 3. Векторизуем свойства динамически
+            for key in prop_keys:
+                # Для газа: берем значение или np.nan, если словарь пуст или ключа нет
+                v_prop = res.vapor.properties.get(key, np.nan) if res.vapor.properties else np.nan
+                record[f'vapor_{key}'] = v_prop
+                
+                # Для жидкости: аналогично
+                l_prop = res.liquid.properties.get(key, np.nan) if res.liquid.properties else np.nan
+                record[f'liquid_{key}'] = l_prop
+                
+            records.append(record)
+            
+        # 4. Создаем DataFrame. Pandas автоматически определит типы:
+        # float64 для чисел, bool для is_two_phase, object для словарей составов
+        df = pd.DataFrame(records)
+        
+        # Опционально: сортируем по давлению по убыванию (стандарт для DLE)
+        df = df.sort_values('pressure', ascending=False).reset_index(drop=True)
+        
+        return df
 
     def calculate(self):
             result = []
@@ -126,13 +187,23 @@ class DLE:
                 self._liquid_molar_fractions = self._stage_result.liquid_composition
 
             ## Расчет на стандартные условия
-            stc_conditions = StandardConditions()
             # Передаем финальный состав жидкости на стандартные условия
             final_composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
-            final_composition.T = stc_conditions.t
+            final_composition.T = self.stc_conditions.t
             
-            stc_flash_object = Flash(final_composition, stc_conditions)
+            stc_flash_object = Flash(final_composition, self.stc_conditions)
             stc_flash_result = stc_flash_object.calculate()
             result.append(stc_flash_result)
 
+            self._dle_df = self._vectorize_dle_results(result)
+
+            self._bo = self._calculate_bo(self._dle_df['liquid_molar_volume'].to_numpy(), self._dle_df['liquid_mole_frac'].to_numpy())
+            self._rs = self._calculate_rs(p_arr = self._dle_df['pressure'].to_numpy(),
+                                          z_arr = self._dle_df['vapor_z'].to_numpy(), 
+                                          t_arr = self._dle_df['temperature'].to_numpy(),
+                                          gas_vol_arr = self._dle_df['vapor_molar_volume'].to_numpy(),
+                                          fl_arr = self._dle_df['liquid_mole_frac'].to_numpy(),
+                                          p_sat = saturation_conditions.p)
+            print(self._bo)
+            print(self._rs)
             return result

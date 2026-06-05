@@ -67,4 +67,5 @@ class FluidPropertiesCalculator:
                 'molar_volume': self.molar_volume,
                 'molar_density': self.molar_density,
                 'density': self.density,
+                'z' : self.z_shift,
                 'viscosity': self.viscosity}
