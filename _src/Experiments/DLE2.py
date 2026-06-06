@@ -201,9 +201,10 @@ class DLE:
             self._rs = self._calculate_rs(p_arr = self._dle_df['pressure'].to_numpy(),
                                           z_arr = self._dle_df['vapor_z'].to_numpy(), 
                                           t_arr = self._dle_df['temperature'].to_numpy(),
-                                          gas_vol_arr = self._dle_df['vapor_molar_volume'].to_numpy(),
+                                          gas_vol_arr = self._dle_df['vapor_molar_volume'].to_numpy() * self._dle_df['vapor_mole_frac'].to_numpy(),
                                           fl_arr = self._dle_df['liquid_mole_frac'].to_numpy(),
                                           p_sat = saturation_conditions.p)
-            print(self._bo)
-            print(self._rs)
+            self._dle_df['Bo'] = self._bo
+            self._dle_df['Rs'] = self._rs
+
             return result
