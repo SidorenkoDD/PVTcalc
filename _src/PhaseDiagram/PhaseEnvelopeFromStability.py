@@ -68,3 +68,4 @@ class PhaseEnvelopeFromStability:  # Исправлена опечатка в н
         plt.ylabel('P, bar')
         plt.title('Фазовая диаграмма только через тест стабильности')
         plt.show()
+
