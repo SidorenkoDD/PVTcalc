@@ -5,8 +5,9 @@ from _src.Utils.JsonDBReader import JsonDBReader
 from _src.Utils import BRS_EOS_DB_V2 as BRSDB
 from _src.Utils.Errors import NoComponentError, InvalidMolarFractionError
 from _src.EOS.BaseEOS import EOSType
-# import logging
-# logger = logging.getLogger('MBALPVT.PVTDataModel.PVTCore.Composition')
+import json
+import logging
+logger = logging.getLogger('MBALPVT.PVTDataModel.PVTCore.Composition')
 db = JsonDBReader().load_database('DB_V2.json')
 
 
@@ -361,3 +362,59 @@ class Composition:
         self._eos_name = eos_name
         self._evaluate_eos_dependent_props()
         self._evaluate_bips()
+
+
+    @classmethod
+    def from_db(cls, db_path: str = "models.json", T_res: float = 373.15):
+        import json
+        from pathlib import Path
+
+        path = Path(db_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Файл БД не найден: {path}")
+
+        with open(path, "r", encoding="utf-8") as f:
+            db_data = json.load(f)
+
+        class _CompositionDBProxy:
+            def __init__(self, data, comp_cls, default_T):
+                self._data = data
+                self._comp_cls = comp_cls
+                self._default_T = default_T
+
+            def __getattr__(self, name: str):
+                if name.startswith('_'):
+                    raise AttributeError(name)
+                if name not in self._data:
+                    raise AttributeError(f"Состав '{name}' не найден в БД. Доступные: {list(self._data.keys())}")
+
+                rec = self._data[name]
+                zi = rec["composition"]
+
+                # 1. Стандартная инициализация (создает пустую структуру _composition_data и валидирует zi)
+                obj = self._comp_cls(zi)
+
+                # 2. Мгновенный инжект сохраненных свойств из JSON (без пересчета корреляций)
+                if "composition_data" in rec:
+                    obj._composition_data = rec["composition_data"]
+
+                # 3. Восстановление типа УРС из строки/Enum
+                eos_raw = rec.get("eos", "PREOS")
+                eos_str = str(eos_raw).upper()
+                if "SRK" in eos_str: obj._eos_name = EOSType.SRKEOS
+                elif "BRS" in eos_str: obj._eos_name = EOSType.BRSEOS
+                else: obj._eos_name = EOSType.PREOS
+
+                # 4. Пластовая температура (в Export2.py не сохраняется, задаем явно)
+                obj._T_res = self._default_T
+
+                return obj
+
+            def __dir__(self):
+                # Подсказка для IDE: dir(proxy) покажет все id моделей
+                return list(self._data.keys()) + list(super().__dir__())
+
+            def list_models(self) -> list:
+                return list(self._data.keys())
+
+        return _CompositionDBProxy(db_data, cls, T_res)

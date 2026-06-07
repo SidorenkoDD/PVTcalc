@@ -4,7 +4,7 @@ from _src.Composition.CompositionV2 import Composition
 from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
 
 class SaturationPressure:
     def __init__(self, composition: Composition, t_K: float, p_max_bar: float = 1000, p_min_bar: float = 0.01):
@@ -18,8 +18,8 @@ class SaturationPressure:
         
        # Границы и состояние для Dew Point (строго как в PhaseDiagram_v4.py)
         self.p_min_bar_dew = 0.0
-        self.p_max_bar_dew = p_max_bar
-        self.p_i_dew = (p_max_bar + p_min_bar) / 2.0
+        self.p_max_bar_dew = None
+        self.p_i_dew = None
         self._last_sum_y_dp = 0.0
         self._last_Ykz_dp = 0.0
         self.Sum_dp = 0.0
@@ -223,20 +223,32 @@ class SaturationPressure:
                 logger.warning(f"Давление застряло на итерации {i}. P={self.p_i:.6f}")
                 break
             prev_p = self.p_i
+            self.p_i_dew = self.p_i / 2
+            self.p_max_bar_dew = self.p_i
             
             if (self.p_max_bar_sat - self.p_min_bar_sat) < 1e-6:
                 logger.info(f"Интервал схлопнулся на итерации {i}. Возврат P={self.p_i:.4f} bar")
+                self.p_i_dew = self.p_i / 2
+                self.p_max_bar_dew = self.p_i
                 return self.p_i
+            
                 
             res = self.sp_process()
             if res is None:
                 logger.warning(f"sp_process вернул None на итерации {i}")
+                self.p_i_dew = self.p_i / 2
+                self.p_max_bar_dew = self.p_i
                 return self.p_i
             if res:
                 logger.info(f"Сходимость достигнута на итерации {i}. P_sat={self.p_i:.4f} bar")
+                self.p_i_dew = self.p_i / 2
+                self.p_max_bar_dew = self.p_i
                 return self.p_i
                 
         logger.warning(f" Превышен лимит итераций ({max_iter}). Последнее P={self.p_i:.4f} bar, интервал={self.p_max_bar_sat - self.p_min_bar_sat:.4e}")
+
+        self.p_i_dew = self.p_i / 2
+        self.p_max_bar_dew = self.p_i
         return self.p_i
 
 
@@ -245,72 +257,120 @@ class SaturationPressure:
 ###
 
 
+
     def dp_process(self, lambd: float = 1.0) -> bool | None:
-        """
-        Точная векторизованная копия dp_process из PhaseDiagram_v4.py.
-        Логика обновления границ сохранена 1:1.
-        """
+
         cur_s_dp = self._find_S(self.p_i_dew)
 
-        # В оригинале: while cur_s_dp['s_dp'] == 0:
-        while np.isclose(cur_s_dp['S'], 0.0, atol=1e-6):
+        # VBA: If Ssp = 0 Then pmin = Pi: Pi = (pmax + pmin) / 2
+        while cur_s_dp['S'] == 0.0:
             self.p_min_bar_dew = self.p_i_dew
             self.p_i_dew = (self.p_max_bar_dew + self.p_min_bar_dew) / 2.0
-
-            if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-5:
+            # VBA: If (pmax - pmin) < 10 ^ (-10) Then GoTo 60
+            if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-3:
                 return None
-
             cur_s_dp = self._find_S(self.p_i_dew)
 
         s_dp_val = cur_s_dp['S']
         f_z = cur_s_dp['letuch_z']
-        f_dp = cur_s_dp['letuch_sp']  # _find_S всегда возвращает fugacities тестовой фазы под этим ключом
+        f_dp = cur_s_dp['letuch_sp']
 
-        # Формула r_dp из оригинала: exp(f_z) / (exp(f_dp) * S)
+        # VBA: Rsp(I) = Exp(letuchz(I)) / (Exp(letuchysp(I)) * Ssp)
         r_dp = np.exp(f_z - f_dp) / s_dp_val
         y_dp = cur_s_dp['yi'] * np.power(r_dp, lambd)
 
         self._last_sum_y_dp = float(np.sum(y_dp))
-
-        # Расчет Sum_dp и Ykz_dp строго по формулам v4
-        ratio = y_dp / self._z_arr
+        ratio = np.clip(y_dp / self._z_arr, 1e-12, None)
+        r_dp_safe = np.clip(y_dp, 1e-12, None)
+        
         with np.errstate(divide='ignore', invalid='ignore'):
             log_ratio = np.log(ratio)
             safe_denom = np.where(np.abs(log_ratio) > 1e-12, log_ratio, 1.0)
-            self.Sum_dp = float(np.sum(np.log(np.clip(r_dp, 1e-12, None)) / safe_denom))
+            self.Sum = float(np.sum(np.log(r_dp_safe) / safe_denom))
 
         self._last_Ykz_dp = float(np.sum(ratio))
-        logger.debug(f"Dew P={self.p_i_dew:.4f} | sum_y={self._last_sum_y_dp:.6f} | Ykz²={self._last_Ykz_dp**2:.2e}")
 
-        # Критерий сходимости (1e-3 как в оригинале v4)
+        # 🔑 VBA: If Abs(1 - Ssp) < 10 ^ (-3) Then ... If (Ykz) ^ 2 < 10 ^ (-4) Then
         if (abs(1.0 - self._last_sum_y_dp) < 1e-3) or (self._last_Ykz_dp ** 2 < 1e-3):
             return True
         else:
-            # 🔑 В оригинале ВСЕГДА обновляется только ВЕРХНЯЯ граница
+            # 🔑 VBA: pmax = Pi: Pi = (pmax + pmin) / 2 (одностороннее сжатие сверху)
             self.p_max_bar_dew = self.p_i_dew
             self.p_i_dew = (self.p_max_bar_dew + self.p_min_bar_dew) / 2.0
             return False
 
-    def dp_convergence_loop(self, max_iter: int = 100) -> float | None:
-        """
-        Структура цикла полностью повторяет dp_convergence_loop из PhaseDiagram_v4.py.
-        Замена while not (...) на for с max_iter добавлена только для защиты от бесконечных зависаний,
-        последовательность вызовов и проверки идентичны.
-        """
-        logger.info("Запуск поиска давления начала конденсации (Dew Point)")
 
+
+    def dp_convergence_loop(self, max_iter: int = 100) -> float | None:
+        logger.info("Запуск поиска давления начала конденсации (Dew Point)")
+        
         self.dp_process(lambd=1.0)
-        if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-5:
+        if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-3:
             return None
 
         for _ in range(max_iter):
+            # VBA: проверка сходимости внутри цикла
             if (abs(1.0 - self._last_sum_y_dp) < 1e-3) or (self._last_Ykz_dp ** 2 < 1e-3):
                 break
-
             self.dp_process(lambd=1.0)
-            if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-5:
+            if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-3:
                 return None
 
         self.p_dew = self.p_i_dew
         logger.info(f"Dew Point найден: {self.p_dew:.4f} bar")
         return self.p_dew
+    
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+class PhaseDiagram:
+    def __init__(self, composition: Composition, p_max_bar: float, t_min_C: float, t_max_C: float, t_step_C: float):
+        self.composition = composition
+        self.p_max_bar = p_max_bar
+        self.temps_C = np.arange(t_min_C, t_max_C + t_step_C/2, t_step_C)
+        self.results = {'Temp_C': [], 'Bubble_bar': [], 'Dew_bar': []}
+
+    def calculate(self):
+        logger.info("Начало расчёта фазовой диаграммы...")
+        for t_C in self.temps_C:
+            t_K = t_C + 273.15
+            # 🔑 Ключевой момент: создаём НОВЫЙ экземпляр для каждой температуры,
+            # чтобы границы p_min/p_max не наследовались от предыдущего шага.
+            sat_calc = SaturationPressure(self.composition, t_K, p_max_bar=self.p_max_bar)
+            
+            pb = sat_calc.sp_convergence_loop()
+            pdew = sat_calc.dp_convergence_loop()
+            
+            self.results['Temp_C'].append(t_C)
+            self.results['Bubble_bar'].append(pb if pb is not None else np.nan)
+            self.results['Dew_bar'].append(pdew if pdew is not None else np.nan)
+            # logger.info(f"T={t_C:.1f}°C | Pb={pb:.3f} bar | Pdew={pdew:.3f} bar")
+
+    def plot(self):
+        df = pd.DataFrame(self.results)
+        if df.empty:
+            logger.warning("Нет данных для построения.")
+            return
+
+        plt.figure(figsize=(10, 6))
+        plt.plot(df['Temp_C'], df['Bubble_bar'], 'b-o', label='Bubble Point', markersize=4, linewidth=2)
+        plt.plot(df['Temp_C'], df['Dew_bar'], 'r-s', label='Dew Point', markersize=4, linewidth=2)
+        
+        valid = df.dropna(subset=['Bubble_bar', 'Dew_bar'])
+        if not valid.empty:
+            crit_idx = np.abs(valid['Bubble_bar'] - valid['Dew_bar']).idxmin()
+            crit_t, crit_p = valid.loc[crit_idx, 'Temp_C'], valid.loc[crit_idx, 'Bubble_bar']
+            plt.scatter([crit_t], [crit_p], c='gold', s=150, zorder=5, edgecolor='black', 
+                        label=f'Critical ({crit_t:.1f}°C, {crit_p:.1f} bar)')
+
+        plt.xlabel('Temperature (°C)', fontsize=12)
+        plt.ylabel('Pressure (bar)', fontsize=12)
+        plt.title('Phase Envelope (P-T Diagram)', fontsize=14)
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.show()
+
+    def get_data(self) -> pd.DataFrame:
+        return pd.DataFrame(self.results)
