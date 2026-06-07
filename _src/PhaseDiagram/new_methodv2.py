@@ -1,30 +1,31 @@
 import numpy as np
 import logging
+import pandas as pd
+import matplotlib.pyplot as plt
 from _src.Composition.CompositionV2 import Composition
 from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
 
 class SaturationPressure:
-    def __init__(self, composition: Composition, t_K: float, p_max_bar: float = 1000, p_min_bar: float = 0.01):
+    def __init__(self, composition: Composition, t_K: float, p_max_bar: float = 1000, p_min_bar: float = 0.01,
+                 p_guess_sat: float = None, p_guess_dew: float = None):
         self.composition = composition
         self.composition.T = t_K
-        #self.composition_object = composition.new_composition(composition.composition, deep_copy=True)
         self.t_K = t_K
         self.p_max_bar_sat = p_max_bar
         self.p_min_bar_sat = p_min_bar
         self.p_i = (p_max_bar + p_min_bar) / 2.0
-        
-       # Границы и состояние для Dew Point (строго как в PhaseDiagram_v4.py)
+
         self.p_min_bar_dew = 0.0
         self.p_max_bar_dew = None
         self.p_i_dew = None
-        self._last_sum_y_dp = 0.0
+        self._p_guess_dew = p_guess_dew  # Сохраняем предсказание для dew point
+
+        self._last_sum_y_dp  = 0.0
         self._last_Ykz_dp = 0.0
         self.Sum_dp = 0.0
-
-
 
         self.zi = composition.composition
         self._components = tuple(self.zi.keys())
@@ -33,26 +34,36 @@ class SaturationPressure:
         
         self._last_sum_y = 0.0
         self._last_Ykz = 0.0
+        
+        # 🔑 ПРИМЕНЯЕМ НАЧАЛЬНЫЕ ПРИБЛИЖЕНИЯ
+        if p_guess_sat is not None and p_min_bar < p_guess_sat < p_max_bar:
+            self.p_i = p_guess_sat
+            self.p_min_bar_sat = max(p_min_bar, p_guess_sat * 0.6)
+            self.p_max_bar_sat = min(p_max_bar, p_guess_sat * 1.8)
+            logger.info(f"💡 Начальное приближение Psat={p_guess_sat:.3f} bar")
+            
+        if p_guess_dew is not None and 0 < p_guess_dew < p_max_bar:
+            self.p_i_dew = p_guess_dew
+            self.p_min_bar_dew = max(0.01, p_guess_dew * 0.6)
+            logger.info(f"💡 Начальное приближение Pdew={p_guess_dew:.3f} bar")
+
         logger.info(f"Инициализация: T={self.t_K:.2f} K, P_min={self.p_min_bar_sat:.4f}, P_max={self.p_max_bar_sat:.4f}")
 
     def _find_S(self, p: float) -> dict:
-        """Точная копия логики выбора фазы из PhaseDiagram_v4.py, векторизованная."""
         phase_stability = TwoPhaseStabilityTest(self.composition, p, t=self.t_K)
         phase_stability.calculate_phase_stability()
         
         S_l, S_v = phase_stability.S_l, phase_stability.S_v
         
-        # Case 0: Однофазная стабильная система
-        if (S_l - 1.0) < 1e-5 and (S_v - 1.0) < 1e-5:
+        if (S_l - 1.0)  < 1e-5 and (S_v - 1.0)  < 1e-5:
             return {'S': 0.0, 'yi': np.zeros(self._nc), 'letuch_sp': None, 'letuch_z': None, 'stable': phase_stability.stable}
 
         yi = np.zeros(self._nc)
         letuch_z = phase_stability._mixture_fugacities_arr.copy()
         letuch_sp = None
 
-        # Строгая последовательность условий как в VBA/v4
-        if S_l > 1.0:
-            if S_l > S_v:
+        if S_l  > 1.0:
+            if S_l  > S_v:
                 letuch_sp = phase_stability.liquid_eos.fugacities.copy()
                 k_values = phase_stability._k_l_arr.copy()
                 yi = self._z_arr / k_values
@@ -61,39 +72,29 @@ class SaturationPressure:
                 k_values = phase_stability._k_v_arr.copy()
                 yi = self._z_arr * k_values
         else:
-            if S_v < 1.0:
+            if S_v  < 1.0:
                 return {'S': 0.0, 'yi': np.zeros(self._nc), 'letuch_sp': None, 'letuch_z': None, 'stable': phase_stability.stable}
 
-        if S_v > 1.0:
-            if S_v > S_l:
+        if S_v  > 1.0:
+            if S_v  > S_l:
                 letuch_sp = phase_stability.vapour_eos.fugacities.copy()
                 k_values = phase_stability._k_v_arr.copy()
                 yi = self._z_arr * k_values
-            elif S_l < 1.0:
+            elif S_l  < 1.0:
                 return {'S': 0.0, 'yi': np.zeros(self._nc), 'letuch_sp': None, 'letuch_z': None, 'stable': phase_stability.stable}
 
         S_sp = float(np.sum(yi))
-        return {'S': S_sp, 'yi': yi, 'letuch_sp': letuch_sp, 'letuch_z': letuch_z, 'stable': phase_stability.stable}
+        return {'S':  S_sp, 'yi': yi, 'letuch_sp': letuch_sp, 'letuch_z': letuch_z, 'stable': phase_stability.stable}
 
     def _find_stability_bracket(self, p_low_init=0.01, p_high_init=1000.0) -> tuple[float, float]:
-        """
-        Исправленная стратегия:
-        1. Проверяем статус на границах.
-        2. Если обе в одном состоянии — ищем переход в нужном направлении.
-        3. Сужаем бисекцией ТОЛЬКО если нашли разные статусы.
-        """
         logger.info(f"🔍 Поиск bracket: start=[{p_low_init:.3f}, {p_high_init:.3f}]")
-
-        # 1. Проверяем начальные точки
         res_low = self._find_S(p_low_init)
         res_high = self._find_S(p_high_init)
-        
         stable_low = res_low['stable']
         stable_high = res_high['stable']
         
-        # 2. Если статусы одинаковые — ищем переход
         if stable_low == stable_high:
-            if stable_high:  # Обе стабильны → ищем unstable ниже
+            if stable_high:
                 p_search = p_high_init
                 for step in range(10):
                     p_search *= 0.5
@@ -102,12 +103,12 @@ class SaturationPressure:
                         return p_low_init, p_high_init
                     if not self._find_S(p_search)['stable']:
                         p_unstable = p_search
-                        p_stable = p_search * 2.0  # Возвращаемся на шаг вверх
+                        p_stable = p_search * 2.0
                         break
                 else:
                     logger.warning("Превышен лимит поиска unstable")
                     return p_low_init, p_high_init
-            else:  # Обе нестабильны → ищем stable выше
+            else:
                 p_search = p_high_init
                 for step in range(10):
                     p_search *= 1.5
@@ -116,60 +117,59 @@ class SaturationPressure:
                         return p_low_init, p_high_init
                     if self._find_S(p_search)['stable']:
                         p_stable = p_search
-                        p_unstable = p_search / 1.5  # Возвращаемся на шаг вниз
+                        p_unstable = p_search / 1.5
                         break
                 else:
                     logger.warning("Превышен лимит поиска stable")
                     return p_low_init, p_high_init
         else:
-            # Статусы разные — определяем, какая граница какая
             if stable_low:
                 p_stable, p_unstable = p_low_init, p_high_init
             else:
                 p_stable, p_unstable = p_high_init, p_low_init
 
-        # 3. Гарантируем порядок: stable > unstable для bubble point
         if p_stable < p_unstable:
             p_stable, p_unstable = p_unstable, p_stable
 
-        # 4. Сужаем интервал бисекцией (но с проверкой, что он не нулевой)
         if abs(p_stable - p_unstable) < 1e-6:
-            logger.warning(f"Интервал слишком мал после поиска: {p_stable:.4f} vs {p_unstable:.4f}")
-            # Расширяем искусственно для дальнейшего поиска
             p_unstable *= 0.99
             p_stable *= 1.01
 
-        for i in range(10):  # 10 шагов = сужение в 1024 раза
+        for i in range(10):
             p_mid = (p_stable + p_unstable) / 2.0
             if self._find_S(p_mid)['stable']:
                 p_stable = p_mid
             else:
                 p_unstable = p_mid
-            # Защита от схлопывания
             if abs(p_stable - p_unstable) < 1e-8:
                 break
                 
         logger.info(f"Диапазон поиска: unstable={p_unstable:.4f} bar -> stable={p_stable:.4f} bar")
         return p_unstable, p_stable
 
+    def _update_dew_bounds(self):
+        """Вспомогательный метод для установки границ Dew Point с учётом предсказания"""
+        self.p_max_bar_dew = self.p_i
+        if self._p_guess_dew is None:
+            self.p_i_dew = self.p_i / 2
+        else:
+            self.p_i_dew = self._p_guess_dew
+            self.p_min_bar_dew = min(self.p_min_bar_dew, self.p_i_dew * 0.5)
+
     def sp_process(self, lambd: float = 1.0) -> bool | None:
         cur_s_sp = self._find_S(self.p_i)
-
-        # Если система однофазная, сужаем p_max вниз (как в оригинале)
         while np.isclose(cur_s_sp['S'], 0.0, atol=1e-6):
             self.p_max_bar_sat = self.p_i
             self.p_i = (self.p_max_bar_sat + self.p_min_bar_sat) / 2.0
-            if (self.p_max_bar_sat - self.p_min_bar_sat) < 1e-12:
+            if (self.p_max_bar_sat - self.p_min_bar_sat) < 1e-6:
                 return None
             cur_s_sp = self._find_S(self.p_i)
 
         s_sp_val = cur_s_sp['S']
         f_z = cur_s_sp['letuch_z']
         f_sp = cur_s_sp['letuch_sp']
-
-        # Формула Rsp из оригинала
-        r_sp = np.exp(f_z - f_sp) / s_sp_val
         
+        r_sp = np.exp(f_z - f_sp) / s_sp_val
         y_sp = cur_s_sp['yi'] * np.power(r_sp, lambd)
         self._last_sum_y = float(np.sum(y_sp))
         
@@ -182,18 +182,13 @@ class SaturationPressure:
             self.Sum = float(np.sum(np.log(r_sp_safe) / safe_denom))
 
         self._last_Ykz = float(np.sum(ratio))
-        logger.debug(f"P={self.p_i:.4f} | sum_y={self._last_sum_y:.6f} | Ykz²={self._last_Ykz**2:.2e}")
-
-        # Критерий сходимости
-        if (abs(1.0 - self._last_sum_y) < 1e-4) or (self._last_Ykz ** 2 < 1e-4):
+        
+        if (abs(1.0 - self._last_sum_y) < 1e-5) or (self._last_Ykz ** 2 < 1e-5):
             return True
         else:
-            # 🔑 ИСПРАВЛЕНИЕ: двусторонняя бисекция вместо односторонней
             if self._last_sum_y > 1.0:
-                # sum_y > 1 → мы в двухфазной области → нужно повысить давление
                 self.p_min_bar_sat = self.p_i
             else:
-                # sum_y < 1 → мы в однофазной области → нужно понизить давление
                 self.p_max_bar_sat = self.p_i
             self.p_i = (self.p_max_bar_sat + self.p_min_bar_sat) / 2.0
             return False
@@ -207,66 +202,43 @@ class SaturationPressure:
             self.p_min_bar_sat = p_unstable
             self.p_max_bar_sat = p_stable
             self.p_i = (p_stable + p_unstable) / 2.0
-            logger.info(f"Старт бисекции с P={self.p_i:.4f} bar, интервал={p_stable - p_unstable:.4f} bar")
         else:
             logger.warning("Границы не найдены или нулевые, используем исходные границы")
-            # Если bracket не удался, пробуем хотя бы запустить с исходными границами
             self.p_min_bar_sat = 0.01
             self.p_max_bar_sat = 1000.0
             self.p_i = 500.0
             
-        # Запускаем цикл с защитой от зацикливания
         prev_p = None
         for i in range(1, max_iter + 1):
-            # Проверка на "залипание"
-            if prev_p is not None and abs(self.p_i - prev_p) < 1e-10:
+            if prev_p is not None and abs(self.p_i - prev_p) < 1e-6:
                 logger.warning(f"Давление застряло на итерации {i}. P={self.p_i:.6f}")
                 break
             prev_p = self.p_i
-            self.p_i_dew = self.p_i / 2
-            self.p_max_bar_dew = self.p_i
             
             if (self.p_max_bar_sat - self.p_min_bar_sat) < 1e-6:
                 logger.info(f"Интервал схлопнулся на итерации {i}. Возврат P={self.p_i:.4f} bar")
-                self.p_i_dew = self.p_i / 2
-                self.p_max_bar_dew = self.p_i
+                self._update_dew_bounds()
                 return self.p_i
-            
                 
             res = self.sp_process()
             if res is None:
                 logger.warning(f"sp_process вернул None на итерации {i}")
-                self.p_i_dew = self.p_i / 2
-                self.p_max_bar_dew = self.p_i
+                self._update_dew_bounds()
                 return self.p_i
             if res:
                 logger.info(f"Сходимость достигнута на итерации {i}. P_sat={self.p_i:.4f} bar")
-                self.p_i_dew = self.p_i / 2
-                self.p_max_bar_dew = self.p_i
+                self._update_dew_bounds()
                 return self.p_i
                 
-        logger.warning(f" Превышен лимит итераций ({max_iter}). Последнее P={self.p_i:.4f} bar, интервал={self.p_max_bar_sat - self.p_min_bar_sat:.4e}")
-
-        self.p_i_dew = self.p_i / 2
-        self.p_max_bar_dew = self.p_i
+        logger.warning(f"Превышен лимит итераций ({max_iter}). Последнее P={self.p_i:.4f} bar")
+        self._update_dew_bounds()
         return self.p_i
 
-
-###
-### Блок для DEW пока не работает
-###
-
-
-
     def dp_process(self, lambd: float = 1.0) -> bool | None:
-
         cur_s_dp = self._find_S(self.p_i_dew)
-
-        # VBA: If Ssp = 0 Then pmin = Pi: Pi = (pmax + pmin) / 2
         while cur_s_dp['S'] == 0.0:
             self.p_min_bar_dew = self.p_i_dew
             self.p_i_dew = (self.p_max_bar_dew + self.p_min_bar_dew) / 2.0
-            # VBA: If (pmax - pmin) < 10 ^ (-10) Then GoTo 60
             if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-3:
                 return None
             cur_s_dp = self._find_S(self.p_i_dew)
@@ -274,12 +246,11 @@ class SaturationPressure:
         s_dp_val = cur_s_dp['S']
         f_z = cur_s_dp['letuch_z']
         f_dp = cur_s_dp['letuch_sp']
-
-        # VBA: Rsp(I) = Exp(letuchz(I)) / (Exp(letuchysp(I)) * Ssp)
+        
         r_dp = np.exp(f_z - f_dp) / s_dp_val
         y_dp = cur_s_dp['yi'] * np.power(r_dp, lambd)
-
         self._last_sum_y_dp = float(np.sum(y_dp))
+        
         ratio = np.clip(y_dp / self._z_arr, 1e-12, None)
         r_dp_safe = np.clip(y_dp, 1e-12, None)
         
@@ -290,27 +261,21 @@ class SaturationPressure:
 
         self._last_Ykz_dp = float(np.sum(ratio))
 
-        # 🔑 VBA: If Abs(1 - Ssp) < 10 ^ (-3) Then ... If (Ykz) ^ 2 < 10 ^ (-4) Then
-        if (abs(1.0 - self._last_sum_y_dp) < 1e-3) or (self._last_Ykz_dp ** 2 < 1e-3):
+        if (abs(1.0 - self._last_sum_y_dp) < 1e-4) or (self._last_Ykz_dp ** 2 < 1e-4):
             return True
         else:
-            # 🔑 VBA: pmax = Pi: Pi = (pmax + pmin) / 2 (одностороннее сжатие сверху)
             self.p_max_bar_dew = self.p_i_dew
             self.p_i_dew = (self.p_max_bar_dew + self.p_min_bar_dew) / 2.0
             return False
 
-
-
     def dp_convergence_loop(self, max_iter: int = 100) -> float | None:
         logger.info("Запуск поиска давления начала конденсации (Dew Point)")
-        
         self.dp_process(lambd=1.0)
         if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-3:
             return None
 
         for _ in range(max_iter):
-            # VBA: проверка сходимости внутри цикла
-            if (abs(1.0 - self._last_sum_y_dp) < 1e-3) or (self._last_Ykz_dp ** 2 < 1e-3):
+            if (abs(1.0 - self._last_sum_y_dp) < 1e-4) or (self._last_Ykz_dp ** 2 < 1e-4):
                 break
             self.dp_process(lambd=1.0)
             if (self.p_max_bar_dew - self.p_min_bar_dew) < 1e-3:
@@ -319,10 +284,7 @@ class SaturationPressure:
         self.p_dew = self.p_i_dew
         logger.info(f"Dew Point найден: {self.p_dew:.4f} bar")
         return self.p_dew
-    
 
-import pandas as pd
-import matplotlib.pyplot as plt
 
 class PhaseDiagram:
     def __init__(self, composition: Composition, p_max_bar: float, t_min_C: float, t_max_C: float, t_step_C: float):
@@ -333,11 +295,19 @@ class PhaseDiagram:
 
     def calculate(self):
         logger.info("Начало расчёта фазовой диаграммы...")
+        prev_pb = None
+        prev_pdew = None
+        
         for t_C in self.temps_C:
             t_K = t_C + 273.15
-            # 🔑 Ключевой момент: создаём НОВЫЙ экземпляр для каждой температуры,
-            # чтобы границы p_min/p_max не наследовались от предыдущего шага.
-            sat_calc = SaturationPressure(self.composition, t_K, p_max_bar=self.p_max_bar)
+            
+            # 🔑 Передаём предыдущие значения как начальные приближения
+            sat_calc = SaturationPressure(
+                self.composition, t_K, 
+                p_max_bar=self.p_max_bar,
+                p_guess_sat=prev_pb,
+                p_guess_dew=prev_pdew
+            )
             
             pb = sat_calc.sp_convergence_loop()
             pdew = sat_calc.dp_convergence_loop()
@@ -345,7 +315,10 @@ class PhaseDiagram:
             self.results['Temp_C'].append(t_C)
             self.results['Bubble_bar'].append(pb if pb is not None else np.nan)
             self.results['Dew_bar'].append(pdew if pdew is not None else np.nan)
-            # logger.info(f"T={t_C:.1f}°C | Pb={pb:.3f} bar | Pdew={pdew:.3f} bar")
+            
+            # Обновляем предсказания для следующей итерации
+            if pb is not None: prev_pb = pb
+            if pdew is not None: prev_pdew = pdew
 
     def plot(self):
         df = pd.DataFrame(self.results)
