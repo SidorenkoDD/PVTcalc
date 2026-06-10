@@ -193,6 +193,7 @@ class DLE_2(PVTExperiment):
         # calculate bo and rs
         self.bo = self._calculate_bo(liq_vol = [self._result_dict[stage].liquid_volume for stage in list(self._result_dict.keys())],
                                      fl_arr = [self._result_dict[stage].Fl for stage in list(self._result_dict.keys())])
+        
         self.rs = self._calculate_rs(p_arr = [self._result_dict[stage].pressure for stage in list(self._result_dict.keys())],
                                      z_arr = [self._result_dict[stage].vapour_z for stage in list(self._result_dict.keys())],
                                      t_arr = [self._result_dict[stage].temperature for stage in list(self._result_dict.keys())],

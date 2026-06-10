@@ -198,7 +198,7 @@ class CCE(PVTExperiment):
         return result_df
 
     def _calculate_v_d_vpres(self, p_reservoir):
-        self.dataframe['V/Vres'] = self.dataframe['Liquid volume'] / self.dataframe[self.dataframe['Pressure'] == p_reservoir]['Liquid volume'].iloc[0]
+        self.dataframe['V/Vres'] = self.dataframe['liquid_molar_volume'] / self.dataframe[self.dataframe['Pressure'] == p_reservoir]['liquid_molar_volume'].iloc[0]
 
 
     def _calculate_v_d_vpsat(self, p_sat):

@@ -18,7 +18,9 @@ class DLE:
         self.reservoir_pressure = reservoir_pressure_bar
         self.reservoir_temperature = reservoir_temperature_c
         self.stc_conditions = StandardConditions()
-    @staticmethod
+
+
+    
     def _is_descending(arr):
         if all(arr[i] < arr[i-1] for i in range(1, len(arr))) is False:
             arr.sort(reverse=True)
@@ -47,13 +49,15 @@ class DLE:
         flash_object = Flash(self.composition, current_conditions)
         return flash_object.calculate()
 
+
     def _calculate_bo(self, liq_vol: np.ndarray, fl_arr: np.ndarray) -> np.ndarray:
-        # Векторизованная замена None/NaN на 1.0
-        fl_arr = np.where(np.isnan(fl_arr) | (fl_arr == None), 1.0, fl_arr).astype(float)
-        liq_vol = np.array(liq_vol, dtype=float)
+        # 1. Безопасная замена None/NaN: сначала приводим к float (None станет np.nan), затем заменяем nan на 1.0
+        fl_arr = np.array(fl_arr, dtype=float)
+        fl_arr = np.where(np.isnan(fl_arr), 1.0, fl_arr)
         
-        # Накопительное произведение (cumulative product)
-        # Сдвигаем на 1, чтобы первая итерация умножалась на 1, как в исходном коде
+        liq_vol = np.array(liq_vol, dtype=float)
+        liq_vol = liq_vol * fl_arr
+        # 2. Накопительное произведение со сдвигом (полный аналог цикла)
         cumulative_product = np.cumprod(np.concatenate(([1.0], fl_arr[:-1])))
         
         corrected_vol = liq_vol * cumulative_product
@@ -64,34 +68,39 @@ class DLE:
 
     def _gas_vol_to_stc(self, p_stage: np.ndarray, t_stage: np.ndarray, 
                         z_stage: np.ndarray, v_stage: np.ndarray, z_stc: float) -> np.ndarray:
-        return (p_stage * v_stage * z_stc * self.stc_conditions.t) / (self.stc_conditions.p * z_stage * t_stage)
+        # Убедитесь, что self.stc_conditions.t == 293.14 (или 293.15) и p == 0.101325
+        return (p_stage * v_stage * z_stc * self.stc_conditions.t) / \
+               (self.stc_conditions.p * z_stage * t_stage)
 
 
     def _calculate_rs(self, p_arr: np.ndarray, z_arr: np.ndarray, t_arr: np.ndarray, 
                       gas_vol_arr: np.ndarray, fl_arr: np.ndarray, p_sat: float) -> np.ndarray:
-
-        fl_arr = np.where(np.isnan(fl_arr) | (fl_arr == None), 1.0, fl_arr).astype(float)
+        
+        # 1. Безопасная обработка fl_arr (как в _calculate_bo)
+        fl_arr = np.array(fl_arr, dtype=float)
+        fl_arr = np.where(np.isnan(fl_arr), 1.0, fl_arr)
+        
+        # gas_vol_arr приводим к float, но НЕ заменяем NaN на 1.0, чтобы сохранить логику оригинала
         gas_vol_arr = np.array(gas_vol_arr, dtype=float)
         p_arr = np.array(p_arr, dtype=float)
         
-        # Шаг 1: Коррекция объема газа
+        # 2. Коррекция объема газа (векторизованный cumprod)
         cumulative_product = np.cumprod(np.concatenate(([1.0], fl_arr[:-1])))
         corrected_vol_fl = gas_vol_arr * cumulative_product
 
-        # Шаг 2: Конвертация в STC (векторизованно!)
-        z_stc = float(z_arr[-1]) # Явное приведение к скаляру
+        # 3. Конвертация в STC (векторизованно)
+        z_stc = float(z_arr[-1]) 
         gas_vol_stc_arr = self._gas_vol_to_stc(p_arr, t_arr, z_arr, corrected_vol_fl, z_stc)
 
-        # Шаг 3: Обнуление выше p_sat и на последней ступени
+        # 4. Обнуление выше p_sat и на последней ступени
         gas_vol_stc_arr = np.where(p_arr >= p_sat, 0.0, gas_vol_stc_arr)
-        gas_vol_stc_arr[-1] = 0.0
+        # gas_vol_stc_arr[-1] = 0.0
 
-        # Шаг 4 и 5: Кумулятивная сумма и инверсия (векторизованно)
+        # 5. Кумулятивная сумма и инверсия (векторизованно)
         cumulative_sum = np.cumsum(gas_vol_stc_arr)
         gas_stc_acc_reverted = cumulative_sum[-1] - cumulative_sum
         
         return gas_stc_acc_reverted / self.oil_residual_volume
-
 
     @staticmethod
     def _vectorize_dle_results(flash_results: List['FlashResult']) -> pd.DataFrame:
@@ -146,14 +155,25 @@ class DLE:
         # float64 для чисел, bool для is_two_phase, object для словарей составов
         df = pd.DataFrame(records)
         
-        # Опционально: сортируем по давлению по убыванию (стандарт для DLE)
-        df = df.sort_values('pressure', ascending=False).reset_index(drop=True)
+        # =====================================================================
+        # ГАРАНТИЯ ПОРЯДКА: 
+        # 1. Насильно присваиваем индекс строго по порядку следования в исходном массиве
+        df.index = range(len(df))
+        # 2. Сортируем по этому индексу (для абсолютной гарантии) и сбрасываем 
+        #    его в чистый числовой ряд (0, 1, 2...), убирая его из данных
+        df = df.sort_index().reset_index(drop=True)
+        # =====================================================================
+        
+        # Опционально: если в будущем потребуется сортировка по давлению, 
+        # это нужно будет делать ПОСЛЕ гарантии исходного порядка, если это имеет смысл для вашей логики.
+        # df = df.sort_values('pressure', ascending=False).reset_index(drop=True)
         
         return df
 
+
     def calculate(self):
             result = []
-            
+            self.composition.T = self.reservoir_temperature
             ## Расчет для пластовых условий
             reservoir_conditions = Conditions(self.reservoir_pressure, self.reservoir_temperature)
             reservoir_flash_object = Flash(self.composition, reservoir_conditions)
@@ -198,6 +218,7 @@ class DLE:
             self._dle_df = self._vectorize_dle_results(result)
 
             self._bo = self._calculate_bo(self._dle_df['liquid_molar_volume'].to_numpy(), self._dle_df['liquid_mole_frac'].to_numpy())
+            
             self._rs = self._calculate_rs(p_arr = self._dle_df['pressure'].to_numpy(),
                                           z_arr = self._dle_df['vapor_z'].to_numpy(), 
                                           t_arr = self._dle_df['temperature'].to_numpy(),

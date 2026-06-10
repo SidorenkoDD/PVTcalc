@@ -59,7 +59,7 @@ class SeparatorTest:
         # Векторизованная замена None/NaN на 1.0
         fl_arr = np.where(np.isnan(fl_arr) | (fl_arr == None), 1.0, fl_arr).astype(float)
         liq_vol = np.array(liq_vol, dtype=float)
-        
+        liq_vol = liq_vol * fl_arr
         # Накопительное произведение (cumulative product)
         # Сдвигаем на 1, чтобы первая итерация умножалась на 1, как в исходном коде
         cumulative_product = np.cumprod(np.concatenate(([1.0], fl_arr[:-1])))
@@ -154,8 +154,18 @@ class SeparatorTest:
         # float64 для чисел, bool для is_two_phase, object для словарей составов
         df = pd.DataFrame(records)
         
-        # Опционально: сортируем по давлению по убыванию (стандарт для DLE)
-        df = df.sort_values('pressure', ascending=False).reset_index(drop=True)
+        # =====================================================================
+        # ГАРАНТИЯ ПОРЯДКА: 
+        # 1. Насильно присваиваем индекс строго по порядку следования в исходном массиве
+        df.index = range(len(df))
+        # 2. Сортируем по этому индексу (для абсолютной гарантии) и сбрасываем 
+        #    его в чистый числовой ряд (0, 1, 2...), убирая его из данных
+        df = df.sort_index().reset_index(drop=True)
+        # =====================================================================
+        
+        # Опционально: если в будущем потребуется сортировка по давлению, 
+        # это нужно будет делать ПОСЛЕ гарантии исходного порядка, если это имеет смысл для вашей логики.
+        # df = df.sort_values('pressure', ascending=False).reset_index(drop=True)
         
         return df
 
