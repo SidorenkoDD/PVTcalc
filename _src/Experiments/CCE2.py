@@ -28,26 +28,30 @@ class CCE:
         flash_object = Flash(comp, condition_object)
         return flash_object.calculate()
     
+    def _calc_saturation_pressure(self):
+        sat_pressure_obj = SaturationPressure(self.composition, self.reservoir_temperature + 273.15)
+        self.saturation_pressure = sat_pressure_obj.sp_convergence_loop()
+        self.pressure_arr.append(self.saturation_pressure)
 
 
     def calculate(self):
+        self._calc_saturation_pressure()
         result = []
 
 
-        sat_pressure_obj = SaturationPressure(self.composition, self.reservoir_temperature + 273.15)
-        self.saturation_pressure = sat_pressure_obj.sp_convergence_loop()
+        # sat_pressure_obj = SaturationPressure(self.composition, self.reservoir_temperature + 273.15)
+        # self.saturation_pressure = sat_pressure_obj.sp_convergence_loop()
 
-        saturation_conditions = Conditions(self.saturation_pressure, self.reservoir_temperature)
-        saturation_flash_object = Flash(self.composition, saturation_conditions)
-        saturation_flash_result = saturation_flash_object.calculate()
-
-        result.append(saturation_flash_result)
+        # saturation_conditions = Conditions(self.saturation_pressure, self.reservoir_temperature)
+        # saturation_flash_object = Flash(self.composition, saturation_conditions)
+        # saturation_flash_result = saturation_flash_object.calculate()
+        # result.append(saturation_flash_result)
 
         for stage_pressure in self.pressure_arr:
             stage_conditions = Conditions(stage_pressure, self.reservoir_temperature)
             stage_pressure_flash_object = Flash(self.composition, stage_conditions)
             result.append(stage_pressure_flash_object.calculate())
-        
+
         df_res = self._vectorize_dle_results(result)
         self._calculate_v_d_vpres(df_res)
         self._calculate_v_d_vsat(df_res)
@@ -55,9 +59,10 @@ class CCE:
     
 
     def calculate_parallel(self):
-        grid_res = Parallel(n_jobs=-1, backend="loky")(delayed(self._calc_stage(P))(P) for P in self.pressure_arr)
+        self._calc_saturation_pressure()
+        grid_res = Parallel(n_jobs=-1, backend="loky")(delayed(self._calc_stage)(P) for P in self.pressure_arr)
         return grid_res
-    
+
 
     def _calculate_v_d_vpres(self, df):
         if type(df['liquid_molar_volume']) != None:
