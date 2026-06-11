@@ -148,8 +148,8 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _interpetate_stability_analysis(self):
-        self.S_v_rounded = round(self.S_v, 2)
-        self.S_l_rounded = round(self.S_l, 2)
+        self.S_v_rounded = round(self.S_v, 7)
+        self.S_l_rounded = round(self.S_l, 7)
 
         if (
             (self.convergence_trivial_solution_v and self.convergence_trivial_solution_l)

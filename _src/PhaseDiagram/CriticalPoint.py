@@ -1,15 +1,16 @@
 import numpy as np
 import logging
-from typing import Optional, Dict, Any, Tuple
-from scipy.optimize import minimize, brentq
+from typing import Optional, Dict, Any
+from scipy.optimize import minimize_scalar
 from _src.Composition.CompositionV2 import Composition
-from _src.EOS.BrusilovskiyEOSV2 import BrusilovskiyEOS
+from _src.PhaseDiagram.BubblePointPressure import BubblePointCalculator
+from _src.PhaseDiagram.DewPressure import DewPointCalculator
 
 logger = logging.getLogger(__name__)
 
 
 def setup_logger(level: int = logging.INFO):
-    """Настраивает логгер для вывода сообщений в консоль."""
+    """Настраивает логгер для вывода в консоль."""
     if not logger.handlers:
         handler = logging.StreamHandler()
         handler.setLevel(level)
@@ -24,10 +25,7 @@ def setup_logger(level: int = logging.INFO):
 
 class CriticalPointCalculator:
     """
-    Расчет критической точки через термодинамические условия:
-    (∂P/∂V)_T = 0 и (∂²P/∂V²)_T = 0
-    
-    Это классическое условие критической точки, не требующее расчета bubble/dew.
+    Расчет критической точки через минимизацию зазора между bubble и dew кривыми.
     """
     
     def __init__(self, composition: Composition, verbose: bool = True):
@@ -36,189 +34,170 @@ class CriticalPointCalculator:
         
         self.composition = composition
         self.verbose = verbose
-        
-        # Результаты
         self.T_crit = None
         self.P_crit = None
-        self.V_crit = None
         
-    def _calc_pressure_from_eos(self, T: float, V: float) -> float:
+    def _calc_gap(self, T: float) -> float:
         """
-        Рассчитывает давление из EOS при заданных T и V.
+        Вычисляет |P_dew(T) - P_bubble(T)|.
+        Возвращает 1e6, если расчет некорректен.
         """
         try:
-            eos = BrusilovskiyEOS(self.composition, 1.0, T)  # P не важен, пересчитаем
+            self.composition.T = T
             
-            # Безразмерные параметры
-            A_m = eos._calc_A_mixture()
-            B_m = eos._calc_B_mixture()
-            C_m = eos._calc_C_mixture()
-            D_m = eos._calc_D_mixture()
+            # Bubble point
+            b_calc = BubblePointCalculator(
+                composition=self.composition,
+                T=T,
+                max_iter=150,
+                tol=1e-8
+            )
+            P_b = b_calc.calculate()
+            if not b_calc.converged or P_b is None or P_b <= 0:
+                return 1e6
             
-            # Z = PV/RT => P = ZRT/V
-            # Кубическое уравнение: Z³ + E0*Z² + E1*Z + E2 = 0
-            # где E0 = C + D - B - 1, E1 = A - BC + CD - BD - D - C, E2 = -(BCD + CD + AB)
-            E_0 = C_m + D_m - B_m - 1.0
-            E_1 = A_m - B_m * C_m + C_m * D_m - B_m * D_m - D_m - C_m
-            E_2 = -(B_m * C_m * D_m + C_m * D_m + A_m * B_m)
+            # Dew point (без dew_point_type, так как его нет в текущей версии)
+            d_calc = DewPointCalculator(
+                composition=self.composition,
+                T=T,
+                max_iter=150,
+                tol=1e-8
+            )
+            P_d = d_calc.calculate()
             
-            # Решаем для Z при заданном V
-            # Z = PV/RT, но мы ищем P, поэтому используем итерационный подход
-            # Или проще: используем явное выражение P(V,T) из EOS
+            if P_d is None or P_d <= 0:
+                return 1e6
             
-            # Для уравнения Брусиловского:
-            # P = RT/(V-b) - a/(V² + (b+c)V + bc)
-            # где a, b, c, d - параметры смеси
+            # Проверка: P_dew должен быть >= P_bubble
+            if P_d < P_b * 0.9:
+                return 1e6
             
-            R = 83.14  # J/(mol·K) = cm³·bar/(mol·K)
+            return abs(P_d - P_b)
             
-            # Параметры смеси (упрощенно)
-            a_mix = A_m * (R * T)**2 / 1.0  # нормализация
-            b_mix = B_m * R * T / 1.0
-            c_mix = C_m * R * T / 1.0
-            d_mix = D_m * R * T / 1.0
-            
-            P = R * T / (V - b_mix) - a_mix / (V**2 + (b_mix + c_mix) * V + b_mix * c_mix)
-            
-            return P
-            
-        except Exception as e:
-            logger.debug(f"EOS calculation failed at T={T}, V={V}: {e}")
-            return np.inf
-    
-    def _calc_dP_dV(self, T: float, V: float, dV: float = 1e-6) -> float:
-        """Первая производная dP/dV."""
-        P1 = self._calc_pressure_from_eos(T, V - dV)
-        P2 = self._calc_pressure_from_eos(T, V + dV)
-        return (P2 - P1) / (2 * dV)
-    
-    def _calc_d2P_dV2(self, T: float, V: float, dV: float = 1e-6) -> float:
-        """Вторая производная d²P/dV²."""
-        dP1 = self._calc_dP_dV(T, V - dV, dV)
-        dP2 = self._calc_dP_dV(T, V + dV, dV)
-        return (dP2 - dP1) / (2 * dV)
-    
-    def _critical_conditions_objective(self, x: np.ndarray) -> float:
-        """
-        Целевая функция: сумма квадратов условий критической точки.
-        x = [T, V]
-        """
-        T, V = x
-        
-        if T < 200 or T > 1000 or V < 0.01 or V > 10:
-            return 1e10
-        
-        dP_dV = self._calc_dP_dV(T, V)
-        d2P_dV2 = self._calc_d2P_dV2(T, V)
-        
-        # Нормализация для улучшения сходимости
-        return (dP_dV / 100.0)**2 + (d2P_dV2 / 1000.0)**2
-    
-    def _scan_for_initial_guess(self, T_min: float, T_max: float, n_points: int = 30) -> Optional[Tuple[float, float]]:
-        """
-        Сканирование для нахождения начального приближения.
-        Ищем температуру, где dP/dV ≈ 0 при некотором V.
-        """
-        logger.info(f"Scanning for initial guess in T=[{T_min-273.15:.1f}, {T_max-273.15:.1f}] °C")
-        
-        best_T = None
-        best_V = None
-        best_metric = float('inf')
-        
-        T_grid = np.linspace(T_min, T_max, n_points)
-        
-        for T in T_grid:
-            # Для каждой температуры ищем V, где dP/dV ≈ 0
-            V_grid = np.linspace(0.1, 5.0, 50)
-            
-            for V in V_grid:
-                dP_dV = self._calc_dP_dV(T, V)
-                d2P_dV2 = self._calc_d2P_dV2(T, V)
-                
-                metric = abs(dP_dV) + abs(d2P_dV2) * 0.1
-                
-                if metric < best_metric:
-                    best_metric = metric
-                    best_T = T
-                    best_V = V
-        
-        if best_T is not None:
-            logger.info(f"Best initial guess: T={best_T-273.15:.2f} °C, V={best_V:.4f}, metric={best_metric:.6f}")
-            return best_T, best_V
-        else:
-            return None
+        except Exception:
+            return 1e6
     
     def calculate(self) -> Optional[Dict[str, Any]]:
         """
         Основной метод расчета критической точки.
         """
-        logger.info("Starting critical point calculation via thermodynamic conditions...")
+        logger.info("Starting critical point calculation via bubble-dew gap minimization...")
         
         # Определяем диапазон поиска
         comp_data = self.composition.composition_data
         z = np.array([self.composition.composition[c] for c in self.composition.composition.keys()])
-        Tc_components = np.array([comp_data['critical_temperature'][c] for c in self.composition.composition.keys()])
-        Tc_pseudo = np.sum(z * Tc_components)
+        Tc_comps = np.array([comp_data['critical_temperature'][c] for c in self.composition.composition.keys()])
+        Tc_pseudo = np.sum(z * Tc_comps)
         
-        T_min = Tc_pseudo * 0.7
-        T_max = Tc_pseudo * 1.5
+        T_min = Tc_pseudo * 0.85
+        T_max = Tc_pseudo * 1.25
         
         logger.info(f"Search range: T=[{T_min-273.15:.1f}, {T_max-273.15:.1f}] °C")
         
-        # Шаг 1: Поиск начального приближения
-        initial_guess = self._scan_for_initial_guess(T_min, T_max, n_points=40)
+        # Шаг 1: Грубое сканирование с шагом 2K
+        T_grid = np.arange(T_min, T_max, 2.0)
+        best_T = None
+        best_gap = 1e6
         
-        if initial_guess is None:
-            logger.error("Failed to find initial guess")
+        logger.info(f"Scanning {len(T_grid)} points...")
+        
+        for T in T_grid:
+            gap = self._calc_gap(T)
+            if gap < best_gap:
+                best_gap = gap
+                best_T = T
+        
+        if best_T is None or best_gap > 1e5:
+            logger.error("Failed to find critical region")
             return None
         
-        T0, V0 = initial_guess
+        logger.info(f"Best guess: T={best_T-273.15:.2f} °C, gap={best_gap:.4f} bar")
         
-        # Шаг 2: Оптимизация
-        logger.info(f"Starting optimization from T={T0-273.15:.2f} °C, V={V0:.4f}")
-        
+        # Шаг 2: Уточнение методом Brent на интервале [T_best - 5, T_best + 5]
+        logger.info("Refining critical point...")
         try:
-            result = minimize(
-                self._critical_conditions_objective,
-                x0=[T0, V0],
-                method='Nelder-Mead',
-                tol=1e-8,
-                options={'maxiter': 1000, 'xatol': 1e-6, 'fatol': 1e-8}
+            res = minimize_scalar(
+                self._calc_gap,
+                bounds=(best_T - 5.0, best_T + 5.0),
+                method='bounded',
+                options={'xatol': 1e-4, 'maxiter': 50}
             )
             
-            if result.success or result.fun < 1e-6:
-                T_crit, V_crit = result.x
-                
-                # Шаг 3: Расчет давления в критической точке
-                P_crit = self._calc_pressure_from_eos(T_crit, V_crit)
-                
-                # Проверка условий
-                dP_dV = self._calc_dP_dV(T_crit, V_crit)
-                d2P_dV2 = self._calc_d2P_dV2(T_crit, V_crit)
-                
-                logger.info(f"✓ Critical point found:")
-                logger.info(f"  T = {T_crit:.4f} K ({T_crit - 273.15:.2f} °C)")
-                logger.info(f"  P = {P_crit:.4f} bar")
-                logger.info(f"  V = {V_crit:.4f}")
-                logger.info(f"  dP/dV = {dP_dV:.2e}")
-                logger.info(f"  d²P/dV² = {d2P_dV2:.2e}")
-                
-                self.T_crit = T_crit
-                self.P_crit = P_crit
-                self.V_crit = V_crit
-                
-                return {
-                    'T': T_crit,
-                    'P': P_crit,
-                    'V': V_crit,
-                    'T_C': T_crit - 273.15,
-                    'dP_dV': dP_dV,
-                    'd2P_dV2': d2P_dV2,
-                }
+            if res.success and res.fun < 1e5:
+                T_refined = res.x
             else:
-                logger.warning(f"Optimization did not converge well. Metric: {result.fun:.6f}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Optimization failed: {e}")
+                T_refined = best_T
+        except Exception:
+            T_refined = best_T
+        
+        # Шаг 3: Финальный расчет давлений
+        self.composition.T = T_refined
+        
+        b_calc = BubblePointCalculator(
+            composition=self.composition,
+            T=T_refined,
+            max_iter=150,
+            tol=1e-8
+        )
+        P_b = b_calc.calculate()
+        
+        d_calc = DewPointCalculator(
+            composition=self.composition,
+            T=T_refined,
+            max_iter=150,
+            tol=1e-8
+        )
+        P_d = d_calc.calculate()
+        
+        if P_b is None or P_d is None or P_b <= 0 or P_d <= 0:
+            logger.error("Final calculation failed")
             return None
+        
+        P_crit = (P_b + P_d) / 2.0
+        gap_final = abs(P_b - P_d)
+        
+        logger.info(f"✓ Critical point found:")
+        logger.info(f"  T = {T_refined:.4f} K ({T_refined - 273.15:.2f} °C)")
+        logger.info(f"  P = {P_crit:.4f} bar")
+        logger.info(f"  P_bubble = {P_b:.4f} bar")
+        logger.info(f"  P_dew = {P_d:.4f} bar")
+        logger.info(f"  Gap = {gap_final:.6f} bar")
+        
+        self.T_crit = T_refined
+        self.P_crit = P_crit
+        
+        return {
+            'T': T_refined,
+            'P': P_crit,
+            'T_C': T_refined - 273.15,
+            'P_bubble': P_b,
+            'P_dew': P_d,
+            'gap': gap_final
+        }
+
+
+if __name__ == "__main__":
+    from _src.Composition.CompositionV2 import Composition
+    
+    composition_dict = {
+        'N2': 0.01, 'C1': 0.70, 'C2': 0.08, 'C3': 0.05,
+        'iC4': 0.01, 'nC4': 0.02, 'iC5': 0.01, 'nC5': 0.01,
+        'C6': 0.01, 'C7': 0.05, 'C10': 0.03, 'C15': 0.01,
+        'C20': 0.005, 'C30': 0.005
+    }
+    
+    composition = Composition(composition_dict, T_res=350.0)
+    composition.evaluate_composition_data(c7_plus_correlations={})
+    
+    crit_calc = CriticalPointCalculator(composition, verbose=True)
+    crit_point = crit_calc.calculate()
+    
+    if crit_point:
+        print(f"\n{'='*40}")
+        print(f"CRITICAL POINT RESULTS")
+        print(f"{'='*40}")
+        print(f"T_crit = {crit_point['T_C']:.2f} °C")
+        print(f"P_crit = {crit_point['P']:.2f} bar")
+        print(f"Gap    = {crit_point['gap']:.4f} bar")
+    else:
+        print("\nCritical point calculation failed.")
