@@ -2,18 +2,18 @@ import numpy as np
 import logging
 from _src.EOS.BrusilovskiyEOSV2 import BrusilovskiyEOS
 from _src.Composition.CompositionV2 import Composition
-from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
-
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
 
 class DewPointCalculator:
     """
-    Класс для расчета давления начала конденсации (Dew Point Pressure).
+    Класс для расчета давления начала конденсации (Dew Point Pressure)
+    по алгоритму из Table 6.2 (Pedersen).
     
     dew_point_type:
-      'upper' - верхнее давление начала конденсации (существует при T > T_crit, высокое P)
-      'lower' - нижнее давление начала конденсации (существует при T > T_crit, низкое P)
+      'upper' - верхнее давление начала конденсации (высокое P)
+      'lower' - нижнее давление начала конденсации (низкое P)
     """
 
     def __init__(
@@ -22,8 +22,8 @@ class DewPointCalculator:
         T: float,
         dew_point_type: str = 'upper',
         P_guess: float = None,
-        max_iter: int = 200,
-        tol: float = 1e-13,
+        max_iter: int = 100,
+        tol: float = 1e-10,
     ):
         if dew_point_type not in ['upper', 'lower']:
             raise ValueError(f"dew_point_type must be 'upper' or 'lower', got '{dew_point_type}'")
@@ -41,383 +41,195 @@ class DewPointCalculator:
         self.converged = False
         self.iterations_done = 0
 
-    def calculate(self):
+    def calculate(self) -> float:
         """
-        Выполняет расчет давления начала конденсации.
+        Расчет давления начала конденсации по алгоритму Table 6.2.
         """
+        logger.info(f"Starting dew point calculation at T={self.T:.2f} K ({self.T-273.15:.2f} °C), type={self.dew_point_type}")
+        
+        # Получаем данные компонент
         comp_data = self.composition.composition_data
         components = list(self.composition.composition.keys())
         z = np.array([self.composition.composition[c] for c in components])
-
+        
+        # Критические параметры для начального приближения
         Pc = np.array([comp_data['critical_pressure'][c] for c in components])
         Tc = np.array([comp_data['critical_temperature'][c] for c in components])
         omega = np.array([comp_data['acentric_factor'][c] for c in components])
-
-        exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
-
-        # Начальное приближение зависит от типа dew point
+        
+        # Шаг 1: Начальное приближение давления
         if self.P_guess is not None:
             P = self.P_guess
-        elif self.dew_point_type == 'upper':
-            # Upper dew point: высокое начальное P
-            P = np.sum(z * Pc * exp_term) * 1.5
+            logger.info(f"Using provided initial pressure guess: P={P:.4f} bar")
         else:
-            # Lower dew point: низкое начальное P
-            K_wilson = (Pc / 1.0) * exp_term
-            P = 1.0 / np.sum(z / K_wilson)
-
+            # Оцениваем начальное давление по Вильсону
+            exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
+            if self.dew_point_type == 'upper':
+                P = np.sum(z * Pc * exp_term) * 1.5
+            else:
+                K_wilson = (Pc / 1.0) * exp_term
+                P = 1.0 / np.sum(z / K_wilson)
+            logger.info(f"Initial pressure estimate (Wilson): P={P:.4f} bar")
+        
+        # Шаг 2: Оцениваем K-факторы по уравнению Вильсона
+        exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
         K = (Pc / P) * exp_term
-
-        # Находим стабильную область для начала итераций
-        result = self._find_stable_region(P, K, z, components)
-        if result is None:
-            logger.info(f"{self.dew_point_type} dew point does not exist at T={self.T:.2f} K")
-            self.result_P = None
-            self.converged = False
-            return None
+        logger.debug(f"Initial K-factors (Wilson): {dict(zip(components, K))}")
         
-        P, K = result
-
-        # Основной цикл итераций
-        F = None
-        trivial_counter = 0
-        
+        # Основной цикл итераций (шаги 3-9)
         for j in range(self.max_iter):
-            # Состав жидкой фазы: x_i = z_i / K_i
+            logger.debug(f"\n=== Iteration {j+1}/{self.max_iter} ===")
+            logger.debug(f"Current pressure: P={P:.6f} bar")
+            
+            # Шаг 3: Оцениваем состав жидкой фазы: x_i = z_i / K_i
             x = z / K
             x_sum = np.sum(x)
+            logger.debug(f"Liquid phase composition sum: sum(x)={x_sum:.6f}")
+            
+            if x_sum <= 0:
+                logger.error(f"Non-positive liquid phase sum at iteration {j+1}. Terminating.")
+                break
+                
+            # Нормализуем состав жидкой фазы
             x_normalized = x / x_sum
             x_dict = {c: float(x_normalized[i]) for i, c in enumerate(components)}
-            liquid_comp = self.composition.new_composition(x_dict)
+            
+            # Создаем объект для жидкой фазы
+            liquid_comp = self.composition.new_composition(x_dict, deep_copy=True)
             liquid_comp.T = self.T
-
-            # Расчет УРС для обеих фаз
+            logger.debug(f"Liquid composition: {x_dict}")
+            
+            # Шаг 4: Рассчитываем коэффициенты летучести для паровой и жидкой фаз
+            # Паровая фаза (исходный состав = feed composition)
             eos_V = BrusilovskiyEOS(self.composition, P, self.T)
-            eos_L = BrusilovskiyEOS(liquid_comp, P, self.T)
-
             eos_V.calc_eos()
+            
+            # Жидкая фаза (рассчитанный состав)
+            eos_L = BrusilovskiyEOS(liquid_comp, P, self.T)
             eos_L.calc_eos()
-
+            
+            # Выбираем корни: для пара - максимальный, для жидкости - минимальный
             Z_V = np.max(eos_V.real_roots_eos)
             Z_L = np.min(eos_L.real_roots_eos)
-
-            # Проверка на тривиальное решение
-            if np.isclose(Z_L, Z_V, rtol=1e-4):
-                trivial_counter += 1
-                logger.warning(f"Iter {j}: Trivial solution detected (Z_L ≈ Z_V = {Z_L:.6f})")
-                
-                if trivial_counter >= 3:
-                    logger.info(f"Iter {j}: Escaping trivial solution via stability test")
-                    result = self._escape_trivial_solution(P, K, z, components)
-                    
-                    if result is None:
-                        logger.warning("Cannot escape trivial solution. Returning None.")
-                        self.result_P = None
-                        self.converged = False
-                        return None
-                    
-                    P_new, K_new = result
-                    P = P_new
-                    if K_new is not None:
-                        K = K_new
-                    trivial_counter = 0
-                    continue
-
+            
+            logger.debug(f"Vapor Z-factor: {Z_V:.6f}")
+            logger.debug(f"Liquid Z-factor: {Z_L:.6f}")
+            logger.debug(f"Z-factor difference: {abs(Z_V - Z_L):.6e}")
+            
+            # Получаем логарифмы коэффициентов летучести
             ln_phi_V = eos_V.get_fugacity_coef_vector_by_root(Z_V)
             ln_phi_L = eos_L.get_fugacity_coef_vector_by_root(Z_L)
-
-            # Новые K-факторы
+            
+            logger.debug(f"ln(phi_V): {dict(zip(components, ln_phi_V))}")
+            logger.debug(f"ln(phi_L): {dict(zip(components, ln_phi_L))}")
+            
+            # Шаг 5: Рассчитываем новые K-факторы: K_i = phi_i^L / phi_i^V
             ln_K_new = ln_phi_L - ln_phi_V
             K_new = np.exp(ln_K_new)
-
-            # Функция F
+            
+            logger.debug(f"New K-factors from fugacity: {dict(zip(components, K_new))}")
+            
+            # Шаг 6: Вычисляем целевую функцию F = sum(z_i / K_i) - 1
             F = np.sum(z / K_new) - 1.0
-
+            
+            logger.info(f"Iteration {j+1}: P={P:.6f} bar, F={F:.6e}")
+            logger.debug(f"sum(z/K) = {np.sum(z / K_new):.10f}")
+            
+            # Проверка сходимости
             if abs(F) < self.tol:
-                logger.info(f"{self.dew_point_type} dew point converged in {j+1} iterations. P = {P:.4f}, F = {F:.2e}")
+                logger.info(f"Dew point converged in {j+1} iterations!")
+                logger.info(f"Final pressure: P={P:.6f} bar")
+                logger.info(f"Final F={F:.2e} (tol={self.tol:.2e})")
+                
                 self.result_P = P
                 self.result_F = F
                 self.converged = True
                 self.iterations_done = j + 1
                 return P
-
-            # Производная dF/dP
+            
+            # Шаг 7: Вычисляем производную dF/dP
+            # dF/dP = sum( (z_i / K_i) * (d(ln_phi_i^V)/dP - d(ln_phi_i^L)/dP) )
+            
+            # Устанавливаем Z-факторы для расчета производных
             eos_V._z_factor = Z_V
-            eos_V._dz_dp = None
-            eos_V._dlogphi_dp = None
-            dlnphiV_dP = np.array([eos_V.calc_d_log_phi_i_dp(c) for c in components])
-
             eos_L._z_factor = Z_L
-            eos_L._dz_dp = None
-            eos_L._dlogphi_dp = None
+            
+            # Рассчитываем производные ln(phi_i) по давлению
+            dlnphiV_dP = np.array([eos_V.calc_d_log_phi_i_dp(c) for c in components])
             dlnphiL_dP = np.array([eos_L.calc_d_log_phi_i_dp(c) for c in components])
-
+            
+            logger.debug(f"d(ln_phi_V)/dP: {dict(zip(components, dlnphiV_dP))}")
+            logger.debug(f"d(ln_phi_L)/dP: {dict(zip(components, dlnphiL_dP))}")
+            
+            # Вычисляем dF/dP
             dF_dP = np.sum((z / K_new) * (dlnphiV_dP - dlnphiL_dP))
-
-            if dF_dP < 0:
-                logger.debug(f"Iter {j}: Sign correction for dF/dP. Original: {dF_dP:.2e} -> {abs(dF_dP):.2e}")
-                dF_dP = abs(dF_dP)
-
+            
+            logger.debug(f"dF/dP = {dF_dP:.6e}")
+            
+            # Проверка на малую производную
             if abs(dF_dP) < 1e-15:
-                logger.warning(f"dF/dP too small at iteration {j}. Stopping.")
+                logger.warning(f"dF/dP too small ({dF_dP:.2e}) at iteration {j+1}. Terminating.")
                 break
-
-            # Обновление давления
+            
+            # Шаг 8: Обновляем давление по методу Ньютона
+            # P_new = P - F / (dF/dP)
             delta_P = -F / dF_dP
+            
+            logger.debug(f"Newton step: delta_P = -F/(dF/dP) = {-F:.6e} / {dF_dP:.6e} = {delta_P:.6e}")
+            
+            # Ограничиваем шаг (не более 50% от текущего давления)
             max_step = 0.5 * P
             if abs(delta_P) > max_step:
                 delta_P = max_step * np.sign(delta_P)
-
+                logger.debug(f"Step limited to {max_step:.6f} bar")
+            
             P_new = P + delta_P
+            
+            # Проверка на отрицательное давление
             if P_new <= 0:
+                logger.warning(f"New pressure would be negative ({P_new:.6f}). Reducing step.")
                 P_new = P * 0.5
-
+                delta_P = P_new - P
+            
+            logger.debug(f"Updated pressure: P_new = {P:.6f} + {delta_P:.6f} = {P_new:.6f} bar")
+            
+            # Обновляем давление и K-факторы
             P = P_new
             K = K_new
-
-            if j % 5 == 0:
-                logger.debug(f"Iter {j}: P = {P:.4f}, F = {F:.6f}, dF/dP = {dF_dP:.6e}, Z_L = {Z_L:.6f}, Z_V = {Z_V:.6f}")
-
-        logger.warning(f"Max iterations ({self.max_iter}) reached for {self.dew_point_type} dew point. P = {P:.4f}, F = {F:.2e}. Returning None")
+            
+            # Шаг 9: Если не сошлось, возвращаемся к шагу 3
+            if (j + 1) % 10 == 0:
+                logger.info(f"Iteration {j+1}: P={P:.6f} bar, F={F:.6e}, dF/dP={dF_dP:.6e}")
+        
+        # Достигнуто максимальное число итераций
+        logger.warning(f"Maximum iterations ({self.max_iter}) reached.")
+        logger.warning(f"Final pressure: P={P:.6f} bar, F={F:.6e}")
+        
         self.result_P = None
         self.result_F = F
         self.converged = False
         self.iterations_done = self.max_iter
         return None
 
-    def _find_stable_region(self, P: float, K: np.ndarray, z: np.ndarray, components: list):
-        """
-        Находит стабильную область для начала итераций.
-        """
-        if self.dew_point_type == 'upper':
-            return self._find_upper_dew_point_region(P, K, z, components)
-        else:
-            return self._find_lower_dew_point_region(P, K, z, components)
 
-    def _find_upper_dew_point_region(self, P: float, K: np.ndarray, z: np.ndarray, components: list):
-        """
-        Поиск upper dew point: начинаем с высокого P и идём ВНИЗ до нестабильности.
-        Upper dew point - это граница между стабильной жидкостью/сверхкритической фазой (высокое P)
-        и двухфазной областью.
-        """
-        P_high = P  # Стабильная область (высокое P)
-        P_low = P_high / 10.0
-        
-        # Проверяем стабильность при P_high
-        try:
-            st = TwoPhaseStabilityTest(self.composition, P_high, self.T)
-            st.calculate_phase_stability()
-        except Exception as e:
-            logger.warning(f"Stability test failed at P={P_high}: {e}")
-            return None
-        
-        if not st.stable:
-            # Система нестабильна даже при высоком P - нужно идти еще выше
-            logger.info(f"System unstable at P={P_high}. Searching higher...")
-            for attempt in range(10):
-                P_high *= 2.0
-                if P_high > 5000.0:
-                    logger.warning(f"Pressure exceeded 5000 bar. Upper dew point may not exist.")
-                    return None
-                try:
-                    st = TwoPhaseStabilityTest(self.composition, P_high, self.T)
-                    st.calculate_phase_stability()
-                    if st.stable:
-                        break
-                except Exception as e:
-                    return None
-            
-            if not st.stable:
-                return None
-        
-        # Теперь P_high - стабильная область. Идём ВНИЗ пока не найдём нестабильность.
-        unstable_found = False
-        
-        for attempt in range(20):
-            if P_low < 0.01:
-                logger.warning(f"Pressure below 0.01 bar. Upper dew point may not exist.")
-                break
-            
-            try:
-                st = TwoPhaseStabilityTest(self.composition, P_low, self.T)
-                st.calculate_phase_stability()
-                
-                if not st.stable:
-                    unstable_found = True
-                    logger.info(f"Found unstable region at P={P_low:.4f}")
-                    break
-            except Exception as e:
-                logger.warning(f"Stability test failed at P={P_low}: {e}")
-                return None
-            
-            P_high = P_low
-            P_low /= 2.0
-        
-        if not unstable_found:
-            logger.info(f"System stable down to P={P_low}. Upper dew point does not exist at T={self.T:.2f} K")
-            return None
-        
-        # Бисекция между нестабильным (P_low) и стабильным (P_high)
-        K_stable = None
-        
-        for i in range(30):
-            P_mid = (P_low + P_high) / 2.0
-            
-            try:
-                st = TwoPhaseStabilityTest(self.composition, P_mid, self.T)
-                st.calculate_phase_stability()
-                
-                if st.stable:
-                    P_high = P_mid
-                    if st.k_values_for_flash is not None:
-                        K_stable = np.array([st.k_values_for_flash[c] for c in components])
-                else:
-                    P_low = P_mid
-                
-                if (P_high - P_low) / P_high < 0.05:
-                    break
-            except Exception as e:
-                logger.warning(f"Stability test failed during bisection at P={P_mid}: {e}")
-                break
-        
-        P_new = P_high  # Стабильное давление (выше upper dew point)
-        
-        if K_stable is not None:
-            logger.info(f"Found stable region at P={P_new:.4f}. Using stability test K-values.")
-            return P_new, K_stable
-        else:
-            logger.info(f"Found stable region at P={P_new:.4f}. Using Wilson K-values.")
-            comp_data = self.composition.composition_data
-            Pc = np.array([comp_data['critical_pressure'][c] for c in components])
-            Tc = np.array([comp_data['critical_temperature'][c] for c in components])
-            omega = np.array([comp_data['acentric_factor'][c] for c in components])
-            exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
-            K_new = (Pc / P_new) * exp_term
-            return P_new, K_new
-
-    def _find_lower_dew_point_region(self, P: float, K: np.ndarray, z: np.ndarray, components: list):
-        """
-        Поиск lower dew point: начинаем с низкого P и идём ВВЕРХ до нестабильности.
-        Lower dew point - это граница между стабильным газом (низкое P) и двухфазной областью.
-        """
-        P_low = 0.01  # Начальное низкое давление (стабильный газ)
-        P_high = P_low * 10.0
-        
-        # Проверяем стабильность при P_low
-        try:
-            st = TwoPhaseStabilityTest(self.composition, P_low, self.T)
-            st.calculate_phase_stability()
-        except Exception as e:
-            logger.warning(f"Stability test failed at P={P_low}: {e}")
-            return None
-        
-        if not st.stable:
-            # Система нестабильна даже при очень низком P
-            logger.info(f"System unstable at P={P_low}. Lower dew point does not exist at T={self.T:.2f} K")
-            return None
-        
-        # Идём ВВЕРХ по давлению пока не найдём нестабильность
-        unstable_found = False
-        
-        for attempt in range(20):
-            if P_high > 1000.0:
-                logger.warning(f"Pressure exceeded 1000 bar. Lower dew point may not exist.")
-                break
-            
-            try:
-                st = TwoPhaseStabilityTest(self.composition, P_high, self.T)
-                st.calculate_phase_stability()
-                
-                if not st.stable:
-                    unstable_found = True
-                    logger.info(f"Found unstable region at P={P_high:.4f}")
-                    break
-            except Exception as e:
-                logger.warning(f"Stability test failed at P={P_high}: {e}")
-                return None
-            
-            P_low = P_high
-            P_high *= 2.0
-        
-        if not unstable_found:
-            logger.info(f"System stable up to P={P_high}. Lower dew point does not exist at T={self.T:.2f} K")
-            return None
-        
-        # Бисекция между стабильным (P_low) и нестабильным (P_high)
-        K_stable = None
-        
-        for i in range(30):
-            P_mid = (P_low + P_high) / 2.0
-            
-            try:
-                st = TwoPhaseStabilityTest(self.composition, P_mid, self.T)
-                st.calculate_phase_stability()
-                
-                if st.stable:
-                    P_low = P_mid
-                    if st.k_values_for_flash is not None:
-                        K_stable = np.array([st.k_values_for_flash[c] for c in components])
-                else:
-                    P_high = P_mid
-                
-                if (P_high - P_low) / P_high < 0.05:
-                    break
-            except Exception as e:
-                logger.warning(f"Stability test failed during bisection at P={P_mid}: {e}")
-                break
-        
-        P_new = P_low  # Стабильное давление (ниже lower dew point)
-        
-        if K_stable is not None:
-            logger.info(f"Found stable region at P={P_new:.4f}. Using stability test K-values.")
-            return P_new, K_stable
-        else:
-            logger.info(f"Found stable region at P={P_new:.4f}. Using Wilson K-values.")
-            comp_data = self.composition.composition_data
-            Pc = np.array([comp_data['critical_pressure'][c] for c in components])
-            Tc = np.array([comp_data['critical_temperature'][c] for c in components])
-            omega = np.array([comp_data['acentric_factor'][c] for c in components])
-            exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
-            K_new = (Pc / P_new) * exp_term
-            return P_new, K_new
-
-    def _escape_trivial_solution(self, P: float, K: np.ndarray, z: np.ndarray, components: list):
-        """
-        Пытается выйти из тривиального решения.
-        """
-        try:
-            stability_test = TwoPhaseStabilityTest(self.composition, P, self.T)
-            stability_test.calculate_phase_stability()
-        except Exception as e:
-            logger.warning(f"Stability test failed: {e}")
-            return None
-        
-        if stability_test.stable:
-            if self.dew_point_type == 'upper':
-                P_new = P * 0.85
-            else:
-                P_new = P * 1.15
-            
-            logger.info(f"Stable at P={P:.4f}, adjusting to P={P_new:.4f}")
-            
-            comp_data = self.composition.composition_data
-            Pc = np.array([comp_data['critical_pressure'][c] for c in components])
-            Tc = np.array([comp_data['critical_temperature'][c] for c in components])
-            omega = np.array([comp_data['acentric_factor'][c] for c in components])
-            exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
-            K_new = (Pc / P_new) * exp_term
-            
-            return P_new, K_new
-        else:
-            if stability_test.k_values_for_flash is not None:
-                K_new = np.array([stability_test.k_values_for_flash[c] for c in components])
-                return P, K_new
-            else:
-                P_new = P * 0.85
-                comp_data = self.composition.composition_data
-                Pc = np.array([comp_data['critical_pressure'][c] for c in components])
-                Tc = np.array([comp_data['critical_temperature'][c] for c in components])
-                omega = np.array([comp_data['acentric_factor'][c] for c in components])
-                exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
-                K_new = (Pc / P_new) * exp_term
-                return P_new, K_new
+# Функция для обратной совместимости
+def calculate_dew_point_pressure(
+    composition: Composition,
+    T: float,
+    dew_point_type: str = 'upper',
+    P_guess: float = None,
+    max_iter: int = 100,
+    tol: float = 1e-10,
+) -> float:
+    """
+    Calculate dew point pressure at given temperature.
+    """
+    calculator = DewPointCalculator(
+        composition=composition,
+        T=T,
+        dew_point_type=dew_point_type,
+        P_guess=P_guess,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    return calculator.calculate()
