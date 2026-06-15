@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from _src.Composition.PlusComponentCorrelationsV2 import PlusComponentProperties
+from _src.PlusComponents.PlusComponentCorrelations import PlusComponentProperties
 from _src.Utils.JsonDBReader import JsonDBReader
 from _src.Utils import BRS_EOS_DB_V2 as BRSDB
 from _src.Utils.Errors import NoComponentError, InvalidMolarFractionError
