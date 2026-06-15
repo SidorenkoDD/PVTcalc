@@ -7,8 +7,6 @@ from _src.VLE.FlashResult import FlashResult, PhaseState
 from dataclasses import dataclass
 from typing import Dict, Any
 
-# (Вставьте сюда классы PhaseState и FlashResult из Шага 1)
-
 class Flash:
     def __init__(self, composition_object: Composition, conditions_object: Conditions):
         self.composition = composition_object
@@ -16,16 +14,16 @@ class Flash:
         self.composition.T = conditions_object.t
 
     def calculate(self) -> FlashResult: # <-- Указываем тип возврата
-        phase_stability_object = TwoPhaseStabilityTest(self.composition, self.conditions.p, self.conditions.t)
-        phase_stability_object.calculate_phase_stability()
+        self.phase_stability_object = TwoPhaseStabilityTest(self.composition, self.conditions.p, self.conditions.t)
+        self.phase_stability_object.calculate_phase_stability()
 
-        if phase_stability_object.stable == False:
+        if self.phase_stability_object.stable == False:
             # === ДВУХФАЗНАЯ СИСТЕМА ===
             phase_equil_object = PhaseEquilibriumNewton(
                 self.composition,
                 self.conditions.p,
                 self.conditions.t,
-                phase_stability_object.k_values_for_flash
+                self.phase_stability_object.k_values_for_flash
             )
             self.phase_equil_result = phase_equil_object.find_solve_loop()
 
@@ -53,11 +51,11 @@ class Flash:
 
         else:
             # === ОДНОФАЗНАЯ СИСТЕМА (Термодинамический трюк) ===
-            one_phase_stability_props_object = FluidPropertiesCalculator(
+            self.one_phase_stability_props_object = FluidPropertiesCalculator(
                 self.composition.composition, self.composition.composition_data,
-                phase_stability_object.liquid_eos, self.conditions.p, self.conditions.t
+                self.phase_stability_object.liquid_eos, self.conditions.p, self.conditions.t
             )
-            self.one_phase_stability_props = one_phase_stability_props_object.calc_all_properties()
+            self.one_phase_stability_props = self.one_phase_stability_props_object.calc_all_properties()
 
             # ТРЮК: Мы присваиваем весь состав "жидкости" (доля 1.0), 
             # а "пару" даем долю 0.0 и тот же состав. 

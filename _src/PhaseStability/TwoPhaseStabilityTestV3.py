@@ -191,9 +191,9 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def calculate_phase_stability(self):
-        initial_eos = BrusilovskiyEOS(composition=self._composition, p=self.p, t=self.t)
-        initial_eos.calc_eos()
-        self._mixture_fugacities_arr = initial_eos.fugacities.copy()
+        self.initial_eos = BrusilovskiyEOS(composition=self._composition, p=self.p, t=self.t)
+        self.initial_eos.calc_eos()
+        self._mixture_fugacities_arr = self.initial_eos.fugacities.copy()
 
         k_init = self._calc_k_values_wilson_array()
         self._loop_vapour(k_init.copy())
