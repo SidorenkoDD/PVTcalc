@@ -10,7 +10,7 @@ import numpy as np
 from typing import List
 from _src.VLE.Flash import FlashResult
 from joblib import Parallel, delayed
-
+from scipy.interpolate import UnivariateSpline
 
 
 
@@ -55,6 +55,7 @@ class CCE:
         df_res = self._vectorize_dle_results(result)
         self._calculate_v_d_vpres(df_res)
         self._calculate_v_d_vsat(df_res)
+        self._calculate_compressibility_spline(df_res)
         return df_res
     
 
@@ -76,7 +77,77 @@ class CCE:
         else:
             df['v/v_sat'] = df['vapor_molar_volume'] / df[df['pressure'] == self.saturation_pressure]['vapor_molar_volume'].iloc[0]
 
+    def _calculate_compressibility(self, df, avg = False, use_poly = True):
+        # 1. Извлекаем данные как NumPy массивы для максимальной производительности
+        vol = df['liquid_molar_volume'].to_numpy(dtype=float)
+        pres = df['pressure'].to_numpy(dtype=float)
+        n = len(vol)
+        
+        # 2. Инициализируем массив сжимаемости значениями NaN (аналог None для float)
+        compressibility = np.full(n, np.nan, dtype=float)
+        
+        # 3. Векторизованный расчет разниц (текущее - следующее)
+        # vol[:-1] - это все элементы кроме последнего (текущие)
+        # vol[1:]  - это все элементы кроме первого (следующие, аналог shift(-1))
+        dV = vol[1:] - vol[:-1]
+        dP = pres[:-1] - pres[1:]
+        V_ref = vol[1:]
+        V_avg = (vol[:-1] + vol[1:]) / 2.0
 
+        
+        # 4. Расчет сжимаемости с подавлением предупреждений о делении на ноль
+        with np.errstate(divide='ignore', invalid='ignore'):
+            if avg is True:
+                compressibility[1:] = (1.0 / V_ref) * (dV / dP)
+            elif use_poly is True:
+                degree = 3
+                coeffs = np.polyfit(pres, vol, degree)
+                poly = np.poly1d(coeffs)
+                
+                # Производная полинома dV/dP
+                poly_deriv = np.polyder(poly)
+                
+                # Расчет сжимаемости
+                compressibility = np.abs((1.0 / vol) * (poly_deriv(pres) / np.ones_like(pres)))
+    
+            else:
+                compressibility[1:] = (1.0 / V_ref) * (dV / dP)
+        
+        # 6. Записываем результат обратно в DataFrame
+        df['Compressibility'] = compressibility
+
+
+
+
+    def _calculate_compressibility_spline(self, df, smooth_factor = 0.5):
+        vol = df['liquid_molar_volume'].to_numpy(dtype=float)
+        pres = df['pressure'].to_numpy(dtype=float)
+        n = len(vol)
+        
+        # Сортируем по возрастанию давления
+        sort_idx = np.argsort(pres)
+        pres_sorted = pres[sort_idx]
+        vol_sorted = vol[sort_idx]
+        
+        # Сглаживающий сплайн
+        # smooth_factor > 0 позволяет сплайну НЕ проходить точно через точки
+        # Чем больше значение, тем более гладкая кривая
+        spl = UnivariateSpline(pres_sorted, vol_sorted, s=smooth_factor * len(vol))
+        
+        # Производная
+        dV_dP_sorted = spl.derivative()(pres_sorted)
+        
+        # Возвращаем в исходный порядок
+        dV_dP = np.empty(n)
+        dV_dP[sort_idx] = dV_dP_sorted
+        
+        # Сжимаемость
+        with np.errstate(divide='ignore', invalid='ignore'):
+            compressibility = np.abs((1.0 / vol) * dV_dP)
+
+        df['Compressibility'] = compressibility
+
+        
     @staticmethod
     def _vectorize_dle_results(flash_results: List['FlashResult']) -> pd.DataFrame:
         """
