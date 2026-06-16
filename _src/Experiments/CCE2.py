@@ -55,7 +55,7 @@ class CCE:
         df_res = self._vectorize_dle_results(result)
         self._calculate_v_d_vpres(df_res)
         self._calculate_v_d_vsat(df_res)
-        self._calculate_compressibility_spline(df_res)
+        self._calculate_compressibility(df_res)
         return df_res
     
 
@@ -77,44 +77,60 @@ class CCE:
         else:
             df['v/v_sat'] = df['vapor_molar_volume'] / df[df['pressure'] == self.saturation_pressure]['vapor_molar_volume'].iloc[0]
 
-    def _calculate_compressibility(self, df, avg = False, use_poly = True):
-        # 1. Извлекаем данные как NumPy массивы для максимальной производительности
+
+
+    def _calculate_compressibility(self, df, use_poly=False):
+        # 1. Извлекаем данные как NumPy массивы
         vol = df['liquid_molar_volume'].to_numpy(dtype=float)
         pres = df['pressure'].to_numpy(dtype=float)
         n = len(vol)
         
-        # 2. Инициализируем массив сжимаемости значениями NaN (аналог None для float)
+        # Защита от слишком коротких массивов (нужно минимум 2 точки для разности)
+        if n < 2:
+            raise ValueError("Для расчета сжимаемости конечно-разностным методом нужно минимум 2 точки.")
+        
+        # 2. Инициализируем массив
         compressibility = np.full(n, np.nan, dtype=float)
         
-        # 3. Векторизованный расчет разниц (текущее - следующее)
-        # vol[:-1] - это все элементы кроме последнего (текущие)
-        # vol[1:]  - это все элементы кроме первого (следующие, аналог shift(-1))
-        dV = vol[1:] - vol[:-1]
-        dP = pres[:-1] - pres[1:]
-        V_ref = vol[1:]
-        V_avg = (vol[:-1] + vol[1:]) / 2.0
+        # 3. Основной расчет
+        if use_poly:
+            # --- ВАРИАНТ С ПОЛИНОМОМ ---
+            degree = 3
+            coeffs = np.polyfit(pres, vol, degree)
+            poly = np.poly1d(coeffs)
+            poly_deriv = np.polyder(poly)
+            
+            # Для полинома понятие "минимум из двух точек" неприменимо, 
+            # так как производная берется аналитически строго в точке pres[i].
+            compressibility = np.abs((1.0 / vol) * poly_deriv(pres))
+            
+        else:
+            # --- КЛАССИЧЕСКИЙ ВАРИАНТ С np.gradient и MIN(V1, V2) ---
+            
+            # Шаг 3.1: Считаем производную dV/dP во всех точках
+            dV_dP = np.gradient(vol, pres)
 
-        
-        # 4. Расчет сжимаемости с подавлением предупреждений о делении на ноль
-        with np.errstate(divide='ignore', invalid='ignore'):
-            if avg is True:
-                compressibility[1:] = (1.0 / V_ref) * (dV / dP)
-            elif use_poly is True:
-                degree = 3
-                coeffs = np.polyfit(pres, vol, degree)
-                poly = np.poly1d(coeffs)
-                
-                # Производная полинома dV/dP
-                poly_deriv = np.polyder(poly)
-                
-                # Расчет сжимаемости
-                compressibility = np.abs((1.0 / vol) * (poly_deriv(pres) / np.ones_like(pres)))
-    
-            else:
-                compressibility[1:] = (1.0 / V_ref) * (dV / dP)
-        
-        # 6. Записываем результат обратно в DataFrame
+            # Шаг 3.2: Формируем массив минимальных объемов для каждой схемы разности
+            V_min = np.empty(n)
+            
+            # Для первой точки (прямая разность: используются индексы 0 и 1)
+            V_min[0] = np.minimum(vol[0], vol[1])
+            
+            # Для внутренних точек (центральная разность: используются индексы i-1 и i+1)
+            # vol[:-2] - это массив от 0 до n-3
+            # vol[2:]  - это массив от 2 до n-1
+            V_min[1:-1] = np.minimum(vol[:-2], vol[2:])
+            
+            # Для последней точки (обратная разность: используются индексы n-2 и n-1)
+            V_min[-1] = np.minimum(vol[-2], vol[-1])
+            
+            # Шаг 3.3: Расчет сжимаемости
+            # np.abs гарантирует положительный результат независимо от сортировки давления
+            with np.errstate(divide='ignore', invalid='ignore'):
+                compressibility = np.abs((1.0 / V_min) * dV_dP)
+
         df['Compressibility'] = compressibility
+
 
 
 

@@ -43,11 +43,11 @@ class FluidPropertiesCalculator:
         visc = ViscosityFactory().create_viscosity_object(self._viscosity_method)
         return visc(mole_fractions=self._composition, composition_data=self._composition_properties,
                    phase_density=self.density, mw=self.molar_mass, temperature=self._T,
-                    alpha0=0.12538570165634155,
-                    alpha1=0.02722247689962387,
-                    alpha2=0.004341159015893936,
-                    alpha3=-0.004339530132710934,
-                    alpha4=0.0007456476450897753,
+                    alpha0=0.1023,
+                    alpha1=0.023364,
+                    alpha2=0.058533,
+                    alpha3=-0.040758,
+                    alpha4=0.0093324,
                     ).calculate()
 
         # return visc(mole_fractions=self._composition, composition_data=self._composition_properties,

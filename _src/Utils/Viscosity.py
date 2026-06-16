@@ -129,7 +129,8 @@ class LBC(Viscosity):
             Vci_g_cm3 = self._composition_data['critical_volume'][component]
 
             v_crit_mixed += xi * Vci_g_cm3
-
+        
+        ### Почему так?
         phase_density = self._phase_density / self._phase_mw
         return phase_density * v_crit_mixed
 
