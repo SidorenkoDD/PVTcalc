@@ -132,37 +132,54 @@ class CCE:
         df['Compressibility'] = compressibility
 
 
-
-
-
-    def _calculate_compressibility_spline(self, df, smooth_factor = 0.5):
-        vol = df['liquid_molar_volume'].to_numpy(dtype=float)
-        pres = df['pressure'].to_numpy(dtype=float)
-        n = len(vol)
+    def calculate_compressibility(self, df, pressures, volumes, method='average'):
+        """
+        Рассчитывает коэффициент сжимаемости между соседними точками.
         
-        # Сортируем по возрастанию давления
-        sort_idx = np.argsort(pres)
-        pres_sorted = pres[sort_idx]
-        vol_sorted = vol[sort_idx]
+        Parameters:
+        pressures (list or np.array): Массив давлений (по убыванию).
+        volumes (list or np.array): Согласованный массив объемов.
+        method (str): Метод выбора объема в знаменателе.
+                    'average' - среднее (V1 + V2) / 2 (Рекомендуется)
+                    'initial' - начальное V1
+                    'final'   - конечное V2
+                    
+        Returns:
+        np.array: Массив значений сжимаемости (длина N-1).
+        np.array: Массив средних давлений для каждой точки (для построения графиков).
+        """
+        P = np.asarray(pressures, dtype=float)
+        V = np.asarray(volumes, dtype=float)
         
-        # Сглаживающий сплайн
-        # smooth_factor > 0 позволяет сплайну НЕ проходить точно через точки
-        # Чем больше значение, тем более гладкая кривая
-        spl = UnivariateSpline(pres_sorted, vol_sorted, s=smooth_factor * len(vol))
+        if len(P) != len(V):
+            raise ValueError("Массивы давлений и объемов должны иметь одинаковую длину.")
+        if len(P) < 2:
+            raise ValueError("Для расчета нужно минимум 2 точки.")
+            
+        # Рассчитываем разности (ΔP и ΔV)
+        # np.diff вычисляет X[i+1] - X[i]
+        dP = np.diff(P) 
+        dV = np.diff(V)
         
-        # Производная
-        dV_dP_sorted = spl.derivative()(pres_sorted)
+        # Выбираем опорный объем (V_ref) в зависимости от метода
+        if method == 'initial':
+            V_ref = V[:-1]      # V1 (объемы от 0 до N-2)
+        elif method == 'final':
+            V_ref = V[1:]       # V2 (объемы от 1 до N-1)
+        elif method == 'average':
+            V_ref = (V[:-1] + V[1:]) / 2.0  # Среднее арифметическое
+        else:
+            raise ValueError("Неверный метод. Выберите 'average', 'initial' или 'final'.")
         
-        # Возвращаем в исходный порядок
-        dV_dP = np.empty(n)
-        dV_dP[sort_idx] = dV_dP_sorted
-        
-        # Сжимаемость
+        # Защита от деления на ноль, если где-то давление не изменилось
         with np.errstate(divide='ignore', invalid='ignore'):
-            compressibility = np.abs((1.0 / vol) * dV_dP)
-
-        df['Compressibility'] = compressibility
-
+            beta = - (1.0 / V_ref) * (dV / dP)
+            
+        # Давления, соответствующие интервалам (середины интервалов для корректного графика)
+        P_mid = (P[:-1] + P[1:]) / 2.0
+        
+        df['Compressibility'] = beta
+        return beta, P_mid
         
     @staticmethod
     def _vectorize_dle_results(flash_results: List['FlashResult']) -> pd.DataFrame:
