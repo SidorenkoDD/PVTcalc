@@ -1,3 +1,5 @@
+import logging
+
 from _src.Composition.Composition import Composition
 from _src.Utils.Conditions import Conditions
 from _src.VLE.Flash import Flash
@@ -8,7 +10,9 @@ import numpy as np
 import pandas as pd
 import numpy as np
 from typing import List
-from _src.VLE.Flash import FlashResult 
+from _src.VLE.Flash import FlashResult
+
+logger = logging.getLogger(__name__)
 
 class SeparatorTest:
     def __init__(self, composition : Composition,
@@ -171,6 +175,7 @@ class SeparatorTest:
 
 
     def calculate(self):
+            logger.info("SeparatorTest: старт, %d ступеней", len(self.pressure_arr))
             result = []
             self._check_length_arr(self.pressure_arr, self.temperature_arr)
 
@@ -180,13 +185,13 @@ class SeparatorTest:
             reservoir_flash_result = reservoir_flash_object.calculate()
             result.append(reservoir_flash_result)
             self._liquid_molar_fractions = reservoir_flash_result.liquid_composition
-            
+
             ## Расчет для Рнас
 
             self.composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
             sat_pressure_obj = SaturationPressure(self.composition, reservoir_conditions.t)
             saturation_pressure = sat_pressure_obj.sp_convergence_loop()
-
+            logger.info("SeparatorTest: P_sat=%.4f бар", saturation_pressure)
 
             saturation_conditions = Conditions(saturation_pressure, self.reservoir_temperature)
             saturation_flash_object = Flash(self.composition, saturation_conditions)
@@ -196,13 +201,17 @@ class SeparatorTest:
             self._liquid_molar_fractions = saturation_flash_result.liquid_composition
 
             ## ОСНОВНОЙ ЦИКЛ РАСЧЕТА ПО СТУПЕНЯМ
-            for stage_pressure, stage_temperature in zip(self.pressure_arr, self.temperature_arr):
+            for stage_num, (stage_pressure, stage_temperature) in enumerate(zip(self.pressure_arr, self.temperature_arr), start=1):
+                logger.debug(
+                    "SeparatorTest: ступень %d/%d, P=%s бар, T=%s°C",
+                    stage_num, len(self.pressure_arr), stage_pressure, stage_temperature,
+                )
                 # Обновляем состав объекта композиции перед новым флешем
                 self.composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
                 self.composition.T = stage_temperature
                 self._stage_result = self._calculate_stage(stage_pressure, stage_temperature)
                 result.append(self._stage_result)
-                
+
                 # Снова безопасно берем состав жидкости для следующей итерации
                 self._liquid_molar_fractions = self._stage_result.liquid_composition
 
@@ -227,4 +236,5 @@ class SeparatorTest:
             self._dle_df['Bo'] = self._bo
             self._dle_df['Rs'] = self._rs
 
+            logger.info("SeparatorTest: завершено, %d точек в результате", len(result))
             return result

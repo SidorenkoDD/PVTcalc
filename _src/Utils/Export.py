@@ -1,9 +1,13 @@
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
 # from _src.CompositionalModel.CompositionalModel import CompositionalModel
 # from _src.Utils.Results import ResultStore
+
+logger = logging.getLogger(__name__)
+
 
 class ModelJSONDB:
     def __init__(self, filepath: str = "models.json"):
@@ -63,7 +67,7 @@ class ModelJSONDB:
                     self._db = json.load(f)
             except json.JSONDecodeError:
                 # На случай, если файл поврежден, начинаем с чистого листа
-                print(f"Предупреждение: {self.filepath} поврежден. Начинаем с пустой базы.")
+                logger.warning("%s поврежден. Начинаем с пустой базы.", self.filepath)
                 self._db = {}
 
     @staticmethod

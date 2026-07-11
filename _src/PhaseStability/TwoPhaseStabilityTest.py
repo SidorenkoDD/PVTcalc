@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 
 from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
@@ -7,6 +9,8 @@ from _src.Utils.Constants import (
     TOL_TWO_PHASE_STABILITY_CONVERGENCE,
     TOL_TWO_PHASE_STABILITY_CONVERGENCE_TRIVIAL_SOLUTION,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TwoPhaseStabilityTest:
@@ -200,6 +204,10 @@ class TwoPhaseStabilityTest:
         self._loop_liquid(k_init.copy())
 
         self._interpetate_stability_analysis()
+        logger.debug(
+            "P=%s, T=%s: stable=%s, S_v=%s, S_l=%s",
+            self.p, self.t, self.stable, self.S_v, self.S_l,
+        )
 
     # =====================================================================================
     # ЦИКЛ ПО VAPOUR-ТЕСТУ
@@ -240,6 +248,7 @@ class TwoPhaseStabilityTest:
 
             i += 1
             if i > 100000:
+                logger.warning("_loop_vapour: не сошёлся за 100000 итераций (P=%s, T=%s)", self.p, self.t)
                 raise StopIterationError('Число итераций теста стабильности превысило 100000')
 
     # =====================================================================================
@@ -281,6 +290,7 @@ class TwoPhaseStabilityTest:
 
             i += 1
             if i > 100000:
+                logger.warning("_loop_liquid: не сошёлся за 100000 итераций (P=%s, T=%s)", self.p, self.t)
                 raise StopIterationError('Число итераций теста стабильности превысило 100000')
 
     # =====================================================================================

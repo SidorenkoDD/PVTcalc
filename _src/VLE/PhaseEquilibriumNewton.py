@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 
 from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
@@ -7,6 +9,8 @@ from _src.Utils.Constants import (
     TOL_TWO_PHASE_FLASH_TRIVIAL_SOLUTION,
     TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PhaseEquilibriumNewton:
@@ -301,16 +305,19 @@ class PhaseEquilibriumNewton:
 
             self.check_convergence_ri()
             if self.convergence:
+                logger.debug("PhaseEquilibriumNewton: сошлось за %d итераций, Fv=%.6f", i, self.fv)
                 break
 
             self.newton_algorithm_fug_only()
 
             self.check_trivial_solution()
             if self.trivial_solution:
+                logger.debug("PhaseEquilibriumNewton: тривиальное решение (K->1) на итерации %d", i)
                 break
 
             i += 1
             if i > 1000:
+                logger.warning("PhaseEquilibriumNewton: превышен лимит итераций (1000), возвращён последний Fv=%.6f", self.fv)
                 break
 
         return {

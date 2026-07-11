@@ -1,5 +1,10 @@
+import logging
+
 from _src.VLE.Flash import Flash
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
 
 class PhaseIndentificator:
     def __init__(self, flash_object: Flash, Constant = 1.75):
@@ -13,18 +18,16 @@ class PhaseIndentificator:
             res = molar_vol / sum_b
             Sv = self.flash_object.phase_stability_object.S_v
             Sl = self.flash_object.phase_stability_object.S_l
-            print(f'Sl: {self.flash_object.phase_stability_object.S_l, self.flash_object.phase_stability_object.S_l_rounded}')
-            print(f'Sv: {self.flash_object.phase_stability_object.S_v, self.flash_object.phase_stability_object.S_v_rounded}')
-            print(f'Sv > Sl : {self.flash_object.phase_stability_object.S_v > self.flash_object.phase_stability_object.S_l}')
-            print(f'Sv > Sl rounded: {self.flash_object.phase_stability_object.S_v_rounded > self.flash_object.phase_stability_object.S_l_rounded}')
+            logger.debug('Sl: %s', (self.flash_object.phase_stability_object.S_l, self.flash_object.phase_stability_object.S_l_rounded))
+            logger.debug('Sv: %s', (self.flash_object.phase_stability_object.S_v, self.flash_object.phase_stability_object.S_v_rounded))
+            logger.debug('Sv > Sl : %s', self.flash_object.phase_stability_object.S_v > self.flash_object.phase_stability_object.S_l)
+            logger.debug('Sv > Sl rounded: %s', self.flash_object.phase_stability_object.S_v_rounded > self.flash_object.phase_stability_object.S_l_rounded)
 
             if Sv < Sl:
-                print(f'Sv < Sl -> vapour')
+                logger.debug('Sv < Sl -> vapour')
             else:
-                print(f'Sv > Sl -> liquid')
+                logger.debug('Sv > Sl -> liquid')
             if res > self.Constant * 10:
-                print(res)
-                print('vapour')
+                logger.debug('%s vapour', res)
             else:
-                print(res)
-                print('liquid')
+                logger.debug('%s liquid', res)

@@ -9,29 +9,16 @@ from _src.PhaseDiagram.DewPressure import DewPointCalculator
 logger = logging.getLogger(__name__)
 
 
-def setup_logger(level: int = logging.INFO):
-    """Настраивает логгер для вывода в консоль."""
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setLevel(level)
-        formatter = logging.Formatter(
-            '%(asctime)s | %(name)s | %(levelname)s | %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        logger.setLevel(level)
-
-
 class CriticalPointCalculator:
     """
     Расчет критической точки через минимизацию зазора между bubble и dew кривыми.
     """
-    
+
     def __init__(self, composition: Composition, verbose: bool = True):
-        if verbose:
-            setup_logger(logging.INFO)
-        
+        # Настройка вывода логов (уровень/handler) — забота вызывающего кода,
+        # см. _src/Utils/Logging.py::configure_logging(). verbose оставлен
+        # только для обратной совместимости сигнатуры, сам по себе больше
+        # ничего не настраивает.
         self.composition = composition
         self.verbose = verbose
         self.T_crit = None

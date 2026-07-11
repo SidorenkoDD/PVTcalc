@@ -1,3 +1,5 @@
+import logging
+
 from _src.Composition.Composition import Composition
 from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from _src.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
@@ -7,6 +9,8 @@ from _src.VLE.FlashResult import FlashResult, PhaseState
 from dataclasses import dataclass
 from typing import Dict, Any
 
+logger = logging.getLogger(__name__)
+
 class Flash:
     def __init__(self, composition_object: Composition, conditions_object: Conditions):
         self.composition = composition_object
@@ -14,10 +18,13 @@ class Flash:
         self.composition.T = conditions_object.t
 
     def calculate(self) -> FlashResult: # <-- Указываем тип возврата
+        logger.debug("Flash.calculate(): P=%s бар, T=%s K", self.conditions.p, self.conditions.t)
+
         self.phase_stability_object = TwoPhaseStabilityTest(self.composition, self.conditions.p, self.conditions.t)
         self.phase_stability_object.calculate_phase_stability()
 
         if self.phase_stability_object.stable == False:
+            logger.debug("P=%s, T=%s: система нестабильна, двухфазный расчёт", self.conditions.p, self.conditions.t)
             # === ДВУХФАЗНАЯ СИСТЕМА ===
             phase_equil_object = PhaseEquilibriumNewton(
                 self.composition,
@@ -30,6 +37,7 @@ class Flash:
             # ВАЖНО: Замените 'V' на реальный ключ мольной доли пара из вашего phase_equil_result
             vapor_frac = self.phase_equil_result['Fv']
             liquid_frac = 1.0 - vapor_frac
+            logger.debug("Flash: сошлось, Fv=%.6f", vapor_frac)
 
             liquid_phase_props_object = FluidPropertiesCalculator(
                 self.phase_equil_result['xi_l'], self.composition.composition_data,
@@ -50,6 +58,10 @@ class Flash:
             )
 
         else:
+            logger.debug(
+                "P=%s, T=%s: система стабильна, весь состав отнесён к жидкости (\"ТРЮК\")",
+                self.conditions.p, self.conditions.t,
+            )
             # === ОДНОФАЗНАЯ СИСТЕМА (Термодинамический трюк) ===
             self.one_phase_stability_props_object = FluidPropertiesCalculator(
                 self.composition.composition, self.composition.composition_data,

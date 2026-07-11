@@ -4,7 +4,6 @@ from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from _src.Composition.Composition import Composition
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
 
 class DewPointCalculator:
     """

@@ -6,7 +6,6 @@ from _src.Composition.Composition import Composition
 from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')
 
 class SaturationPressure:
     def __init__(self, composition: Composition, t_K: float, p_max_bar: float = 1000, p_min_bar: float = 0.01,

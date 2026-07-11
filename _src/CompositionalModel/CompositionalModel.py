@@ -1,7 +1,11 @@
+import logging
+
 from _src.Composition.Composition import Composition
 from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from _src.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 from _src.Utils.Results import ResultStore
+
+logger = logging.getLogger(__name__)
 
 
 class CompositionalModel:
@@ -11,8 +15,9 @@ class CompositionalModel:
         self.result_store_object = ResultStore()
 
     def flash(self, P, T):
+        logger.debug("CompositionalModel.flash: P=%s, T=%s", P, T)
         phase_stability_obj = TwoPhaseStabilityTest(composition = self.composition,
-                                                    p = P, 
+                                                    p = P,
                                                     t = T)
         phase_stability_obj.calculate_phase_stability()
         phase_equil_obj = PhaseEquilibriumNewton(composition=self.composition,

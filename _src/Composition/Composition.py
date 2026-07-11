@@ -7,7 +7,7 @@ from _src.Utils.Errors import NoComponentError, InvalidMolarFractionError
 from _src.EOS.BaseEOS import EOSType
 import json
 import logging
-logger = logging.getLogger('MBALPVT.PVTDataModel.PVTCore.Composition')
+logger = logging.getLogger(__name__)
 db = JsonDBReader().load_database('DB.json')
 
 

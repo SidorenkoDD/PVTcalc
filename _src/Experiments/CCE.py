@@ -1,3 +1,5 @@
+import logging
+
 from _src.Composition.Composition import Composition
 from _src.Utils.Conditions import Conditions
 from _src.VLE.Flash import Flash
@@ -12,6 +14,7 @@ from _src.VLE.Flash import FlashResult
 from joblib import Parallel, delayed
 from scipy.interpolate import UnivariateSpline
 
+logger = logging.getLogger(__name__)
 
 
 class CCE:
@@ -35,7 +38,9 @@ class CCE:
 
 
     def calculate(self):
+        logger.info("CCE: старт, %d ступеней, T=%s°C", len(self.pressure_arr), self.reservoir_temperature)
         self._calc_saturation_pressure()
+        logger.info("CCE: P_sat=%.4f бар", self.saturation_pressure)
         result = []
 
 
@@ -47,7 +52,8 @@ class CCE:
         # saturation_flash_result = saturation_flash_object.calculate()
         # result.append(saturation_flash_result)
 
-        for stage_pressure in self.pressure_arr:
+        for stage_num, stage_pressure in enumerate(self.pressure_arr, start=1):
+            logger.debug("CCE: ступень %d/%d, P=%s бар", stage_num, len(self.pressure_arr), stage_pressure)
             stage_conditions = Conditions(stage_pressure, self.reservoir_temperature)
             stage_pressure_flash_object = Flash(self.composition, stage_conditions)
             result.append(stage_pressure_flash_object.calculate())
@@ -56,6 +62,7 @@ class CCE:
         self._calculate_v_d_vpres(df_res)
         self._calculate_v_d_vsat(df_res)
         self._calculate_compressibility(df_res)
+        logger.info("CCE: завершено, %d точек в результате", len(result))
         return df_res
     
 

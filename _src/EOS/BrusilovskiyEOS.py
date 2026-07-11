@@ -1,3 +1,4 @@
+import logging
 import math
 import numpy as np
 
@@ -5,6 +6,8 @@ from _src.Composition.Composition import Composition
 from _src.EOS.BaseEOS import EOS
 from _src.Utils.Constants import CONSTANT_R
 from _src.Utils.Cardano import cubic_roots_cardano
+
+logger = logging.getLogger(__name__)
 
 
 class BrusilovskiyEOS(EOS):
@@ -550,6 +553,12 @@ class BrusilovskiyEOS(EOS):
         self.choosen_eos_root, self._chosen_root_index = self._choose_eos_root_by_gibbs_energy()
         self.choosen_fugacities = self.fugacity_by_roots[self._chosen_root_index].copy()
         self.shift_parametr = self._calc_shift_parametr()
+
+        if len(self.real_roots_eos) > 1:
+            logger.debug(
+                "calc_eos: %d действительных корня %s, выбран Z=%.6f по мин. энергии Гиббса",
+                len(self.real_roots_eos), list(self.real_roots_eos), self.choosen_eos_root,
+            )
 
         self._z_factor = self.choosen_eos_root
         self._fugacities = self.choosen_fugacities

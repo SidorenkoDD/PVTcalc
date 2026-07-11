@@ -4,7 +4,7 @@ import numpy as np
 from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from _src.Composition.Composition import Composition
 
-log = logging.getLogger('MBALPVT.PVTDataModel.CritProps')
+log = logging.getLogger(__name__)
 
 
 def _clip_mole_numbers(Y: np.ndarray, clip_min: float = 1e-30) -> np.ndarray:
