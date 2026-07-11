@@ -21,9 +21,18 @@ notebook = [
     "jupyterlab",
 ]
 
-# Пакет пока не собирается (нет [build-system]) — _src ещё не переименован
-# в нормальное имя пакета, это отдельный шаг перед .whl. До тех пор эта секция
-# только фиксирует версии зависимостей как единый источник истины.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# Тестовая сборка: пакуем _src как есть (без переименования в pvtcalc —
+# это отдельное решение, см. обсуждение с автором). Импортируемое имя
+# после `pip install` остаётся _src.*, распространяемое имя — pvtcalc.
+[tool.setuptools.packages.find]
+include = ["_src*"]
+
+[tool.setuptools.package-data]
+"_src.Utils" = ["DB.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

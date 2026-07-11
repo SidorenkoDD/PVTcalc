@@ -13,14 +13,10 @@
 ## Environment & Running
 
 - Python **3.11+** обязателен (используется `enum.StrEnum` в `_src/EOS/BaseEOS.py`). Фактически код гонялся под 3.12 и 3.13 (видно по `__pycache__/*.cpython-312.pyc` и `*.cpython-313.pyc`).
-- **Формального манифеста зависимостей в репозитории нет** (ни `requirements.txt`, ни `pyproject.toml`, ни `environment.yml`). Фактически используемые сторонние пакеты (по импортам в коде):
-  - `numpy`, `pandas`, `scipy` (`scipy.optimize`, `scipy.interpolate.UnivariateSpline`)
-  - `matplotlib` (построение фазовых диаграмм)
-  - `joblib` (`Parallel`/`delayed` — параллельный перебор в критической точке, фазовой огибающей, CCE)
-  - `openpyxl` (чтение состава из Excel через `pandas.read_excel`)
-  - Jupyter-стек для `test_notebook.ipynb` (`ipykernel`, `jupyterlab`/`notebook`)
-- **Пакет не устанавливается** (`pip install -e .` невозможен — нет `setup.py`/`pyproject.toml`). Все внутренние импорты — абсолютные вида `from _src.VLE.Flash import Flash`, поэтому **рабочая директория/интерпретатор должны видеть корень репозитория** (`PVTcalc/`) в `sys.path`. На практике это обеспечивается тем, что `test_notebook.ipynb` лежит в корне репозитория.
-- Корневой `__init__.py` и `_src/**/__init__.py` — пустые (или почти пустые, см. `_src/PlusComponents/__init__.py`, где по ошибке лежит код верхнего уровня, а не re-export). Пакетная структура — только формальная, никакого `__all__`/переэкспорта нет: всё импортируется напрямую из конкретных модулей.
+- **Зависимости и сборка — `pyproject.toml`** (с 2026-07-11): `[project.dependencies]` — рантайм (`numpy`, `pandas`, `scipy`, `matplotlib`, `joblib`, `openpyxl`), `[project.optional-dependencies]` — `dev` (pytest) и `notebook` (`ipykernel`, `jupyterlab`) отдельно. `[build-system]` (setuptools) настроен и рабочий — `pip install -e ".[dev]"` устанавливает пакет в editable-режиме: правки файлов в `_src/` подхватываются сразу, без переустановки.
+  - **Важно**: distribution-имя пакета — `pvtcalc`, но импортируемое имя внутри Python по-прежнему `_src` (`from _src.VLE.Flash import Flash`) — переименование `_src` в нормальное имя пакета сознательно отложено (отдельное решение автора), сборка сделана "как есть". Проверено тестовым `.whl`-билдом в изолированном venv: работает без каких-либо repo-relative путей.
+  - До этой правки пакета не существовало вообще (`pip install -e .` было невозможно, все внутренние импорты держались на том, что `test_notebook.ipynb` физически лежит в корне репозитория и Jupyter добавляет cwd в `sys.path`). После `pip install -e ".[dev]"` эта случайность больше не нужна — импорты `_src.*` резолвятся из любой рабочей директории.
+- Все подпакеты `_src/**` теперь имеют `__init__.py` (раньше 6 из 9 были неявными namespace-пакетами без него — работало благодаря PEP 420, но мешало однозначному discovery для сборки). Файлы пустые, кроме `_src/PlusComponents/__init__.py`, где по ошибке лежит код верхнего уровня, а не re-export. Никакого `__all__`/переэкспорта нет — всё импортируется напрямую из конкретных модулей.
 
 ## Directory Structure
 
