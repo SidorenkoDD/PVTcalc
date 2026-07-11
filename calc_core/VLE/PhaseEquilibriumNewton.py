@@ -1,3 +1,14 @@
+"""
+Решатель двухфазного равновесия: Rachford-Rice + Ньютон по фугитивностям.
+
+Принимает состав, условия и начальное приближение K-значений (обычно из
+`TwoPhaseStabilityTest.k_values_for_flash`), решает уравнение Рэчфорда-Райза
+для мольной доли пара Fv (метод Ньютона с бисекцией как запасным вариантом),
+затем итеративно уточняет K-значения методом Ньютона по логарифмам
+фугитивностей (аналитический якобиан через `BrusilovskiyEOS._calc_dlogphi_dx_matrix`).
+Используется из `VLE.Flash` (двухфазная ветка) и `CompositionalModel`.
+"""
+
 import logging
 
 import numpy as np
@@ -14,11 +25,33 @@ logger = logging.getLogger(__name__)
 
 
 class PhaseEquilibriumNewton:
+    """
+    Один расчёт двухфазного равновесия (Rachford-Rice + Ньютон по фугитивностям).
+
+    Экземпляр — одноразовый, под конкретную комбинацию (состав, P, T,
+    начальные K). После `find_solve_loop()` держит промежуточные `eos_vapour`/
+    `eos_liquid` (объекты `BrusilovskiyEOS` для текущих фазовых составов) как
+    атрибуты.
+    """
+
     _RR_EPS = 1e-12
     _RR_NEWTON_TOL = 1e-10
     _RR_MAX_ITER = 1000
 
     def __init__(self, composition: Composition, p: float, t: float, k_values):
+        """
+        Parameters
+        ----------
+        composition : Composition
+            Исходный (фидовый) состав.
+        p : float
+            Давление, бар.
+        t : float
+            Температура, K.
+        k_values : dict
+            Начальное приближение констант равновесия `{компонент: K_i}`,
+            обычно из `TwoPhaseStabilityTest.k_values_for_flash`.
+        """
         self._composition = composition
         self._p = float(p)
         self._t = float(t)
@@ -66,9 +99,11 @@ class PhaseEquilibriumNewton:
     # =====================================================================================
 
     def _array_to_dict(self, arr: np.ndarray):
+        """Конвертирует numpy-массив (по индексам `self._components`) в `{компонент: значение}`."""
         return {comp: float(arr[i]) for i, comp in enumerate(self._components)}
 
     def _sync_k_array_from_dict(self):
+        """Пересобирает `self._k`/`self._log_k` (numpy) из `self.k_values` (dict) — на случай ручного редактирования dict-версии."""
         self._k = np.fromiter(
             (self.k_values[c] for c in self._components),
             dtype=np.float64,
@@ -77,10 +112,26 @@ class PhaseEquilibriumNewton:
         self._log_k = np.log(self._k)
 
     def _sync_k_dict_from_array(self):
+        """Пересобирает `self.k_values` (dict) из `self._k` (numpy) — вызывается после каждого шага Ньютона."""
         self.k_values = {comp: float(self._k[i]) for i, comp in enumerate(self._components)}
 
     @staticmethod
     def _safe_denominator(arr: np.ndarray, eps: float):
+        """
+        Защита от деления на (около-)ноль: заменяет элементы `arr`, чьи
+        модули меньше `eps`, на `±eps` (знак сохраняется).
+
+        Parameters
+        ----------
+        arr : np.ndarray
+        eps : float
+            Порог; значения с `abs(x) < eps` заменяются.
+
+        Returns
+        -------
+        np.ndarray
+            Копия `arr` (исходный массив не модифицируется).
+        """
         out = arr.copy()
         mask = np.abs(out) < eps
         if np.any(mask):
@@ -92,6 +143,21 @@ class PhaseEquilibriumNewton:
     # =====================================================================================
 
     def _rr_bounds(self):
+        """
+        Границы допустимых значений Fv для уравнения Рэчфорда-Райза, исходя
+        из min/max текущих K-значений: `[1/(1-K_max), 1/(1-K_min)]`.
+
+        Returns
+        -------
+        tuple[float, float]
+            `(fv_min, fv_max)`.
+
+        Raises
+        ------
+        ValueError
+            Если K-значения не удовлетворяют требованию `K_min < 1 < K_max`
+            (необходимое условие существования двухфазного решения).
+        """
         k_min = float(np.min(self._k))
         k_max = float(np.max(self._k))
 
@@ -105,12 +171,37 @@ class PhaseEquilibriumNewton:
         return fv_min, fv_max
 
     def _rr_sum(self, fv: float):
+        """
+        Значение функции Рэчфорда-Райза `sum(z_i (K_i-1) / (1 + Fv(K_i-1)))`
+        в точке `fv`. Корень этой функции по Fv — искомое решение.
+
+        Parameters
+        ----------
+        fv : float
+
+        Returns
+        -------
+        float
+        """
         km1 = self._k - 1.0
         denom = 1.0 + fv * km1
         denom = self._safe_denominator(denom, self._RR_EPS)
         return float(np.sum(self._z_feed * km1 / denom))
 
     def _rr_sum_and_derivative(self, fv: float):
+        """
+        Значение функции Рэчфорда-Райза и её производной по Fv в точке `fv`
+        (для шага Ньютона в `find_solve_newton`).
+
+        Parameters
+        ----------
+        fv : float
+
+        Returns
+        -------
+        tuple[float, float]
+            `(значение, производная)`.
+        """
         km1 = self._k - 1.0
         denom = 1.0 + fv * km1
         denom = self._safe_denominator(denom, self._RR_EPS)
@@ -120,6 +211,20 @@ class PhaseEquilibriumNewton:
         return float(rr_sum), float(rr_der)
 
     def find_solve_newton(self):
+        """
+        Решает уравнение Рэчфорда-Райза методом Ньютона с бисекцией как
+        запасным шагом: если шаг Ньютона выходит за текущие границы
+        `[fv_left, fv_right]` (или производная слишком мала), делается шаг
+        бисекции вместо него. Границы сужаются на каждой итерации по знаку
+        `_rr_sum`. Стартовая точка — `self.fv` (по умолчанию 0.5), обрезанная
+        в исходные границы `_rr_bounds()`.
+
+        Returns
+        -------
+        float
+            Найденная мольная доля паровой фазы Fv (или последнее
+            приближение, если `_RR_MAX_ITER` исчерпан без сходимости).
+        """
         fv_left, fv_right = self._rr_bounds()
         fv = float(np.clip(self.fv, fv_left, fv_right))
 
@@ -150,6 +255,23 @@ class PhaseEquilibriumNewton:
         return fv
 
     def find_solve_bisection_v4(self, tol=TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE):
+        """
+        Альтернативное (чисто бисекционное, без Ньютона) решение уравнения
+        Рэчфорда-Райза. В основном цикле (`find_solve_loop`) не используется —
+        там применяется `find_solve_newton`; оставлена как самостоятельный
+        запасной метод.
+
+        Parameters
+        ----------
+        tol : float, optional
+            Порог сходимости и по значению функции, и по ширине интервала.
+            По умолчанию `Constants.TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE`.
+
+        Returns
+        -------
+        float
+            Найденная мольная доля паровой фазы Fv.
+        """
         fv_left, fv_right = self._rr_bounds()
         f_left = self._rr_sum(fv_left)
 
@@ -175,6 +297,16 @@ class PhaseEquilibriumNewton:
     # =====================================================================================
 
     def define_xi_l_yi_v(self):
+        """
+        По текущим `self.fv`/`self.L` (доля пара/жидкости) и K-значениям
+        вычисляет составы фаз: `x_i = z_i / (L + (1-L) K_i)`, `y_i = K_i x_i`.
+        Обновляет `self.xi_l`/`self.yi_v` (dict) и их numpy-версии.
+
+        Returns
+        -------
+        tuple[dict, dict]
+            `(xi_l, yi_v)` — составы жидкой и паровой фазы.
+        """
         denom = self.L + (1.0 - self.L) * self._k
         denom = self._safe_denominator(denom, self._RR_EPS)
 
@@ -192,6 +324,9 @@ class PhaseEquilibriumNewton:
 
     def fill_jacobian_fug_only(self):
         """
+        Аналитический якобиан системы уравнений равновесия фугитивностей
+        по ln(K) — правая часть шага Ньютона в `newton_algorithm_fug_only`.
+
         J_ik = d ln(phi_i^L)/d ln(K_k) - d ln(phi_i^V)/d ln(K_k) - delta_ik
 
         d ln(phi_i)/d ln(K_k) = sum_j d ln(phi_i)/d x_j * d x_j/d ln(K_k)
@@ -202,6 +337,15 @@ class PhaseEquilibriumNewton:
             dlogphi_dx_v = d ln(phi_i^V) / d y_j^V
         берутся напрямую из:
             BrusilovskiyEOS._calc_dlogphi_dx_matrix()
+
+        Requires
+        --------
+        `self.eos_liquid`/`self.eos_vapour` уже посчитаны (`calc_eos()` вызван)
+        для текущих фазовых составов — заполняются в `find_solve_loop`.
+
+        Returns
+        -------
+        np.ndarray, shape (nc, nc)
         """
         # Матрицы производных ln(phi_i) по составам фаз
         dlogphi_dx_l = self.eos_liquid._calc_dlogphi_dx_matrix()   # shape (nc, nc)
@@ -224,6 +368,15 @@ class PhaseEquilibriumNewton:
         return J
 
     def fill_column_vector_fug_only(self):
+        """
+        Вектор невязки `b = ln(phi_i^L) - ln(phi_i^V) - ln(K_i)` — правая
+        часть линейной системы `J·delta = -b` шага Ньютона. При сходимости
+        (K соответствует равным фугитивностям фаз) стремится к нулю.
+
+        Returns
+        -------
+        np.ndarray, shape (nc, 1)
+        """
         ln_phi_l = self.eos_liquid.get_fugacity_coef_vector_by_root(self.eos_liquid.z)
         ln_phi_v = self.eos_vapour.get_fugacity_coef_vector_by_root(self.eos_vapour.z)
 
@@ -231,6 +384,11 @@ class PhaseEquilibriumNewton:
         return b.reshape(-1, 1)
 
     def newton_algorithm_fug_only(self):
+        """
+        Один шаг Ньютона по ln(K): решает `J·delta = -b` (см.
+        `fill_jacobian_fug_only`/`fill_column_vector_fug_only`) и обновляет
+        `self._log_k`/`self._k`/`self.k_values`.
+        """
         J = self.fill_jacobian_fug_only()
         b = self.fill_column_vector_fug_only()
 
@@ -245,6 +403,22 @@ class PhaseEquilibriumNewton:
     # =====================================================================================
 
     def calc_Ri(self, eos_vapour, eos_liquid):
+        """
+        Отношение фугитивностей `r_i = f_i^L / f_i^V = exp(ln f_i^L - ln f_i^V)`
+        по компонентам — мера "насколько далеко" текущее K от истинного
+        равновесия (в равновесии `r_i = 1` для всех i).
+
+        Parameters
+        ----------
+        eos_vapour, eos_liquid : BrusilovskiyEOS
+            Уже посчитанные (`calc_eos()` вызван) объекты EOS для текущих
+            составов фаз.
+
+        Returns
+        -------
+        dict
+            `{компонент: r_i}`.
+        """
         ln_f_l = eos_liquid.fugacities   # shape (nc,)
         ln_f_v = eos_vapour.fugacities   # shape (nc,)
 
@@ -253,6 +427,19 @@ class PhaseEquilibriumNewton:
         return self.ri
 
     def check_convergence_ri(self, e=TOL_TWO_PHASE_FLASH_CONVERGENCE):
+        """
+        Критерий сходимости по фугитивностям: `sum((r_i - 1)^2) < e`.
+        Обновляет и возвращает `self.convergence`.
+
+        Parameters
+        ----------
+        e : float, optional
+            Порог. По умолчанию `Constants.TOL_TWO_PHASE_FLASH_CONVERGENCE`.
+
+        Returns
+        -------
+        bool
+        """
         sum_ri = float(np.sum((self._ri_arr - 1.0) ** 2))
 
         if sum_ri < e:
@@ -263,6 +450,15 @@ class PhaseEquilibriumNewton:
         return False
 
     def check_trivial_solution(self):
+        """
+        Критерий "тривиального решения": `sum(ln(K_i)^2) < tol`, т.е. все
+        K_i -> 1 (обе фазы сходятся к одному и тому же составу — на самом
+        деле однофазная система). Обновляет и возвращает `self.trivial_solution`.
+
+        Returns
+        -------
+        bool
+        """
         trivial_metric = float(np.sum(self._log_k ** 2))
 
         if trivial_metric < TOL_TWO_PHASE_FLASH_TRIVIAL_SOLUTION:
@@ -277,6 +473,26 @@ class PhaseEquilibriumNewton:
     # =====================================================================================
 
     def find_solve_loop(self):
+        """
+        Главная точка входа: полный цикл решения двухфазного равновесия.
+
+        На каждой итерации: решает Rachford-Rice (`find_solve_newton`) →
+        строит составы фаз (`define_xi_l_yi_v`) → считает `BrusilovskiyEOS`
+        отдельно для паровой и жидкой фазы → проверяет сходимость по
+        фугитивностям (`check_convergence_ri`); если не сошлось — делает шаг
+        Ньютона по ln(K) (`newton_algorithm_fug_only`) и проверяет
+        тривиальное решение (`check_trivial_solution`). Останов — по любому
+        из трёх условий (сходимость / тривиальное решение / лимит 1000
+        итераций).
+
+        Returns
+        -------
+        dict
+            `{"yi_v", "xi_l", "Ki", "Fv", "Fl", "Z_v", "Z_l"}` — итоговые
+            составы фаз, K-значения, мольные доли пара/жидкости и их
+            Z-факторы. Используется напрямую как `phase_equil_result`
+            в `VLE.Flash.calculate()`.
+        """
         i = 0
 
         while True:

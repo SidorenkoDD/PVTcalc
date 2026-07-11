@@ -1,3 +1,5 @@
+"""Корреляции volume-shift параметра C7+ (3 реализованных метода + пустая корреляция `''` + 1 заготовка) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
+
 import math
 from typing import Dict, Callable
 from calc_core.Utils.Constants import CONSTANT_R
@@ -100,5 +102,6 @@ class ShiftParameterCorrelation:
 
     @staticmethod
     def _brs():
+        """Не реализовано (TODO) — shift-параметр специально для EOS Брусиловского (сейчас его роль играет `''` -> 0.0). Не зарегистрирован в `get_correlation` — недостижим через публичный API."""
         # TODO
         ...

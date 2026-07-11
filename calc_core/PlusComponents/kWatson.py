@@ -1,3 +1,5 @@
+"""Корреляции характеристического фактора Ватсона (Kw) для C7+ (2 метода) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
+
 import math
 from typing import Dict, Callable
 from calc_core.Utils.Constants import CONSTANT_R

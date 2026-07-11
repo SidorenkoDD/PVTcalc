@@ -1,3 +1,13 @@
+"""
+Персистентный слой: сохранение/загрузка "снэпшотов" моделей флюидов.
+
+Пишет в JSON-файл (обычно `models.json` в корне репозитория) — состав,
+`composition_data`, тип EOS и историю результатов расчётов для именованных
+моделей. Читается обратно через `Composition.from_db(path)`. **Важно**: это
+не независимый эталонный датасет (например, PVTSim) — сюда пишутся
+результаты расчётов самого движка, см. CLAUDE.md.
+"""
+
 import json
 import logging
 from pathlib import Path
@@ -10,7 +20,17 @@ logger = logging.getLogger(__name__)
 
 
 class ModelJSONDB:
+    """Простая JSON-"база" в памяти (`self._db`), синхронизируемая с файлом на диске через `load()`/`save()`."""
+
     def __init__(self, filepath: str = "models.json"):
+        """
+        Parameters
+        ----------
+        filepath : str, optional
+            Путь к JSON-файлу. По умолчанию `"models.json"`. Существующий
+            файл сразу загружается в `self._db` (см. `load()`), чтобы
+            `export()` добавлял модели к уже сохранённым, а не затирал их.
+        """
         self.filepath = Path(filepath)
         self._db: Dict[str, Dict[str, Any]] = {}
         

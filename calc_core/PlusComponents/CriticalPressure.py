@@ -1,3 +1,5 @@
+"""Корреляции критического давления C7+ (7 реализованных методов + 3 заготовки) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
+
 import math
 from typing import Dict, Callable
 from calc_core.Utils.Constants import CONSTANT_R
@@ -119,16 +121,19 @@ class CriticalPressureCorrelation:
 
     @staticmethod
     def _twu(gamma: float, Tb_K: float):
+        """Не реализовано (TODO). Не зарегистрирован в `get_correlation`/`get_required_params` — недостижим через публичный API."""
         # TODO
         ...
 
     @staticmethod
     def _watansiri_owens_starling(gamma: float, Tb_K: float, M: float) -> float:
+        """Не реализовано (TODO). Не зарегистрирован в `get_correlation`/`get_required_params` — недостижим через публичный API."""
         # TODO
         ...
 
     @staticmethod
     def _pc_from_eos(gamma, M, Tc):
+        """Не реализовано (TODO). Не зарегистрирован в `get_correlation`/`get_required_params` — недостижим через публичный API."""
         # TODO
         ...
 

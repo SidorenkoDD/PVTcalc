@@ -1,3 +1,16 @@
+"""
+Корреляции параметров EOS Брусиловского (по компонентам и по парам компонент).
+
+Используется из `Composition.py` при `evaluate_composition_data(...)` —
+считает per-компонентные `sigma_c`/`Z_c`/`psi` (`evaluate_BRS_EOS_component_params`)
+→ `alpha`/`beta`/`sigma`/`delta` (`calc_alpha_beta_gamma_delta`) → сами
+параметры EOS `a`/`b`/`c`/`d` (`calc_a_b_c_d`), а также матрицу коэффициентов
+парного взаимодействия (BIP) для компонент C5+ и легче
+(`evaluate_BRS_EOS_bip_for_c5_plus`/`evaluate_BRS_EOS_bip_below_c5_plus`).
+Табличные значения — из справочных таблиц Брусиловского А.И. (см.
+комментарии по тексту о недостающих парах, восполненных ближайшим аналогом).
+"""
+
 import math
 from calc_core.Utils.Constants import CONSTANT_R
 
@@ -18,6 +31,7 @@ COMPONENT_PARAMS_FOR_BRS_EOS = {
 
 
 def _evaluate_params_for_SRK(omega: float):
+    """[sigma_c, Z_c, psi] для сведения EOS Брусиловского к Соаве-Редлиху-Квонгу (фиксированные sigma_c/Z_c, psi — корреляция по ω)."""
     sigma_c = 0.753307
     Z_c = 1.0 / 3.0
     psi = 0.48 + 1.57 * omega - 0.176 * math.pow(omega, 2)
@@ -25,6 +39,7 @@ def _evaluate_params_for_SRK(omega: float):
 
 
 def _evaluate_params_for_PR(omega: float):
+    """[sigma_c, Z_c, psi] для сведения EOS Брусиловского к Пенгу-Робинсону (фиксированные sigma_c/Z_c, psi — кусочная корреляция по ω с изломом на 0.49)."""
     sigma_c = 0.7703944
     Z_c = 0.3074
     if omega <= 0.49:
@@ -35,6 +50,7 @@ def _evaluate_params_for_PR(omega: float):
 
 
 def _evaluate_params_for_BRS_C5plus(omega: float):
+    """[sigma_c, Z_c, psi] для компонент фракции C5+ по "родной" корреляции Брусиловского (Z_c и psi зависят от ω, с изломом psi на ω=0.4489)."""
     sigma_c = 0.75001
     Z_c = 0.3357 - 0.0294 * omega
 
@@ -78,6 +94,21 @@ def evaluate_BRS_EOS_component_params(component: str, omega: float, eos_name: st
 
 
 def calc_alpha_beta_gamma_delta(OmegaC: float, Zc: float):
+    """
+    Промежуточные безразмерные коэффициенты EOS (alpha/beta/sigma/delta) из
+    OmegaC/Zc компонента (результат `evaluate_BRS_EOS_component_params`).
+    Следующий шаг — `calc_a_b_c_d`.
+
+    Parameters
+    ----------
+    OmegaC : float
+    Zc : float
+
+    Returns
+    -------
+    list[float]
+        `[alpha, beta, sigma, delta]`.
+    """
 
     alpha = math.pow(OmegaC, 3)
     beta = Zc + OmegaC - 1
@@ -88,6 +119,28 @@ def calc_alpha_beta_gamma_delta(OmegaC: float, Zc: float):
 
 
 def calc_a_b_c_d(T: float, Pc: float, Tc: float, alpha: float, beta: float, sigma: float, delta: float, psi: float):
+    """
+    Итоговые параметры компонента для EOS Брусиловского — `a` (температурно-
+    зависимый, через `phi`), `b`, `c`, `d` (температурно-независимые).
+    Это то, что попадает в `Composition.composition_data['a'|'b'|'c'|'d']`
+    и напрямую используется в `EOS.BrusilovskiyEOS`.
+
+    Parameters
+    ----------
+    T : float
+        Температура, K.
+    Pc, Tc : float
+        Критические давление/температура компонента.
+    alpha, beta, sigma, delta : float
+        Из `calc_alpha_beta_gamma_delta`.
+    psi : float
+        Из `evaluate_BRS_EOS_component_params`.
+
+    Returns
+    -------
+    list[float]
+        `[a, b, c, d]`.
+    """
 
     phi = math.pow(1 + psi * (1 - math.pow(T / Tc, 0.5)), 2)
     a_c = alpha * math.pow(CONSTANT_R * Tc, 2) / Pc

@@ -1,8 +1,31 @@
+"""
+Аналитический решатель кубического уравнения (метод Кардано).
+
+Используется в `EOS.BrusilovskiyEOS._calc_roots_eos` для нахождения корней
+Z-фактора. Здесь же — потенциальное место для отладки нестабильности около
+критической точки: именно там кубическое уравнение чаще всего даёт несколько
+близких/совпадающих действительных корней (см. `calc_core/EOS/BrusilovskiyEOS.py::calc_eos`,
+которая логирует такие случаи на уровне DEBUG).
+"""
+
 import cmath
 import math
 
 
 def cbrt(z: complex | float):
+    """
+    Все три комплексных кубических корня из `z` (не только главное значение).
+
+    Parameters
+    ----------
+    z : complex | float
+
+    Returns
+    -------
+    list[complex | float]
+        3 корня; каждый "нормализован" через `normalize` (мнимая часть
+        около нуля округляется до чистого float).
+    """
     r = abs(z)
     phi = cmath.phase(z)
     res = [math.cbrt(r) * complex(math.cos((phi + 2 * math.pi * k) / 3), math.sin((phi + 2 * math.pi * k) / 3)) for k in
@@ -11,6 +34,20 @@ def cbrt(z: complex | float):
 
 
 def normalize(z: complex, eps: float = 1e-10):
+    """
+    Приводит комплексное число к float, если его мнимая часть пренебрежимо
+    мала (`abs(z.imag) < eps`) — иначе возвращает как есть (complex).
+
+    Parameters
+    ----------
+    z : complex
+    eps : float, optional
+        Порог "пренебрежимо малой" мнимой части. По умолчанию 1e-10.
+
+    Returns
+    -------
+    float | complex
+    """
     if abs(z.imag) < eps:
         return float(z.real)
     return z
@@ -21,6 +58,31 @@ def cubic_roots_cardano(a: float, b: float, c: float, d: float, only_real_roots:
     Решает кубическое уравнение a*x^3 + b*x^2 + c*x + d = 0 по методу Кардано.
     Если значение only_real_roots = True - вернет только вещественные корни (если уравнение имеет три корня, первый
     из которых вещественный, а остальные мнимые, вернется три первых вещественных корня)
+
+    Parameters
+    ----------
+    a, b, c, d : float
+        Коэффициенты уравнения. `a` не может быть 0.
+    only_real_roots : bool, optional
+        Если True — вернуть только действительные корни; если их ровно один
+        (при двух комплексно-сопряжённых), он **утраивается** в возвращаемом
+        списке (`real_roots * 3`) — так `EOS.BrusilovskiyEOS._calc_roots_eos`
+        всегда получает непустой список одной длины независимо от режима.
+        По умолчанию False (возвращаются все три корня, возможно комплексные).
+
+    Returns
+    -------
+    list[float | complex]
+        3 корня (или меньше, если `only_real_roots=True` и действительных
+        корней не три).
+
+    Raises
+    ------
+    TypeError
+        Если `a == 0.0` (уравнение не кубическое).
+    ValueError
+        Если не удалось подобрать согласованную пару alpha/beta (численная
+        деградация метода).
     """
 
     if a == 0.0:

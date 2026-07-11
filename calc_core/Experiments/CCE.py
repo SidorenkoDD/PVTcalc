@@ -1,3 +1,12 @@
+"""
+Дифференциация состава при постоянном составе (Constant Composition Expansion).
+
+В отличие от `DLE` (где выделившийся газ удаляется), в CCE состав всей
+системы остаётся постоянным на всех ступенях — считается общий (не
+"остаточный жидкостный") объём. Используется для получения зависимости
+объёма (`v/v_res`, `v/v_sat`) и сжимаемости от давления.
+"""
+
 import logging
 
 from calc_core.Composition.Composition import Composition
@@ -18,26 +27,81 @@ logger = logging.getLogger(__name__)
 
 
 class CCE:
+    """Один прогон CCE для заданного состава и сетки давлений при постоянной температуре."""
 
     def __init__(self, composition: Composition, pressure_arr_bar : list, reservoir_temperature:float):
+        """
+        Parameters
+        ----------
+        composition : Composition
+            Состав (с уже посчитанными `composition_data`). Побочный эффект:
+            `composition.T` сразу выставляется в `reservoir_temperature`
+            (в K — параметр называется "температура", но подставляется как есть,
+            без конвертации из °C — вызывающий код должен сам передать K).
+        pressure_arr_bar : list
+            Ступени давления, бар. Мутируется в `_calc_saturation_pressure`
+            (в конец дописывается найденное P_sat).
+        reservoir_temperature : float
+            Температура эксперимента, K (см. caveat выше про `composition.T`).
+        """
         self.composition = composition
         self.pressure_arr = pressure_arr_bar
         self.reservoir_temperature = reservoir_temperature
         self.composition.T = self.reservoir_temperature
 
     def _calc_stage(self, stage_pressure:float):
+        """
+        Флэш на одной ступени давления, на **копии** исходного состава
+        (`deep_copy=True`) — в отличие от `calculate()`, здесь `self.composition`
+        не переиспользуется и не мутируется. Используется в `calculate_parallel`.
+
+        Parameters
+        ----------
+        stage_pressure : float
+            Давление ступени, бар.
+
+        Returns
+        -------
+        FlashResult
+        """
         comp = self.composition.new_composition(self.composition.composition, deep_copy=True)
         condition_object = Conditions(stage_pressure, self.reservoir_temperature)
         flash_object = Flash(comp, condition_object)
         return flash_object.calculate()
-    
+
     def _calc_saturation_pressure(self):
+        """
+        Находит давление насыщения (`PhaseDiagram.new_methodv2.SaturationPressure`)
+        для текущего состава при `reservoir_temperature + 273.15` — **обратите
+        внимание**: здесь добавляется +273.15 поверх `reservoir_temperature`,
+        то есть предполагается, что `reservoir_temperature` уже в Кельвинах
+        (иначе результат будет вдвойне сконвертирован). Результат сохраняется
+        в `self.saturation_pressure` и дописывается в `self.pressure_arr`.
+        """
         sat_pressure_obj = SaturationPressure(self.composition, self.reservoir_temperature + 273.15)
         self.saturation_pressure = sat_pressure_obj.sp_convergence_loop()
         self.pressure_arr.append(self.saturation_pressure)
 
 
     def calculate(self):
+        """
+        Главная точка входа: последовательный (не параллельный, см.
+        `calculate_parallel`) прогон CCE.
+
+        Порядок: находим P_sat (дописывается в `self.pressure_arr`) → флэш на
+        каждой ступени `self.pressure_arr` (на **одном и том же**
+        `self.composition`, без копирования — если это важно для вас, см.
+        `_calc_stage`, который копирует) → векторизация в DataFrame
+        (`_vectorize_dle_results`) → `v/v_res`, `v/v_sat`, `Compressibility`
+        как дополнительные колонки.
+
+        Returns
+        -------
+        pd.DataFrame
+            По одной строке на ступень давления (включая P_sat), отсортировано
+            по убыванию давления. Колонки — свойства фаз (см.
+            `_vectorize_dle_results`) + `v/v_res`, `v/v_sat`, `Compressibility`.
+        """
         logger.info("CCE: старт, %d ступеней, T=%s°C", len(self.pressure_arr), self.reservoir_temperature)
         self._calc_saturation_pressure()
         logger.info("CCE: P_sat=%.4f бар", self.saturation_pressure)
@@ -67,18 +131,55 @@ class CCE:
     
 
     def calculate_parallel(self):
+        """
+        То же, что `calculate()`, но ступени считаются параллельно через
+        `joblib.Parallel` (`_calc_stage`, на независимых копиях состава).
+        В отличие от `calculate()` — **не** делает векторизацию/постобработку
+        (`v/v_res` и т.п.), возвращает сырой список `FlashResult`. По заметке
+        в ноутбуке ("CCE в параллель — неэффективно") этот путь на практике
+        оказался медленнее последовательного (накладные расходы на
+        сериализацию `Composition` в отдельные процессы).
+
+        Returns
+        -------
+        list[FlashResult]
+        """
         self._calc_saturation_pressure()
         grid_res = Parallel(n_jobs=-1, backend="loky")(delayed(self._calc_stage)(P) for P in self.pressure_arr)
         return grid_res
 
 
     def _calculate_v_d_vpres(self, df):
+        """
+        Добавляет колонку `v/v_res` — отношение объёма к объёму на
+        максимальном давлении (пластовые условия).
+
+        **Известный баг**: условие `type(df['liquid_molar_volume']) != None`
+        сравнивает тип Series с `None` — всегда `True`, поэтому ветка `else`
+        (расчёт по `vapor_molar_volume`) фактически недостижима, даже если
+        `liquid_molar_volume` весь `NaN` (однофазный газовый случай).
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Модифицируется на месте.
+        """
         if type(df['liquid_molar_volume']) != None:
             df['v/v_res'] = df['liquid_molar_volume'] / df[df['pressure'] == max(self.pressure_arr)]['liquid_molar_volume'].iloc[0]
         else:
             df['v/v_res'] = df['vapor_molar_volume'] / df[df['pressure'] == max(self.pressure_arr)]['vapor_molar_volume'].iloc[0]
 
     def _calculate_v_d_vsat(self, df):
+        """
+        Добавляет колонку `v/v_sat` — отношение объёма к объёму на давлении
+        насыщения. Тот же баг с недостижимой веткой `else`, что и в
+        `_calculate_v_d_vpres`.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Модифицируется на месте.
+        """
         if type(df['liquid_molar_volume']) != None:
             df['v/v_sat'] = df['liquid_molar_volume'] / df[df['pressure'] == self.saturation_pressure]['liquid_molar_volume'].iloc[0]
         else:
@@ -87,6 +188,27 @@ class CCE:
 
 
     def _calculate_compressibility(self, df, use_poly=False):
+        """
+        Добавляет колонку `Compressibility` — коэффициент сжимаемости
+        `-(1/V)(dV/dP)`, посчитанный конечными разностями (`np.gradient` +
+        минимальный из соседних объёмов в знаменателе) либо аналитически
+        через полином 3-й степени, аппроксимирующий V(P) (`use_poly=True`).
+        Для этого же есть отдельный публичный метод `calculate_compressibility`
+        с другим API (принимает массивы напрямую, а не DataFrame состояния) —
+        не связаны друг с другом, дублирующая функциональность.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Должен содержать `liquid_molar_volume`/`pressure`. Модифицируется на месте.
+        use_poly : bool, optional
+            `False` (по умолчанию) — конечно-разностный метод; `True` — через полином.
+
+        Raises
+        ------
+        ValueError
+            Если в `df` меньше 2 строк.
+        """
         # 1. Извлекаем данные как NumPy массивы
         vol = df['liquid_molar_volume'].to_numpy(dtype=float)
         pres = df['pressure'].to_numpy(dtype=float)

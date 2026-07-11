@@ -1,20 +1,45 @@
-'''Module for viscosity calculations'''
+'''
+Module for viscosity calculations.
+
+Единственный реально реализованный метод — LBC (Lohrenz-Bray-Clark).
+`"PEDERSEN"` в `ViscosityFactory` мапится на тот же класс `LBC` — метод
+Педерсена как отдельный алгоритм не реализован, несмотря на отдельный ключ.
+'''
 
 from abc import ABC
 import math
 
 
 class Viscosity(ABC):
-    '''Abstract class to calculate viscosity'''
+    '''Abstract class to calculate viscosity — единственный конкретный наследник в проекте: `LBC`.'''
 
     def calculate(self):
+        """Не реализовано в базовом классе — переопределяется в наследниках (см. `LBC.calculate`)."""
         pass
 
 
 class ViscosityFactory:
+    """Фабрика: строковый ключ метода вязкости -> класс-калькулятор (см. `FluidPropertiesCalculator.viscosity`)."""
 
     @staticmethod
     def create_viscosity_object(viscosity_method):
+        """
+        Parameters
+        ----------
+        viscosity_method : str
+            `"LBC"` или `"PEDERSEN"` — оба возвращают класс `LBC`
+            (Педерсен как отдельный алгоритм не реализован).
+
+        Returns
+        -------
+        type[Viscosity]
+            Класс (не экземпляр) — вызывающий код сам создаёт объект с нужными аргументами.
+
+        Raises
+        ------
+        ValueError
+            Если `viscosity_method` не `"LBC"`/`"PEDERSEN"`.
+        """
         eos_mapping = {
             "LBC": LBC,
             "PEDERSEN": LBC,
@@ -25,6 +50,7 @@ class ViscosityFactory:
 
 
 class ViscosityFacade:
+    """Пустая заготовка — не реализовано, нигде не используется."""
     def __init__(self):
         pass
 

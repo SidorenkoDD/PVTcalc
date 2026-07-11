@@ -1,3 +1,14 @@
+"""
+Тест термодинамической стабильности Михельсена.
+
+Отвечает на вопрос "распадётся ли фид на две фазы при заданных P/T, или
+останется однофазным" — первый шаг любого флэша (см. `VLE.Flash`). Запускает
+две независимые пробные итерации (`_loop_vapour`/`_loop_liquid`, стартующие
+с K-значений Вильсона) и по их сходимости (`_interpetate_stability_analysis`)
+решает: `stable=True` (однофазная система) или `stable=False` +
+`k_values_for_flash` (стартовые K для `VLE.PhaseEquilibriumNewton`).
+"""
+
 import logging
 
 import numpy as np
@@ -14,8 +25,29 @@ logger = logging.getLogger(__name__)
 
 
 class TwoPhaseStabilityTest:
+    """
+    Один тест стабильности для заданного состава при заданных P/T.
+
+    После `calculate_phase_stability()`: `self.stable` (bool),
+    `self.S_v`/`self.S_l` (суммы пробных мольных чисел — диагностика,
+    используется в т.ч. `PhaseIdentificator`), `self.k_values_for_flash`
+    (стартовые K для двухфазного расчёта, `None` если стабильно).
+    """
+
     def __init__(self, composition: Composition, p: float, t: float):
-        
+        """
+        Parameters
+        ----------
+        composition : Composition
+            Состав фида (с уже посчитанными `composition_data` —
+            `acentric_factor`, `critical_pressure`, `critical_temperature`
+            как минимум).
+        p : float
+            Давление, бар.
+        t : float
+            Температура, K.
+        """
+
         self.p = float(p)
         self.t = float(t)
 
@@ -80,9 +112,11 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _array_to_dict(self, arr: np.ndarray):
+        """Конвертирует numpy-массив (по индексам `self._components`) в `{компонент: значение}`."""
         return {comp: float(arr[i]) for i, comp in enumerate(self._components)}
 
     def _dict_to_array(self, data: dict):
+        """Конвертирует `{компонент: значение}` в numpy-массив (порядок — `self._components`)."""
         return np.fromiter(
             (data[c] for c in self._components),
             dtype=np.float64,
@@ -91,6 +125,7 @@ class TwoPhaseStabilityTest:
 
     @staticmethod
     def _safe_log_metric(arr: np.ndarray):
+        """Метрика `sum(ln(arr)^2)` — вспомогательная (используется концептуально как `_check_trivial_solution`, но не вызывается напрямую в текущем коде)."""
         return float(np.sum(np.log(arr) ** 2))
 
     # =====================================================================================
@@ -98,6 +133,15 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _calc_k_values_wilson_array(self):
+        """
+        Начальное приближение констант равновесия по корреляции Вильсона:
+        `K_i = (Pc_i/P) * exp(5.37 (1+ω_i)(1 - Tc_i/T))`. Используется как
+        общий старт для обоих пробных циклов (`_loop_vapour`/`_loop_liquid`).
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+        """
         return np.exp(
             5.37 * (1.0 + self._acentric_factor) * (1.0 - (self._critical_temperature / self.t))
         ) / (self.p / self._critical_pressure)
@@ -107,17 +151,21 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _calc_Yi_v(self, k_values_vapour: np.ndarray):
+        """Ненормированные пробные мольные числа паровой фазы: `Y_i = z_i * K_i`."""
         return self._z_feed * k_values_vapour
 
     def _calc_Xi_l(self, k_values_liquid: np.ndarray):
+        """Ненормированные пробные мольные числа жидкой фазы: `X_i = z_i / K_i`."""
         return self._z_feed / k_values_liquid
 
     @staticmethod
     def _calc_S(arr: np.ndarray):
+        """Сумма пробных мольных чисел (`S_v` или `S_l`) — диагностика стабильности: `S <= 1` указывает на тривиальное/стабильное направление."""
         return float(np.sum(arr))
 
     @staticmethod
     def _normalize_mole_fractions(arr: np.ndarray, S: float):
+        """Нормирует пробные мольные числа на их сумму `S`, получая мольные доли пробной фазы."""
         return arr / S
 
     # =====================================================================================
@@ -126,25 +174,51 @@ class TwoPhaseStabilityTest:
 
     @staticmethod
     def _calc_ri_vapour(vapour_fugacities: np.ndarray, mixture_fugacities: np.ndarray, S_v: float):
+        """Отношение фугитивностей для пробной паровой фазы: `r_i = exp(ln f_mix - ln f_vapour) / S_v`."""
         # ri = exp(ln f_mix - ln f_vapour) / S_v
         return np.exp(mixture_fugacities - vapour_fugacities) / S_v
 
     @staticmethod
     def _calc_ri_liquid(liquid_fugacities: np.ndarray, mixture_fugacities: np.ndarray, S_l: float):
+        """Отношение фугитивностей для пробной жидкой фазы: `r_i = exp(ln f_liquid - ln f_mix) * S_l`."""
         # ri = exp(ln f_liquid - ln f_mix) * S_l
         return np.exp(liquid_fugacities - mixture_fugacities) * S_l
 
     @staticmethod
     def _update_k_values(k_values_old: np.ndarray, ri: np.ndarray):
+        """Итерационное обновление K-значений в методе последовательных подстановок: `K_new = K_old * r_i`."""
         return k_values_old * ri
 
     @staticmethod
     def _check_convergence(ri: np.ndarray) -> bool:
+        """
+        Критерий сходимости пробного цикла: `sum((r_i - 1)^2) < TOL_TWO_PHASE_STABILITY_CONVERGENCE`.
+
+        Parameters
+        ----------
+        ri : np.ndarray
+
+        Returns
+        -------
+        bool
+        """
         sum_sq_ri = float(np.sum((ri - 1.0) ** 2))
         return sum_sq_ri < TOL_TWO_PHASE_STABILITY_CONVERGENCE
 
     @staticmethod
     def _check_trivial_solution(k_values: np.ndarray):
+        """
+        Критерий тривиального решения пробного цикла: `sum(ln(K_i)^2) < TOL_TWO_PHASE_STABILITY_CONVERGENCE_TRIVIAL_SOLUTION`,
+        то есть пробная фаза сходится к составу самого фида (K_i -> 1).
+
+        Parameters
+        ----------
+        k_values : np.ndarray
+
+        Returns
+        -------
+        bool
+        """
         return float(np.sum(np.log(k_values) ** 2)) < TOL_TWO_PHASE_STABILITY_CONVERGENCE_TRIVIAL_SOLUTION
 
     # =====================================================================================
@@ -152,6 +226,15 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _interpetate_stability_analysis(self):
+        """
+        Классический критерий Михельсена по итогам обоих пробных циклов
+        (сходимость к нетривиальному решению + `S_v`/`S_l` относительно 1.0):
+        заполняет `self.stable` и, если нестабильно, `self.k_values_for_flash`
+        (комбинация `k_values_vapour`/`k_values_liquid` в зависимости от того,
+        какая из пробных фаз "сработала").
+
+        Вызывается автоматически в конце `calculate_phase_stability()`.
+        """
         self.S_v_rounded = round(self.S_v, 7)
         self.S_l_rounded = round(self.S_l, 7)
 
@@ -195,6 +278,16 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def calculate_phase_stability(self):
+        """
+        Главная точка входа: полный тест стабильности Михельсена.
+
+        Считает фугитивности исходного (фидового) состава как точку
+        отсчёта, генерирует стартовые K по Вильсону
+        (`_calc_k_values_wilson_array`), запускает пробную паровую и
+        пробную жидкую итерацию (`_loop_vapour`/`_loop_liquid`) и по их
+        результату определяет стабильность (`_interpetate_stability_analysis`).
+        После вызова читайте `self.stable`/`self.k_values_for_flash`.
+        """
         self.initial_eos = BrusilovskiyEOS(composition=self._composition, p=self.p, t=self.t)
         self.initial_eos.calc_eos()
         self._mixture_fugacities_arr = self.initial_eos.fugacities.copy()
@@ -214,6 +307,22 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _loop_vapour(self, k_values: np.ndarray):
+        """
+        Пробная итерация "а что если появится паровая фаза" — метод
+        последовательных подстановок по фугитивностям (не Ньютон, в отличие
+        от `VLE.PhaseEquilibriumNewton`). Заполняет `self.S_v`,
+        `self.k_values_vapour`, `self.convergence_v`/`self.convergence_trivial_solution_v`.
+
+        Parameters
+        ----------
+        k_values : np.ndarray
+            Стартовое приближение K (обычно из `_calc_k_values_wilson_array`).
+
+        Raises
+        ------
+        StopIterationError
+            Если не сошлось за 100000 итераций.
+        """
         i = 0
         self._k_v_arr = k_values.copy()
         self.k_values_vapour = self._array_to_dict(self._k_v_arr)
@@ -256,6 +365,21 @@ class TwoPhaseStabilityTest:
     # =====================================================================================
 
     def _loop_liquid(self, k_values: np.ndarray):
+        """
+        Пробная итерация "а что если появится жидкая фаза" — зеркало
+        `_loop_vapour` для жидкости. Заполняет `self.S_l`,
+        `self.k_values_liquid`, `self.convergence_l`/`self.convergence_trivial_solution_l`.
+
+        Parameters
+        ----------
+        k_values : np.ndarray
+            Стартовое приближение K (обычно из `_calc_k_values_wilson_array`).
+
+        Raises
+        ------
+        StopIterationError
+            Если не сошлось за 100000 итераций.
+        """
         i = 0
         self._k_l_arr = k_values.copy()
         self.k_values_liquid = self._array_to_dict(self._k_l_arr)
@@ -299,6 +423,15 @@ class TwoPhaseStabilityTest:
 
     @property
     def k_vals_for_sat_point_calculation(self):
+        """
+        dict | None: K-значения для использования в поиске давления насыщения
+        (`PhaseDiagram/new_methodv2.py::SaturationPressure` и подобные).
+
+        `None`, если тест ещё не запускался или система стабильна. Если
+        обе пробные суммы `S_v`/`S_l` > 1 — берёт K от той пробной фазы,
+        у которой сумма больше (эвристика "более выраженное" направление
+        нестабильности); иначе — то же, что `k_values_for_flash`.
+        """
         if (self.stable is None) or self.stable:
             return None
 

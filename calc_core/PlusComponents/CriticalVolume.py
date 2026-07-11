@@ -1,3 +1,5 @@
+"""Корреляции критического объёма C7+ (4 реализованных метода + 1 заготовка) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
+
 import math
 from typing import Dict, Callable
 from calc_core.Utils.Constants import CONSTANT_R
@@ -92,5 +94,6 @@ class CriticalVolumeCorrelation:
 
     @staticmethod
     def _riedel():
+        """Не реализовано (TODO). Не зарегистрирован в `get_correlation`/`get_required_params` — недостижим через публичный API."""
         # TODO
         ...

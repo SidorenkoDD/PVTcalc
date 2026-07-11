@@ -1,3 +1,21 @@
+"""
+Кубическое уравнение состояния Брусиловского.
+
+Единственная живая реализация EOS в проекте (обобщение Пенга-Робинсона/
+Соаве-Редлиха-Квонга, распространено в русской PVT-практике). Используется
+везде, где нужны фугитивности/Z-фактор смеси: `PhaseStability.TwoPhaseStabilityTest`
+(тест стабильности), `VLE.PhaseEquilibriumNewton` (уточнение K-значений по
+фугитивностям), `Utils.FluidPropertiesCalculator` (молярный объём/плотность/Z).
+
+Принимает на вход `Composition` (состав + предвычисленные параметры EOS a/b/c/d
+и BIP-матрицу, см. `Composition.evaluate_composition_data`) и условия (P, T).
+Отдаёт наружу выбранный Z-фактор (`.z`) и вектор логарифмов фугитивностей
+компонент (`.fugacities`) для корня, минимизирующего приведённую энергию
+Гиббса — при нескольких действительных корнях кубического уравнения (что
+случается вблизи критической точки) это и есть механизм выбора физичного
+корня.
+"""
+
 import logging
 import math
 import numpy as np
@@ -28,9 +46,26 @@ class BrusilovskiyEOS(EOS):
         self.fugacity_by_roots      : (nr,nc)   ln(fi)
         self.fugacity_coef_by_roots : (nr,nc)   ln(phi_i)
         self.normalized_gibbs_energy: (nr,)
+
+    Типичное использование::
+
+        eos = BrusilovskiyEOS(composition, p=100.0, t=350.0)
+        z, ln_f = eos.calc_eos()   # z-фактор и ln(fi) выбранного корня
     """
 
     def __init__(self, composition: Composition, p: float, t: float):
+        """
+        Parameters
+        ----------
+        composition : Composition
+            Состав с уже посчитанными параметрами EOS (`composition_data['a'|'b'|'c'|'d']`,
+            `'bip'`, `'peneloux_correction']`) — то есть после
+            `Composition.evaluate_composition_data(...)`.
+        p : float
+            Давление, бар.
+        t : float
+            Температура, K.
+        """
         super().__init__(composition, p, t)
 
         self._composition = composition
@@ -130,11 +165,43 @@ class BrusilovskiyEOS(EOS):
     # =====================================================================================
 
     def _component_to_index(self, component):
+        """
+        Приводит имя компонента или уже готовый индекс к индексу в `self._components`.
+
+        Parameters
+        ----------
+        component : str | int
+            Имя компонента ('C1', 'nC4' и т.п.) или уже числовой индекс —
+            во втором случае возвращается как есть, без проверки диапазона.
+
+        Returns
+        -------
+        int
+        """
         if isinstance(component, int):
             return component
         return self._component_index[component]
 
     def _root_to_index(self, root: float):
+        """
+        Находит позицию заданного значения корня в `self.real_roots_eos`.
+
+        Parameters
+        ----------
+        root : float
+            Значение Z-фактора (корня кубического уравнения), сравнение —
+            с допуском `rtol=atol=1e-12`.
+
+        Returns
+        -------
+        int
+            Индекс в `self.real_roots_eos`.
+
+        Raises
+        ------
+        KeyError
+            Если такого корня нет среди `self.real_roots_eos`.
+        """
         idx = np.where(np.isclose(self.real_roots_eos, root, rtol=1e-12, atol=1e-12))[0]
         if idx.size == 0:
             raise KeyError(f'Корень {root} не найден в real_roots_eos')
@@ -142,10 +209,12 @@ class BrusilovskiyEOS(EOS):
 
     @property
     def component_names(self):
+        """tuple[str, ...]: имена компонент в порядке, соответствующем всем внутренним массивам."""
         return self._components
 
     @property
     def composition_vector(self):
+        """np.ndarray, shape (nc,): вектор мольных долей смеси (тот же порядок, что `component_names`)."""
         return self._x
 
     # =====================================================================================
@@ -169,30 +238,75 @@ class BrusilovskiyEOS(EOS):
         self._Aij = sqrtA * (1.0 - self._bip)
 
     def _calc_A_mixture(self):
+        """
+        Смесевой коэффициент A_m = x^T · A_ij · x (квадратичное правило смешения).
+        Кэшируется в `self._A_mixture` после первого вызова.
+
+        Returns
+        -------
+        float
+        """
         if self._A_mixture is None:
             self._calc_component_coefficients()
             self._A_mixture = float(self._x @ self._Aij @ self._x)
         return self._A_mixture
 
     def _calc_B_mixture(self):
+        """
+        Смесевой коэффициент B_m = x^T · B (линейное правило смешения).
+        Кэшируется в `self._B_mixture` после первого вызова.
+
+        Returns
+        -------
+        float
+        """
         if self._B_mixture is None:
             self._calc_component_coefficients()
             self._B_mixture = float(self._x @ self._B)
         return self._B_mixture
 
     def _calc_C_mixture(self):
+        """
+        Смесевой коэффициент C_m = x^T · C (линейное правило смешения).
+        Кэшируется в `self._C_mixture` после первого вызова.
+
+        Returns
+        -------
+        float
+        """
         if self._C_mixture is None:
             self._calc_component_coefficients()
             self._C_mixture = float(self._x @ self._C)
         return self._C_mixture
 
     def _calc_D_mixture(self):
+        """
+        Смесевой коэффициент D_m = x^T · D (линейное правило смешения).
+        Кэшируется в `self._D_mixture` после первого вызова.
+
+        Returns
+        -------
+        float
+        """
         if self._D_mixture is None:
             self._calc_component_coefficients()
             self._D_mixture = float(self._x @ self._D)
         return self._D_mixture
 
     def _calc_roots_eos(self):
+        """
+        Строит кубическое уравнение Z^3 + E_0 Z^2 + E_1 Z + E_2 = 0 для смеси
+        и решает его через `Cardano.cubic_roots_cardano` (только действительные корни).
+
+        Именно здесь могут получиться несколько действительных корней (обычно
+        3, иногда практически совпадающих) — это происходит вблизи критической
+        точки и разрешается позже в `_choose_eos_root_by_gibbs_energy`.
+
+        Returns
+        -------
+        np.ndarray
+            Действительные корни Z (1-3 штуки в зависимости от режима).
+        """
         A_m = self._calc_A_mixture()
         B_m = self._calc_B_mixture()
         C_m = self._calc_C_mixture()
@@ -218,6 +332,16 @@ class BrusilovskiyEOS(EOS):
     def _calc_fugacity_coef_logarithm_vector(self, root: float):
         """
         Возвращает вектор ln(phi_i) для заданного корня Z.
+
+        Parameters
+        ----------
+        root : float
+            Значение Z-фактора (один из `self.real_roots_eos`).
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+            Нулевой вектор, если `root <= B_m` (физически недопустимый корень).
         """
         z = float(root)
 
@@ -248,6 +372,16 @@ class BrusilovskiyEOS(EOS):
     def _calc_fugacity_logarithm_vector(self, root: float):
         """
         Возвращает вектор ln(f_i) и ln(phi_i) для заданного корня Z.
+
+        Parameters
+        ----------
+        root : float
+            Значение Z-фактора (один из `self.real_roots_eos`).
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            `(ln_f, ln_phi)`, оба shape (nc,). Оба нулевые, если `root <= B_m`.
         """
         z = float(root)
         B_m = self._B_mixture
@@ -261,6 +395,16 @@ class BrusilovskiyEOS(EOS):
         return ln_f, ln_phi
 
     def _calc_fugacity_by_roots(self):
+        """
+        Считает ln(f_i) и ln(phi_i) для *каждого* найденного корня Z
+        (см. `self.real_roots_eos`), не только для итогового выбранного.
+
+        Returns
+        -------
+        tuple[np.ndarray, np.ndarray]
+            `(fugacity, fugacity_coef)`, оба shape (nr, nc), где nr —
+            число действительных корней.
+        """
         nr = len(self.real_roots_eos)
         fugacity = np.zeros((nr, self._nc), dtype=np.float64)
         fugacity_coef = np.zeros((nr, self._nc), dtype=np.float64)
@@ -274,7 +418,17 @@ class BrusilovskiyEOS(EOS):
 
     def _calc_normalized_gibbs_energy(self):
         """
-        Возвращает массив G/(RT) по корням.
+        Возвращает массив приведённой энергии Гиббса G/(RT) — по одному
+        значению на каждый корень из `self.real_roots_eos`. Корень с
+        минимальным значением считается термодинамически устойчивым
+        (см. `_choose_eos_root_by_gibbs_energy`).
+
+        Физически недопустимые корни (`root <= 0` или `root <= B_m`)
+        получают `+inf`, чтобы никогда не быть выбранными минимумом.
+
+        Returns
+        -------
+        np.ndarray, shape (nr,)
         """
         B_m = self._B_mixture
         gibbs = np.full(len(self.real_roots_eos), np.inf, dtype=np.float64)
@@ -286,6 +440,17 @@ class BrusilovskiyEOS(EOS):
         return gibbs
 
     def _choose_eos_root_by_gibbs_energy(self):
+        """
+        Выбирает физичный корень EOS — тот, что минимизирует приведённую
+        энергию Гиббса (см. `_calc_normalized_gibbs_energy`). Это и есть
+        механизм разрешения многокорневого случая (несколько действительных
+        корней кубического уравнения, типично вблизи критической точки).
+
+        Returns
+        -------
+        tuple[float, int]
+            `(значение выбранного Z, его индекс в self.real_roots_eos)`.
+        """
         idx = int(np.argmin(self.normalized_gibbs_energy))
         return float(self.real_roots_eos[idx]), idx
 
@@ -303,9 +468,26 @@ class BrusilovskiyEOS(EOS):
         return self._dAm_dx
 
     def _calc_dE0_dx(self):
+        """
+        Вектор dE0/dx_k — производная свободного члена E0 кубического уравнения
+        (см. `_calc_roots_eos`) по мольной доле каждого компонента. Используется
+        в `_calc_dz_dx` (неявное дифференцирование кубического уравнения по x).
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+        """
         return self._C + self._D - self._B
 
     def _calc_dE1_dx(self):
+        """
+        Вектор dE1/dx_k — производная коэффициента E1 кубического уравнения
+        по мольной доле каждого компонента. Используется в `_calc_dz_dx`.
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+        """
         dAm_dx = self._calc_dAm_dx()
         B_m = self._B_mixture
         C_m = self._C_mixture
@@ -324,6 +506,14 @@ class BrusilovskiyEOS(EOS):
         )
 
     def _calc_dE2_dx(self):
+        """
+        Вектор dE2/dx_k — производная свободного члена E2 кубического уравнения
+        по мольной доле каждого компонента. Используется в `_calc_dz_dx`.
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+        """
         dAm_dx = self._calc_dAm_dx()
         A_m = self._A_mixture
         B_m = self._B_mixture
@@ -342,7 +532,14 @@ class BrusilovskiyEOS(EOS):
 
     def _calc_dz_dx(self):
         """
-        Возвращает вектор dz/dx_k для выбранного корня.
+        Производная выбранного Z-фактора по мольной доле каждого компонента
+        (неявное дифференцирование кубического уравнения EOS). Требует, чтобы
+        `self._z_factor` уже был выбран (после `calc_eos()`). Кэшируется
+        в `self._dz_dx`, сбрасывается в `calc_eos()`/`clear_cache()`.
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
         """
         if self._dz_dx is not None:
             return self._dz_dx
@@ -369,6 +566,15 @@ class BrusilovskiyEOS(EOS):
         return self._dz_dx
 
     def _calc_dz_dp(self):
+        """
+        Производная выбранного Z-фактора по давлению (неявное дифференцирование
+        кубического уравнения EOS). Требует, чтобы `self._z_factor` уже был
+        выбран (после `calc_eos()`). Кэшируется в `self._dz_dp`.
+
+        Returns
+        -------
+        float
+        """
         if self._dz_dp is not None:
             return self._dz_dp
 
@@ -394,7 +600,14 @@ class BrusilovskiyEOS(EOS):
 
     def _calc_dlogphi_dx_matrix(self):
         """
-        Возвращает матрицу d ln(phi_i) / d x_k формы (nc, nc)
+        Матрица аналитического якобиана d ln(phi_i) / d x_k для выбранного
+        корня. Используется в `PhaseEquilibriumNewton.fill_jacobian_fug_only`
+        как основной строительный блок якобиана системы уравнений равновесия
+        фугитивностей (метод Ньютона по ln(K)).
+
+        Returns
+        -------
+        np.ndarray, shape (nc, nc)
         """
         if self._dlogphi_dx is not None:
             return self._dlogphi_dx
@@ -466,7 +679,12 @@ class BrusilovskiyEOS(EOS):
 
     def _calc_dlogphi_dp_vector(self):
         """
-        Возвращает вектор d ln(phi_i) / dp формы (nc,)
+        Вектор d ln(phi_i) / dp для выбранного корня — производная логарифма
+        коэффициента фугитивности по давлению.
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
         """
         if self._dlogphi_dp is not None:
             return self._dlogphi_dp
@@ -512,15 +730,53 @@ class BrusilovskiyEOS(EOS):
         return self._dlogphi_dp
 
     def calc_d_log_phi_i_dxk(self, component_i, component_k):
+        """
+        Скалярный доступ к одному элементу якобиана d ln(phi_i)/dx_k
+        (см. `_calc_dlogphi_dx_matrix`), по именам компонент.
+
+        Parameters
+        ----------
+        component_i, component_k : str | int
+            Имена компонент (или индексы) — числитель и знаменатель производной.
+
+        Returns
+        -------
+        float
+        """
         i = self._component_to_index(component_i)
         k = self._component_to_index(component_k)
         return float(self._calc_dlogphi_dx_matrix()[i, k])
 
     def calc_d_log_phi_i_dp(self, component_i):
+        """
+        Скалярный доступ к одному элементу d ln(phi_i)/dp (см. `_calc_dlogphi_dp_vector`).
+
+        Parameters
+        ----------
+        component_i : str | int
+            Имя компонента (или индекс).
+
+        Returns
+        -------
+        float
+        """
         i = self._component_to_index(component_i)
         return float(self._calc_dlogphi_dp_vector()[i])
 
     def _calc_dfi_dxk(self, component_i, component_k):
+        """
+        Производная фугитивности f_i по мольной доле x_k (не логарифма — самой
+        фугитивности), через правило произведения: f_i = p * x_i * phi_i.
+
+        Parameters
+        ----------
+        component_i, component_k : str | int
+            Имена компонент (или индексы).
+
+        Returns
+        -------
+        float
+        """
         i = self._component_to_index(component_i)
         k = self._component_to_index(component_k)
 
@@ -537,7 +793,14 @@ class BrusilovskiyEOS(EOS):
 
     def calc_eos(self):
         """
-        Рассчитывает EOS и выбирает корень с минимальной приведенной энергией Гиббса.
+        Главная точка входа: полный пересчёт EOS для текущих состава/P/T.
+
+        Порядок: сброс кэша (`clear_cache`) → решение кубического уравнения
+        (`_calc_roots_eos`) → фугитивности по каждому корню
+        (`_calc_fugacity_by_roots`) → выбор физичного корня по минимуму
+        энергии Гиббса (`_choose_eos_root_by_gibbs_energy`). Результат
+        сохраняется в `self.z` / `self.fugacities` (через `self._z_factor` /
+        `self._fugacities`) и в `self.choosen_eos_root` / `self.choosen_fugacities`.
 
         Returns
         -------
@@ -572,6 +835,11 @@ class BrusilovskiyEOS(EOS):
         return self.choosen_eos_root, self.choosen_fugacities
 
     def clear_cache(self):
+        """
+        Сбрасывает все закэшированные промежуточные величины (смесевые
+        коэффициенты A/B/C/D, производные, найденные корни и фугитивности)
+        перед новым пересчётом. Вызывается автоматически в начале `calc_eos()`.
+        """
         self._A = None
         self._B = None
         self._C = None
@@ -600,7 +868,16 @@ class BrusilovskiyEOS(EOS):
 
     def _calc_shift_parametr(self) -> float:
         """
-        Для совместимости.
+        Смесевой volume-shift параметр (поправка Пенелу) — средневзвешенное
+        по мольным долям `self._cpen` (per-компонентный `peneloux_correction`
+        из `composition_data`). Используется в `FluidPropertiesCalculator`
+        при расчёте молярного объёма/плотности со сдвигом. Имя метода
+        (`_parametr`, транслитерация) — устоявшаяся опечатка в проекте, см.
+        CLAUDE.md, не переименовывать без отдельного запроса.
+
+        Returns
+        -------
+        float
         """
         return float(np.sum(self._x * self._cpen))
 
@@ -627,23 +904,65 @@ class BrusilovskiyEOS(EOS):
     # =====================================================================================
 
     def get_fugacity_vector_by_root(self, root: float):
+        """
+        Вектор ln(f_i) для конкретного (не обязательно выбранного) корня Z.
+
+        Parameters
+        ----------
+        root : float
+            Значение Z-фактора из `self.real_roots_eos`.
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+        """
         idx = self._root_to_index(root)
         return self.fugacity_by_roots[idx]
 
     def get_fugacity_coef_vector_by_root(self, root: float):
+        """
+        Вектор ln(phi_i) для конкретного (не обязательно выбранного) корня Z.
+
+        Parameters
+        ----------
+        root : float
+            Значение Z-фактора из `self.real_roots_eos`.
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+        """
         idx = self._root_to_index(root)
         return self.fugacity_coef_by_roots[idx]
 
     def get_fugacity_dict_by_root(self, root: float):
         """
+        То же, что `get_fugacity_vector_by_root`, но в виде `{имя_компонента: ln(f_i)}`.
         Необязательный адаптер для старого кода.
+
+        Parameters
+        ----------
+        root : float
+
+        Returns
+        -------
+        dict[str, float]
         """
         vec = self.get_fugacity_vector_by_root(root)
         return {c: float(vec[i]) for i, c in enumerate(self._components)}
 
     def get_fugacity_coef_dict_by_root(self, root: float):
         """
+        То же, что `get_fugacity_coef_vector_by_root`, но в виде `{имя_компонента: ln(phi_i)}`.
         Необязательный адаптер для старого кода.
+
+        Parameters
+        ----------
+        root : float
+
+        Returns
+        -------
+        dict[str, float]
         """
         vec = self.get_fugacity_coef_vector_by_root(root)
         return {c: float(vec[i]) for i, c in enumerate(self._components)}

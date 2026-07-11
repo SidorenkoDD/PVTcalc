@@ -1,3 +1,15 @@
+"""
+Многоступенчатая сепарация (промысловый сепараторный тест).
+
+Структурно почти идентичен `DLE` (см. его module docstring) — то же
+"пластовое условие → P_sat → цикл по ступеням → стандартные условия"
+с переносом состава жидкости между ступенями, — но здесь у каждой ступени
+своя **пара** (P, T), а не только давление при общей температуре.
+Соответствующие методы (`_calculate_bo`, `_gas_vol_to_stc`, `_calculate_rs`,
+`_vectorize_dle_results`) — почти дословные копии из `DLE.py`, см. пометку
+в CLAUDE.md про дублирование кода между этими двумя файлами.
+"""
+
 import logging
 
 from calc_core.Composition.Composition import Composition
@@ -15,11 +27,28 @@ from calc_core.VLE.Flash import FlashResult
 logger = logging.getLogger(__name__)
 
 class SeparatorTest:
+    """Один прогон многоступенчатой сепарации для заданного состава и сетки (P, T) по ступеням."""
+
     def __init__(self, composition : Composition,
                  pressure_arr_bar : list,
                  temperature_arr_c : list,
                  reservoir_pressure_bar : float,
                  reservoir_temperature_c : float):
+        """
+        Parameters
+        ----------
+        composition : Composition
+            Пластовый состав.
+        pressure_arr_bar : list
+            Давления ступеней, бар.
+        temperature_arr_c : list
+            Температуры ступеней, °C — **должен быть той же длины**, что
+            `pressure_arr_bar` (проверяется `_check_length_arr` в `calculate()`).
+        reservoir_pressure_bar : float
+            Пластовое давление, бар.
+        reservoir_temperature_c : float
+            Пластовая температура, °C.
+        """
 
 
         self.composition = composition
@@ -31,6 +60,7 @@ class SeparatorTest:
     
     @staticmethod
     def _is_descending(arr):
+        """Сортирует `arr` по убыванию на месте, если ещё не отсортирован. Нигде в классе не вызывается (мёртвый код), см. аналог в `DLE._is_descending`."""
         if all(arr[i] < arr[i-1] for i in range(1, len(arr))) is False:
             arr.sort(reverse=True)
         else:
@@ -39,6 +69,17 @@ class SeparatorTest:
 
     @staticmethod
     def _check_length_arr(arr1, arr2):
+        """
+        Проверяет, что два массива одинаковой длины (в `calculate()` —
+        `pressure_arr` и `temperature_arr`). В отличие от `DLE._check_length_arr`
+        (возвращает bool), здесь при несовпадении **бросает исключение**.
+
+        Raises
+        ------
+        LenthMissMatchError
+            Если длины не совпадают (опечатка в имени класса исключения,
+            см. CLAUDE.md Known Issues).
+        """
         if len(arr1) == len(arr2):
             return True
         else:
@@ -46,20 +87,48 @@ class SeparatorTest:
 
 
     def _is_psat_in_pressure_arr(self):
+        """Не реализовано (заготовка, тело — `...`)."""
         ...
 
 
     def _is_pres_in_pressure_arr(self):
+        """Не реализовано (заготовка, тело — `...`)."""
         ...
 
 
     def _calculate_stage(self, p_bar, t_c):
+        """
+        Флэш на текущем `self.composition` для одной ступени.
+
+        Parameters
+        ----------
+        p_bar : float
+        t_c : float
+            Температура, °C.
+
+        Returns
+        -------
+        FlashResult
+        """
         current_conditions = Conditions(p_bar, t_c)
         flash_object = Flash(self.composition, current_conditions)
         return flash_object.calculate()
 
 
     def _calculate_bo(self, liq_vol: np.ndarray, fl_arr: np.ndarray) -> np.ndarray:
+        """
+        Объёмный коэффициент нефти Bo по ступеням. Логика идентична
+        `DLE._calculate_bo` (см. её docstring за подробностями).
+
+        Parameters
+        ----------
+        liq_vol : np.ndarray
+        fl_arr : np.ndarray
+
+        Returns
+        -------
+        np.ndarray
+        """
         # Векторизованная замена None/NaN на 1.0
         fl_arr = np.where(np.isnan(fl_arr) | (fl_arr == None), 1.0, fl_arr).astype(float)
         liq_vol = np.array(liq_vol, dtype=float)
@@ -74,13 +143,28 @@ class SeparatorTest:
         return corrected_vol / self.oil_residual_volume
 
 
-    def _gas_vol_to_stc(self, p_stage: np.ndarray, t_stage: np.ndarray, 
+    def _gas_vol_to_stc(self, p_stage: np.ndarray, t_stage: np.ndarray,
                         z_stage: np.ndarray, v_stage: np.ndarray, z_stc: float) -> np.ndarray:
+        """Пересчёт объёма газа со ступени на стандартные условия. Идентично `DLE._gas_vol_to_stc`."""
         return (p_stage * v_stage * z_stc * self.stc_conditions.t) / (self.stc_conditions.p * z_stage * t_stage)
 
 
-    def _calculate_rs(self, p_arr: np.ndarray, z_arr: np.ndarray, t_arr: np.ndarray, 
+    def _calculate_rs(self, p_arr: np.ndarray, z_arr: np.ndarray, t_arr: np.ndarray,
                       gas_vol_arr: np.ndarray, fl_arr: np.ndarray, p_sat: float) -> np.ndarray:
+        """
+        Газосодержание Rs по ступеням. Логика идентична `DLE._calculate_rs`
+        (см. её docstring за подробностями); требует, чтобы `_calculate_bo`
+        уже был вызван (использует `self.oil_residual_volume`).
+
+        Parameters
+        ----------
+        p_arr, z_arr, t_arr, gas_vol_arr, fl_arr : np.ndarray
+        p_sat : float
+
+        Returns
+        -------
+        np.ndarray
+        """
 
         fl_arr = np.where(np.isnan(fl_arr) | (fl_arr == None), 1.0, fl_arr).astype(float)
         gas_vol_arr = np.array(gas_vol_arr, dtype=float)
@@ -175,6 +259,25 @@ class SeparatorTest:
 
 
     def calculate(self):
+            """
+            Главная точка входа: полный прогон сепараторного теста.
+
+            Порядок идентичен `DLE.calculate()`, но цикл идёт по парам
+            `zip(pressure_arr, temperature_arr)` вместо одного `pressure_arr`
+            (и температура состава явно переставляется на каждой ступени:
+            `self.composition.T = stage_temperature`).
+
+            Returns
+            -------
+            list[FlashResult]
+                Пластовая точка, P_sat, каждая ступень, стандартные условия —
+                итого `len(pressure_arr) + 3`. Таблица `Bo`/`Rs` — в `self._dle_df`.
+
+            Raises
+            ------
+            LenthMissMatchError
+                Если `pressure_arr` и `temperature_arr` разной длины.
+            """
             logger.info("SeparatorTest: старт, %d ступеней", len(self.pressure_arr))
             result = []
             self._check_length_arr(self.pressure_arr, self.temperature_arr)

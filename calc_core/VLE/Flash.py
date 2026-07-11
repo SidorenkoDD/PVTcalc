@@ -1,3 +1,17 @@
+"""
+Оркестратор одного двухфазного флэш-расчёта.
+
+Верхнеуровневый узел расчётного пайплайна: принимает состав (`Composition`)
+и термобарические условия (`Conditions`), сначала прогоняет тест
+термодинамической стабильности (`TwoPhaseStabilityTest`), затем — в
+зависимости от результата — либо решает двухфазное равновесие
+(`PhaseEquilibriumNewton`), либо считает свойства всего состава как
+однофазной жидкости ("ТРЮК", см. docstring `Flash.calculate`). Используется
+напрямую в `test_notebook.ipynb` и как строительный блок в
+`Experiments/DLE.py`, `CCE.py`, `SeparatorTest.py` (там `Flash` вызывается
+многократно, по одному разу на ступень) и в `CompositionalModel`.
+"""
+
 import logging
 
 from calc_core.Composition.Composition import Composition
@@ -12,12 +26,55 @@ from typing import Dict, Any
 logger = logging.getLogger(__name__)
 
 class Flash:
+    """
+    Один флэш-расчёт для заданного состава при заданных P/T.
+
+    Экземпляр — одноразовый: создаётся под конкретную пару (`Composition`,
+    `Conditions`), после `calculate()` держит промежуточные объекты расчёта
+    как атрибуты (`phase_stability_object`, `phase_equil_result` и т.п.) —
+    удобно для отладки, но не предполагает повторного вызова `calculate()`
+    с другими условиями (для этого создавайте новый `Flash`).
+    """
+
     def __init__(self, composition_object: Composition, conditions_object: Conditions):
+        """
+        Parameters
+        ----------
+        composition_object : Composition
+            Состав флюида. Побочный эффект: `composition_object.T` сразу
+            перезаписывается температурой из `conditions_object` (Кельвины).
+        conditions_object : Conditions
+            Давление (бар) и температура (K, уже сконвертированная из °C).
+        """
         self.composition = composition_object
         self.conditions = conditions_object
         self.composition.T = conditions_object.t
 
     def calculate(self) -> FlashResult: # <-- Указываем тип возврата
+        """
+        Выполняет тест стабильности и в зависимости от результата — двухфазный
+        расчёт равновесия либо однофазный "трюк".
+
+        Ветка **двухфазная** (`phase_stability_object.stable is False`):
+        решает равновесие Ньютоном по фугитивностям (`PhaseEquilibriumNewton`),
+        считает свойства паровой и жидкой фазы отдельно
+        (`FluidPropertiesCalculator`).
+
+        Ветка **однофазная** ("ТРЮК"): без проверки, газ это или жидкость,
+        весь состав жёстко приписывается жидкости (`liquid.mole_fraction = 1.0`,
+        `vapor.mole_fraction = 0.0`, `vapor.properties = {}`). Корректно для
+        DLE (газа не выделилось), но не отвечает на вопрос "что это за фаза" —
+        для этого предназначен (пока не интегрирован сюда)
+        `PhaseStability/PhaseIdentificator.py`.
+
+        Returns
+        -------
+        FlashResult
+            `pressure`, `temperature`, `vapor: PhaseState`, `liquid: PhaseState`,
+            `is_two_phase: bool`. `PhaseState.properties` — словарь с ключами
+            `molecular_ weight` (со пробелом — опечатка в коде, см. CLAUDE.md),
+            `molar_volume`, `molar_density`, `density`, `z`, `viscosity`.
+        """
         logger.debug("Flash.calculate(): P=%s бар, T=%s K", self.conditions.p, self.conditions.t)
 
         self.phase_stability_object = TwoPhaseStabilityTest(self.composition, self.conditions.p, self.conditions.t)

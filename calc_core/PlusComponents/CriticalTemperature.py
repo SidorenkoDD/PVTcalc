@@ -1,3 +1,5 @@
+"""Корреляции критической температуры C7+ (11 методов) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
+
 import math
 from typing import Dict, Callable
 from calc_core.Utils.Constants import CONSTANT_R
