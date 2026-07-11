@@ -1,0 +1,30 @@
+[project]
+name = "pvtcalc"
+version = "0.1.0"
+description = "Компонентный PVT-движок (EOS Брусиловского, флэш, стандартные PVT-эксперименты)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.0",
+    "scipy>=1.14",
+    "matplotlib>=3.9",
+    "joblib>=1.4",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+notebook = [
+    "ipykernel",
+    "jupyterlab",
+]
+
+# Пакет пока не собирается (нет [build-system]) — _src ещё не переименован
+# в нормальное имя пакета, это отдельный шаг перед .whl. До тех пор эта секция
+# только фиксирует версии зависимостей как единый источник истины.
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
