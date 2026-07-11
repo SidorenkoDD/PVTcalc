@@ -1,7 +1,7 @@
 import math
 import numpy as np
 
-from ..Composition.CompositionV2 import Composition
+from ..Composition.Composition import Composition
 from .BaseEOS import EOS
 from ..Utils.Constants import CONSTANT_R
 from ..Utils.Cardano import cubic_roots_cardano

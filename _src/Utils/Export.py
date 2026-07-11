@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
-# from _src.CompositionalModel.CompositionalModelV2 import CompositionalModel
-# from _src.Utils.Results2 import ResultStore
+# from _src.CompositionalModel.CompositionalModel import CompositionalModel
+# from _src.Utils.Results import ResultStore
 
 class ModelJSONDB:
     def __init__(self, filepath: str = "models.json"):

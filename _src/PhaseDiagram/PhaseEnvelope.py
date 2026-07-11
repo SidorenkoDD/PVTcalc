@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple, Dict, Optional
 import logging
-from _src.Composition.CompositionV2 import Composition
+from _src.Composition.Composition import Composition
 from _src.PhaseDiagram.BubblePointPressure import BubblePointCalculator
 from _src.PhaseDiagram.DewPressure import DewPointCalculator
 

@@ -1,7 +1,7 @@
 import numpy as np
 
-from _src.EOS.BrusilovskiyEOSV2 import BrusilovskiyEOS
-from _src.Composition.CompositionV2 import Composition
+from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
+from _src.Composition.Composition import Composition
 from _src.Utils.Constants import (
     TOL_TWO_PHASE_FLASH_CONVERGENCE,
     TOL_TWO_PHASE_FLASH_TRIVIAL_SOLUTION,

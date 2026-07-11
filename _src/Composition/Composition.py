@@ -2,17 +2,17 @@ from copy import deepcopy
 
 from _src.PlusComponents.PlusComponentCorrelations import PlusComponentProperties
 from _src.Utils.JsonDBReader import JsonDBReader
-from _src.Utils import BRS_EOS_DB_V2 as BRSDB
+from _src.Utils import BRS_EOS_DB as BRSDB
 from _src.Utils.Errors import NoComponentError, InvalidMolarFractionError
 from _src.EOS.BaseEOS import EOSType
 import json
 import logging
 logger = logging.getLogger('MBALPVT.PVTDataModel.PVTCore.Composition')
-db = JsonDBReader().load_database('DB_V2.json')
+db = JsonDBReader().load_database('DB.json')
 
 
 def check_and_sort_composition(composition_dict: dict):
-    # db = JsonDBReader().load_database('DB_V2.json')
+    # db = JsonDBReader().load_database('DB.json')
     available_components = db['available_components']
     sequence_numbers = db['sequence_number']
     carbon_flags = db['carbon_flag']

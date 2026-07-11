@@ -1,14 +1,14 @@
 import numpy as np
 
 from _src.Experiments.BaseExperiment import PVTExperiment
-from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
-from _src.EOS.BrusilovskiyEOSV2 import BrusilovskiyEOS
+from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
+from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from _src.PhaseDiagram.SaturationPressure_den_v import SaturationPointCalculator
 from _src.PhaseDiagram.CriticalProperties_den_v import CriticalPointCalculator
-from ..Utils.FluidPropertiesCalculatorV2 import FluidPropertiesCalculator
-from ..VLE.PhaseEquilibriumNewtonV2 import PhaseEquilibriumNewton
+from ..Utils.FluidPropertiesCalculator import FluidPropertiesCalculator
+from ..VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 from ..Utils.Constants import CONSTANT_R
-from ..Composition.CompositionV2 import Composition
+from ..Composition.Composition import Composition
 
 
 class CVD(PVTExperiment):

@@ -2,7 +2,7 @@ import numpy as np
 import logging
 from typing import Optional, Dict, Any
 from scipy.optimize import minimize_scalar
-from _src.Composition.CompositionV2 import Composition
+from _src.Composition.Composition import Composition
 from _src.PhaseDiagram.BubblePointPressure import BubblePointCalculator
 from _src.PhaseDiagram.DewPressure import DewPointCalculator
 
@@ -177,7 +177,7 @@ class CriticalPointCalculator:
 
 
 if __name__ == "__main__":
-    from _src.Composition.CompositionV2 import Composition
+    from _src.Composition.Composition import Composition
     
     composition_dict = {
         'N2': 0.01, 'C1': 0.70, 'C2': 0.08, 'C3': 0.05,

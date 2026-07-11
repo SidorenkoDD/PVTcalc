@@ -1,8 +1,8 @@
 import numpy as np
 import logging
-from _src.EOS.BrusilovskiyEOSV2 import BrusilovskiyEOS
-from _src.Composition.CompositionV2 import Composition
-from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
+from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
+from _src.Composition.Composition import Composition
+from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
 

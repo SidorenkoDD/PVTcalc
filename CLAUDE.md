@@ -30,51 +30,55 @@ PVTcalc/
 ├── models.json                 # сохранённые "снэпшоты" моделей флюидов (состав + свойства + результаты расчётов)
 ├── test_notebook.ipynb         # ЕДИНСТВЕННЫЙ актуальный интеграционный сценарий / рабочий скретчпад автора
 └── _src/
-    ├── Composition/            # представление состава флюида (текущая версия — CompositionV2.py)
-    ├── CompositionalModel/     # верхнеуровневый фасад Composition+EOS+Flash (CompositionalModelV2.py)
-    ├── EOS/                    # уравнения состояния: Брусиловский (текущий), PR/SRK (legacy)
+    ├── Composition/            # представление состава флюида (Composition.py)
+    ├── CompositionalModel/     # верхнеуровневый фасад Composition+EOS+Flash (CompositionalModel.py)
+    ├── EOS/                    # уравнения состояния: Брусиловский (текущий), PR/SRK (legacy, удалены)
     ├── Experiments/            # стандартные PVT-эксперименты: CCE, DLE, сепарация, CVD
     ├── PhaseDiagram/           # давление насыщения/конденсации, критическая точка, фазовая огибающая
     ├── PhaseStability/         # тест стабильности Михельсена, идентификатор фазы
     ├── PlusComponents/         # корреляции свойств псевдокомпонентов C7+ (по одному файлу на свойство)
-    ├── Utils/                  # константы, БД компонентов (DB_V2.json), EOS-парам. БД, вязкость, persist-слой
+    ├── Utils/                  # константы, БД компонентов (DB.json), EOS-парам. БД, вязкость, persist-слой
     └── VLE/                    # решатель двухфазного равновесия (Flash, Ньютон по фугитивностям)
 ```
 
-Внутри почти каждого подпакета лежат **два поколения файлов** — актуальное и мёртвое legacy. Подробности — в следующем разделе, он самый важный в этом документе.
-
 ## Live vs Legacy Modules (важно!)
 
-Репозиторий проходил через незавершённый рефакторинг/переименование пакета (было что-то вроде `calculations.*`, стало `_src.*`). Часть файлов не была ни обновлена, ни удалена — они **импортировали несуществующий пакет `calculations.*` и не запускались в принципе** (`ImportError` при первом же импорте). **2026-07-11**: 24 таких файла удалены из репозитория (см. историю коммитов) после трассировки импортов по всему проекту, включая ноутбук — ни один не имел живых потребителей. (`_src/Utils/BaseClasses.py` изначально тоже попал под удаление, но был восстановлен в тот же день: его `calculations.*`-импорт был закомментирован, а сам файл реально используется — `JsonDBReader.py` наследует от него `Reader`.) Ниже — актуальная таблица "что живое" по каждой области. **При любой задаче открывай и правь только левую колонку.**
+Репозиторий проходил через незавершённый рефакторинг/переименование пакета (было что-то вроде `calculations.*`, стало `_src.*`). Часть файлов не была ни обновлена, ни удалена — они **импортировали несуществующий пакет `calculations.*` и не запускались в принципе** (`ImportError` при первом же импорте). **2026-07-11**: 24 таких файла удалены из репозитория (см. историю коммитов) после трассировки импортов по всему проекту, включая ноутбук — ни один не имел живых потребителей. (`_src/Utils/BaseClasses.py` изначально тоже попал под удаление, но был восстановлен в тот же день: его `calculations.*`-импорт был закомментирован, а сам файл реально используется — `JsonDBReader.py` наследует от него `Reader`.)
+
+**2026-07-11 (тем же днём)**: после удаления старых версий суффиксы `V2`/`V3`/`2` в именах живых файлов потеряли смысл (различать стало не с чем) и были убраны через `git mv` — с обновлением всех импортов в `_src/` и в `test_notebook.ipynb`. Старое имя `DB.json` (471 строка, legacy-схема) было удалено, а `DB_V2.json` переименован в `DB.json` (961 строка, актуальная схема с `available_components`/`sequence_number`/`carbon_flag`). Класс-имена (`Composition`, `BrusilovskiyEOS`, `TwoPhaseStabilityTest` и т.д.) суффиксов никогда не содержали — менялись только имена файлов и путей импорта. **Если встречаешь в старых заметках/памяти упоминания `CompositionV2.py`, `BrusilovskiyEOSV2.py`, `TwoPhaseStabilityTestV3.py`, `DLE2.py`, `CCE2.py`, `SeparatorTest2.py`, `Export2.py`, `Results2.py`, `PhaseEquilibriumNewtonV2.py`, `FluidPropertiesCalculatorV2.py`, `BRS_EOS_DB_V2.py`, `CompositionalModelV2.py`, `DB_V2.json` — это устаревшие имена, актуальные файлы называются так же, но без суффикса.**
+
+Ниже — актуальная таблица "что живое" по каждой области. **При любой задаче открывай и правь только левую колонку.**
 
 | Область | Канонический (живой) модуль | Не использовать (legacy / сломано) |
 |---|---|---|
-| Состав флюида | `_src/Composition/CompositionV2.py` (`Composition`) | — (старые `Composition.py`/`component.py`/`bips.py` удалены) |
-| БД компонентов | `_src/Utils/DB_V2.json` (через `JsonDBReader`) | `DB.json` (старая схема, без `available_components`/`sequence_number`/`carbon_flag`) |
-| EOS | `_src/EOS/BrusilovskiyEOSV2.py` (`BrusilovskiyEOS`) | `_src/EOS/RootChooser.py` — **сохранён намеренно по решению автора**, хотя импортирует `calculations.*` и не запускается; `MixingRule.py` — не сломан, но не используется (см. категорию "осиротевший код" ниже) |
-| Тест стабильности | `_src/PhaseStability/TwoPhaseStabilityTestV3.py` (`TwoPhaseStabilityTest`) | — (V1/V2/`BasePhaseStability.py` удалены) |
-| Двухфазный флэш | `_src/VLE/Flash.py` + `_src/VLE/PhaseEquilibriumNewtonV2.py` | — (`PhaseEquilibrium.py` удалён) |
-| Модель-фасад | `_src/CompositionalModel/CompositionalModelV2.py` | — (`CompositionalModel.py`/`Variant.py` удалены) |
-| PVT-эксперименты | `DLE2.py`, `CCE2.py`, `SeparatorTest2.py` | — (`DLE.py`/`CCE.py`/`SeparatorTest.py`/`StandardSeparation.py`/`ExperimentsFacade.py` удалены) |
-| Persist-слой | `_src/Utils/Export2.py` (`ModelJSONDB`), `Results2.py` (`ResultStore`) | — (`Export.py`/`Results.py`/`ResultsViewer.py` удалены) |
+| Состав флюида | `_src/Composition/Composition.py` (`Composition`) | — (старые `Composition.py`/`component.py`/`bips.py` первого поколения удалены) |
+| БД компонентов | `_src/Utils/DB.json` (через `JsonDBReader`) | — (старая схема `DB.json` удалена, на её место переименован бывший `DB_V2.json`) |
+| EOS | `_src/EOS/BrusilovskiyEOS.py` (`BrusilovskiyEOS`) | `_src/EOS/RootChooser.py` — **сохранён намеренно по решению автора**, хотя импортирует `calculations.*` и не запускается; `MixingRule.py` — не сломан, но не используется (см. категорию "осиротевший код" ниже) |
+| Тест стабильности | `_src/PhaseStability/TwoPhaseStabilityTest.py` (`TwoPhaseStabilityTest`) | — (старые версии/`BasePhaseStability.py` удалены) |
+| Двухфазный флэш | `_src/VLE/Flash.py` + `_src/VLE/PhaseEquilibriumNewton.py` | — (`PhaseEquilibrium.py` удалён) |
+| Модель-фасад | `_src/CompositionalModel/CompositionalModel.py` | — (`Variant.py` удалён) |
+| PVT-эксперименты | `_src/Experiments/DLE.py`, `CCE.py`, `SeparatorTest.py` | — (`StandardSeparation.py`/`ExperimentsFacade.py` удалены) |
+| Persist-слой | `_src/Utils/Export.py` (`ModelJSONDB`), `_src/Utils/Results.py` (`ResultStore`) | — (`ResultsViewer.py` удалён) |
 
-Единственный оставшийся файл с импортом несуществующего `calculations.*` — **`_src/EOS/RootChooser.py`**, сохранён по явному решению автора (не удалять и не трогать без отдельного запроса). `_src/PhaseDiagram/PhaseDiagram_v4.py` тоже импортирует `calculations.*` и тоже пока не удалялся — вся папка `PhaseDiagram/` намеренно оставлена без изменений, по ней будет отдельная работа (см. [Зона активной разработки](#зона-активной-ещё-не-устоявшейся-разработки)).
+Единственный оставшийся файл с импортом несуществующего `calculations.*` — **`_src/EOS/RootChooser.py`**, сохранён по явному решению автора (не удалять и не трогать без отдельного запроса). `_src/PhaseDiagram/PhaseDiagram_v4.py` тоже импортирует `calculations.*` и тоже пока не удалялся — вся папка `PhaseDiagram/` намеренно оставлена без реструктуризации, по ней будет отдельная работа (см. [Зона активной разработки](#зона-активной-ещё-не-устоявшейся-разработки)); при этом её живые файлы (`BubblePointPressure.py`, `DewPressure.py`, `PhaseEnvelope.py`, `CriticalPoint.py`, `new_methodv2.py`, `PhaseEnvelopeFromStability.py`, `SaturationPressure_den_v.py`, `CriticalProperties_den_v.py`) уже переведены на новые (без-суффиксные) имена импортов и работают.
 
 ### Осиротевший/незавершённый код (не путать с legacy — технически рабочий, но нужно решение автора)
 
-- `_src/Experiments/CVD_den_v.py` — **сейчас сломан**, но не из-за `calculations.*`: импортирует `SaturationPointCalculator` из `SaturationPressure_den_v.py`, а там определён только класс `DewPointCalculator` — такого имени в файле нет → `ImportError`. Нигде не импортируется (в т.ч. не используется в ноутбуке, несмотря на то что CVD как эксперимент нигде больше не реализован). Похоже на недописанную интеграцию, а не на легаси — вероятно, стоит доделать (поправить импорт), а не удалять.
+- `_src/Experiments/CVD_den_v.py` — **сейчас сломан**, но не из-за `calculations.*`: импортирует `SaturationPointCalculator` из `SaturationPressure_den_v.py`, а там определён только класс `DewPointCalculator` — такого имени в файле нет → `ImportError`. Нигде не импортируется (в т.ч. не используется в ноутбуке, несмотря на то что CVD как эксперимент нигде больше не реализован). Похоже на недописанную интеграцию, а не на легаси — вероятно, стоит доделать (поправить импорт), а не удалять. Автор подтвердил: этот модуль понадобится в будущем, пока не трогаем.
 - `_src/PhaseDiagram/CriticalProperties_den_v.py` — рабочий, отдельный алгоритм критической точки (критерий касательной плоскости), но **единственный потребитель — сломанный `CVD_den_v.py`**; в ноутбуке не используется (там используется `CriticalPoint.py::CriticalPointCalculator`). Сейчас фактически недостижим, но исходно рабочий код "Дениса" — решение об удалении/интеграции за автором.
 - `_src/Experiments/BaseExperiment.py` — импортируется только сломанным `CVD_den_v.py`; судьба привязана к решению по нему.
-- `_src/EOS/MixingRule.py` (`MixingRule`, `ClassicMixingRule`, `HuronVidalMixingRule`, `MixingRuleFactory`) — самодостаточный, не сломан, но нигде не используется — похоже на заготовку под будущую поддержку разных правил смешения (сейчас смешение зашито прямо в `BrusilovskiyEOSV2.py`).
-- `_src/Utils/Import.py` (`DBModelImport`) — класс с пустым `__init__`, нигде не вызывается — похоже на начатую и брошенную обвязку импорта моделей.
+- `_src/EOS/MixingRule.py` (`MixingRule`, `ClassicMixingRule`, `HuronVidalMixingRule`, `MixingRuleFactory`) — самодостаточный, не сломан, но нигде не используется — похоже на заготовку под будущую поддержку разных правил смешения (сейчас смешение зашито прямо в `BrusilovskiyEOS.py`).
+- `_src/Utils/Import.py` (`DBModelImport`) — класс с пустым `__init__`, нигде не вызывается. Автор подтвердил: этот модуль точно понадобится — по смыслу должен стать зеркалом `Export.py::ModelJSONDB` (тот пишет `Composition` → `models.json`, этот должен читать `models.json` → `Composition`/список моделей).
 - `_src/PhaseStability/PhaseStabilityPhasade.py` — пустой файл (0 байт), нигде не используется.
 - `_src/Composition/component_tests.py`, `_src/Composition/composition_v2_test.py` — ручные smoke-скрипты с относительными импортами (`from component import Component`), работают только если `_src/Composition/` — рабочая директория; не pytest, не CI. Не легаси в смысле "сломано", но и не часть рабочего пайплайна.
+
+Решение по всей этой категории отложено намеренно — держать в памяти как "недоработанное", не как "мёртвое", до отдельного захода.
 
 ### Зона активной, ещё не устоявшейся разработки
 
 `_src/PhaseDiagram/` — единственная область, где даже среди "живых" файлов есть параллельные конкурирующие реализации одной и той же задачи (расчёт давления насыщения/конденсации/критической точки/фазовой огибающей), ни одна не выбрана окончательно канонической:
 
-- `new_methodv2.py::SaturationPressure` — используется внутри `DLE2`/`CCE2`/`SeparatorTest2` (де-факто самая "используемая" версия).
+- `new_methodv2.py::SaturationPressure` — используется внутри `DLE`/`CCE`/`SeparatorTest` (де-факто самая "используемая" версия). Имя файла осталось с суффиксом `v2` намеренно — эта папка не переименовывалась вместе с остальным проектом.
 - `BubblePointPressure.py::BubblePointCalculator` + `DewPressure.py::DewPointCalculator` — отдельная независимая реализация.
 - `SaturationPressure_den_v.py::DewPointCalculator` — версия коллеги "Дениса", в коде есть открытая пометка "непонятно, откуда брать K-факторы".
 - `CriticalPoint.py::CriticalPointCalculator` (минимизация зазора bubble/dew) vs `CriticalProperties_den_v.py::CriticalPointCalculator` (по критерию касательной плоскости) — два разных алгоритма с одинаковым именем класса.
@@ -87,19 +91,19 @@ PVTcalc/
 Основной живой путь расчёта одного флэша:
 
 ```
-Composition(zi, T_res, eos_name)                    _src/Composition/CompositionV2.py
+Composition(zi, T_res, eos_name)                    _src/Composition/Composition.py
   └─ evaluate_composition_data(...)                  Tc/Pc/ω/Vc/shift/Kw на компонент
        ├─ PlusComponentProperties (для C7+)           _src/PlusComponents/*
-       └─ BRS_EOS_DB_V2 (параметры EOS + BIP)         _src/Utils/BRS_EOS_DB_V2.py
+       └─ BRS_EOS_DB (параметры EOS + BIP)            _src/Utils/BRS_EOS_DB.py
 
 Conditions(p_bar, t_C)                                _src/Utils/Conditions.py  (⚠ баг с 273.14, см. ниже)
 
 Flash(composition, conditions).calculate()            _src/VLE/Flash.py
-  ├─ TwoPhaseStabilityTest(...)                        _src/PhaseStability/TwoPhaseStabilityTestV3.py
-  │     └─ BrusilovskiyEOS(...) — фугитивности          _src/EOS/BrusilovskiyEOSV2.py
-  ├─ если 2 фазы: PhaseEquilibriumNewton(...)           _src/VLE/PhaseEquilibriumNewtonV2.py
+  ├─ TwoPhaseStabilityTest(...)                        _src/PhaseStability/TwoPhaseStabilityTest.py
+  │     └─ BrusilovskiyEOS(...) — фугитивности          _src/EOS/BrusilovskiyEOS.py
+  ├─ если 2 фазы: PhaseEquilibriumNewton(...)           _src/VLE/PhaseEquilibriumNewton.py
   │     Rachford-Rice (Ньютон + бисекция) → уточнение K по фугитивностям (аналитический якобиан)
-  ├─ FluidPropertiesCalculator(...) на каждую фазу       _src/Utils/FluidPropertiesCalculatorV2.py
+  ├─ FluidPropertiesCalculator(...) на каждую фазу       _src/Utils/FluidPropertiesCalculator.py
   │     молярная масса, молярный объём, плотность, Z со сдвигом, вязкость (LBC, _src/Utils/Viscosity.py)
   └─ → FlashResult(vapor: PhaseState, liquid: PhaseState, is_two_phase)   _src/VLE/FlashResult.py
 ```
@@ -109,7 +113,7 @@ Flash(composition, conditions).calculate()            _src/VLE/Flash.py
 Эксперименты — надстройка над `Flash` + `SaturationPressure`, работают по ступеням (давления или пар давление/температура), передавая состав жидкости с предыдущей ступени на следующую через `composition.new_composition(...)`:
 
 ```
-DLE2.DLE.calculate() / SeparatorTest2.SeparatorTest.calculate() / CCE2.CCE.calculate()
+DLE.DLE.calculate() / SeparatorTest.SeparatorTest.calculate() / CCE.CCE.calculate()
   → new_methodv2.SaturationPressure(...) — находим точку насыщения
   → цикл по ступеням: Flash(...) на составе с предыдущей ступени
   → Bo, Rs и т.п. из серии FlashResult
@@ -118,14 +122,14 @@ DLE2.DLE.calculate() / SeparatorTest2.SeparatorTest.calculate() / CCE2.CCE.calcu
 ## Data Model & Databases
 
 - Состав флюида — **не dataclass**, а "колоночная" структура словарей: `composition: Dict[str, float]` (мольные доли) + `composition_data: Dict[property_name, Dict[component_name, value]]`. Объекта отдельного компонента в живом коде нет (старый `component.py::Component` был legacy и удалён при чистке 2026-07-11).
-- Статические свойства чистых компонентов (молярная масса, Tb, критические параметры, ацентрический фактор, shift-параметр, BIP, Kw) — в `_src/Utils/DB_V2.json`, читаются через `_src/Utils/JsonDBReader.py` (наследует абстрактный `Reader` из `_src/Utils/BaseClasses.py` — единственный живой класс в этом файле, остальные его абстракции (`PhaseStabilityTest`, `Calculator`, `CalculationModule`) реальным кодом не используются; сам `JsonDBReader` умеет искать файл по нескольким кандидатным путям — cwd, родительские директории, `$DB_PATH`, каталог `sys.argv[0]`; это позволяет запускать код из разных рабочих директорий, но одновременно скрывает ошибку, если файл не найден там, где ожидалось).
-- Свойства псевдокомпонентов C7+ считаются на лету корреляциями в `_src/PlusComponents/` (по одному файлу на свойство: `CriticalTemperature.py`, `CriticalPressure.py`, `CriticalVolume.py`, `AcentricFactor.py`, `ShiftParameter.py`, `kWatson.py`), диспетчеризуются по строковым ключам метода (например `{'critical_temperature': 'pedersen', 'critical_pressure': 'rizari_daubert', ...}`). Это и есть результат рефакторинга "компоненты разнесены по модулям и в отдельной папке" — единственный источник этой логики, старая версия в `PlusComponentCorrelations.py` (не путать с одноимённым модулем, ныне удалённым из `Composition/`) устарела.
-- `models.json` (корень репозитория) — персистентный "снэпшот"-стор: полный состав + рассчитанные свойства + история результатов флэша для именованных моделей (сейчас — `KRSNL_PVTSIM`/"KRASNOLEN_PVTSIM_COMPARISON" и `PRRZLM_MDT_TEST`). Пишется через `_src/Utils/Export2.py::ModelJSONDB`, читается через `Composition.from_db(path)`. **Важно**: это не независимый эталонный датасет PVTSim — сюда пишутся результаты расчётов самого движка PVTcalc, а название `KRSNL_PVTSIM` означает лишь то, что этот конкретный состав когда-то сверялся с PVTSim во внешнем инструменте, но само численное сравнение в репозитории не зафиксировано.
+- Статические свойства чистых компонентов (молярная масса, Tb, критические параметры, ацентрический фактор, shift-параметр, BIP, Kw) — в `_src/Utils/DB.json`, читаются через `_src/Utils/JsonDBReader.py` (наследует абстрактный `Reader` из `_src/Utils/BaseClasses.py` — единственный живой класс в этом файле, остальные его абстракции (`PhaseStabilityTest`, `Calculator`, `CalculationModule`) реальным кодом не используются; сам `JsonDBReader` умеет искать файл по нескольким кандидатным путям — cwd, родительские директории, `$DB_PATH`, каталог `sys.argv[0]`; это позволяет запускать код из разных рабочих директорий, но одновременно скрывает ошибку, если файл не найден там, где ожидалось).
+- Свойства псевдокомпонентов C7+ считаются на лету корреляциями в `_src/PlusComponents/` (по одному файлу на свойство: `CriticalTemperature.py`, `CriticalPressure.py`, `CriticalVolume.py`, `AcentricFactor.py`, `ShiftParameter.py`, `kWatson.py`), диспетчеризуются по строковым ключам метода (например `{'critical_temperature': 'pedersen', 'critical_pressure': 'rizari_daubert', ...}`). Это и есть результат рефакторинга "компоненты разнесены по модулям и в отдельной папке" — единственный источник этой логики.
+- `models.json` (корень репозитория) — персистентный "снэпшот"-стор: полный состав + рассчитанные свойства + история результатов флэша для именованных моделей (сейчас — `KRSNL_PVTSIM`/"KRASNOLEN_PVTSIM_COMPARISON" и `PRRZLM_MDT_TEST`). Пишется через `_src/Utils/Export.py::ModelJSONDB`, читается через `Composition.from_db(path)`. **Важно**: это не независимый эталонный датасет PVTSim — сюда пишутся результаты расчётов самого движка PVTcalc, а название `KRSNL_PVTSIM` означает лишь то, что этот конкретный состав когда-то сверялся с PVTSim во внешнем инструменте, но само численное сравнение в репозитории не зафиксировано.
 
 ## Conventions
 
-- Комментарии/docstring/сообщения об ошибках — на русском, идентификаторы — на английском. Исключение — `shift_parametr` (транслитерация "parameter"), устойчиво используется в `BrusilovskiyEOSV2.py`, `FluidPropertiesCalculatorV2.py` — не переименовывать без явного запроса пользователя, это breaking change по многим файлам.
-- Суффикс версии (`V2`, `V3`, цифра `2`) означает "более новая, живая версия". При добавлении новой реализации предпочитать **замену** старой (или явную договорённость с пользователем о новой версии), а не создание третьей параллельной ветки без необходимости — в проекте и так несколько зон с 3+ реализациями одной задачи (см. [Зона активной разработки](#зона-активной-ещё-не-устоявшейся-разработки)).
+- Комментарии/docstring/сообщения об ошибках — на русском, идентификаторы — на английском. Исключение — `shift_parametr` (транслитерация "parameter"), устойчиво используется в `BrusilovskiyEOS.py`, `FluidPropertiesCalculator.py` — не переименовывать без явного запроса пользователя, это breaking change по многим файлам.
+- **Суффиксы версий в именах файлов больше не используются** (сняты 2026-07-11, см. [Live vs Legacy Modules](#live-vs-legacy-modules-важно)). При добавлении новой реализации предпочитать **замену** старой (или явную договорённость с пользователем о новой версии/суффиксе), а не создание параллельной ветки без необходимости — в проекте и так есть зона с 3+ реализациями одной задачи (см. [Зона активной разработки](#зона-активной-ещё-не-устоявшейся-разработки)). Папка `PhaseDiagram/` — единственное намеренное исключение, там суффиксы (`new_methodv2.py` и т.п.) сохранены до отдельной работы над этой зоной.
 - `test_notebook.ipynb` — не второстепенный файл, а фактический единственный интеграционный тест и источник истины о том, какой пайплайн реально работает. При изменении любого модуля в `_src/` полезно свериться с соответствующей секцией ноутбука (секции подписаны markdown-заголовками на русском: "Расчет флеша", "Давление насыщения...", "CCE в параллель" и т.д.), что он не сломан логически (формального прогона/CI нет).
 - Единицы измерения: давление в барах, температура на входе в `Conditions(p, t)` подаётся в °C и внутри конвертируется в Кельвины. Один модуль (`PhaseDiagram_v4.py`, legacy) использует МПа вместо бар — при работе с фазовыми диаграммами явно проверять, какие единицы ожидает конкретный модуль.
 - Известные ошибки ниже — **не чинить попутно/молча** при выполнении несвязанных задач; часть из них (например, `273.14`) может быть намеренным историческим компромиссом, лучше подтвердить с пользователем перед правкой.
@@ -135,12 +139,12 @@ DLE2.DLE.calculate() / SeparatorTest2.SeparatorTest.calculate() / CCE2.CCE.calcu
 Зафиксировано при анализе, не исправлено:
 
 - `_src/Utils/Conditions.py:7` — `self.t = t + 273.14` (должно быть `273.15`); большинство остальных модулей проекта используют `273.15`, `StandardConditions` — `293.14`/`1.01325`. Небольшое систематическое смещение температуры во всех расчётах через `Conditions`.
-- `_src/Utils/Results2.py::ResultStore.save()` — открывает файл в режиме `'rb'` и вызывает `pickle.dump(...)` — упадёт с `io.UnsupportedOperation` при первом же вызове (нужно `'wb'`).
-- `_src/Utils/Errors.py::LenthMissMatchError` — опечатка в имени (Length), используется в живом коде (`DLE2.py`, `SeparatorTest2.py`) — переименование потребует правки во всех местах использования.
+- `_src/Utils/Results.py::ResultStore.save()` — открывает файл в режиме `'rb'` и вызывает `pickle.dump(...)` — упадёт с `io.UnsupportedOperation` при первом же вызове (нужно `'wb'`).
+- `_src/Utils/Errors.py::LenthMissMatchError` — опечатка в имени (Length), используется в живом коде (`DLE.py`, `SeparatorTest.py`) — переименование потребует правки во всех местах использования.
 - `_src/PhaseStability/PhaseIdentificator.py::PhaseIndentificator` — опечатка в имени класса (Identificator). Метод `identify_phase()` ничего не возвращает — только `print()` двух эвристик (по приведённому молярному объёму и по сравнению `S_v`/`S_l`). Это черновой/отладочный код, соответствует заметке из git-истории про нестабильности идентификации фазы около критической точки/крикондентермы.
 - `_src/Utils/Constants.py::CONSTANT_R = 8.31` — округлённая газовая постоянная (точное значение 8.314462618...), участвует во всех расчётах Z-фактора, молярного объёма и плотности по всему проекту.
 - `.gitignore` — содержит `/.pyc` (с ведущим слэшем, без маски) вместо `*.pyc`, поэтому не отсекает `.pyc`-файлы внутри `__pycache__/`-директорий по маске (только директорию `__pycache__` целиком, что частично работает, но само правило для `.pyc` сформулировано некорректно); `.DS_Store` не игнорируется вовсе (два файла `.DS_Store` уже присутствуют в дереве — в корне и в `_src/PhaseDiagram/`).
 
 ## Recent Development Focus
 
-По git log на момент написания (ветка `correct_calc`): последние коммиты сосредоточены на (1) идентификации фазы в однофазном состоянии выше крикондентермы и вблизи критической точки — область ещё нестабильна, и (2) разнесении корреляций свойств псевдокомпонентов C7+ по отдельным модулям в `_src/PlusComponents/`. Это следует держать в уме как текущий фокус активной разработки при планировании новых задач.
+По git log на момент написания (ветка `correct_calc`): последние коммиты сосредоточены на (1) идентификации фазы в однофазном состоянии выше крикондентермы и вблизи критической точки — область ещё нестабильна, и (2) разнесении корреляций свойств псевдокомпонентов C7+ по отдельным модулям в `_src/PlusComponents/`. 2026-07-11 добавлена ветка `cleanup/remove-dead-legacy-modules`: удалена мёртвая `calculations.*`-легаси и сняты избыточные суффиксы версий (`V2`/`V3`/`2`) в именах живых файлов (кроме папки `PhaseDiagram/`, оставленной под отдельную работу). Это следует держать в уме как текущий фокус активной разработки при планировании новых задач.

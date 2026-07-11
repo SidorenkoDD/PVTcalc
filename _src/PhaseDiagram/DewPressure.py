@@ -1,7 +1,7 @@
 import numpy as np
 import logging
-from _src.EOS.BrusilovskiyEOSV2 import BrusilovskiyEOS
-from _src.Composition.CompositionV2 import Composition
+from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
+from _src.Composition.Composition import Composition
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')

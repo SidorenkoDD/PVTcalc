@@ -3,8 +3,8 @@ module to import composition and create dict
 '''
 from abc import ABC, abstractmethod
 from _src.Utils.Errors import InvalidExcelComponentType, InvalidExcelValueType
-from _src.Composition.CompositionV2 import Composition
-from _src.CompositionalModel.CompositionalModelV2 import CompositionalModel
+from _src.Composition.Composition import Composition
+from _src.CompositionalModel.CompositionalModel import CompositionalModel
 import pandas as pd
 
 class CompositionLoader(ABC):

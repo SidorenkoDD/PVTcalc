@@ -1,8 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
-from _src.Composition.CompositionV2 import Composition
-from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
+from _src.Composition.Composition import Composition
+from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 
 class PhaseEnvelopeFromStability:  # Исправлена опечатка в названии
     def __init__(self, composition: Composition,

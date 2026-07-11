@@ -2,8 +2,8 @@ import numpy as np
 import logging
 import pandas as pd
 import matplotlib.pyplot as plt
-from _src.Composition.CompositionV2 import Composition
-from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
+from _src.Composition.Composition import Composition
+from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s | %(name)s | %(levelname)s | %(message)s')

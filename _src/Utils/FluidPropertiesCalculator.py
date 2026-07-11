@@ -1,5 +1,5 @@
 from _src.Utils.Constants import CONSTANT_R
-from _src.EOS.BrusilovskiyEOSV2 import BrusilovskiyEOS
+from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from _src.Utils.Viscosity import ViscosityFactory
 
 

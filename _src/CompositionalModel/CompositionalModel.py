@@ -1,7 +1,7 @@
-from _src.Composition.CompositionV2 import Composition
-from _src.PhaseStability.TwoPhaseStabilityTestV3 import TwoPhaseStabilityTest
-from _src.VLE.PhaseEquilibriumNewtonV2 import PhaseEquilibriumNewton
-from _src.Utils.Results2 import ResultStore
+from _src.Composition.Composition import Composition
+from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
+from _src.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
+from _src.Utils.Results import ResultStore
 
 
 class CompositionalModel:
