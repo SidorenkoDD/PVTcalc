@@ -1,10 +1,10 @@
 import math
 import numpy as np
 
-from ..Composition.Composition import Composition
-from .BaseEOS import EOS
-from ..Utils.Constants import CONSTANT_R
-from ..Utils.Cardano import cubic_roots_cardano
+from _src.Composition.Composition import Composition
+from _src.EOS.BaseEOS import EOS
+from _src.Utils.Constants import CONSTANT_R
+from _src.Utils.Cardano import cubic_roots_cardano
 
 
 class BrusilovskiyEOS(EOS):

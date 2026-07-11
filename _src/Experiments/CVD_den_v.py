@@ -5,10 +5,10 @@ from _src.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from _src.PhaseDiagram.SaturationPressure_den_v import SaturationPointCalculator
 from _src.PhaseDiagram.CriticalProperties_den_v import CriticalPointCalculator
-from ..Utils.FluidPropertiesCalculator import FluidPropertiesCalculator
-from ..VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
-from ..Utils.Constants import CONSTANT_R
-from ..Composition.Composition import Composition
+from _src.Utils.FluidPropertiesCalculator import FluidPropertiesCalculator
+from _src.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
+from _src.Utils.Constants import CONSTANT_R
+from _src.Composition.Composition import Composition
 
 
 class CVD(PVTExperiment):

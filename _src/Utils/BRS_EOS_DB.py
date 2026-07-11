@@ -1,5 +1,5 @@
 import math
-from .Constants import CONSTANT_R
+from _src.Utils.Constants import CONSTANT_R
 
 """
 Значения sigma_c, Z_c, psi для компонент природных систем до C5+ для уравнения Брусиловского

@@ -1,8 +1,8 @@
 import logging
 import numpy as np
 
-from ..EOS.BrusilovskiyEOS import BrusilovskiyEOS
-from ..Composition.Composition import Composition
+from _src.EOS.BrusilovskiyEOS import BrusilovskiyEOS
+from _src.Composition.Composition import Composition
 
 log = logging.getLogger('MBALPVT.PVTDataModel.CritProps')
 
