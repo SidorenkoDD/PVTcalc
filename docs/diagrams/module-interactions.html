@@ -405,7 +405,7 @@
 <div class="titleblock">
   <p class="eyebrow">PVTcalc · справочная документация</p>
   <h1>Диаграммы взаимодействия модулей</h1>
-  <p class="dek">Четыре листа: слоистая карта пакетов <code>_src/</code>, пошаговый разбор одного флэша, оркестрация PVT-эксперимента по ступеням и карта дублирующихся реализаций в зоне <code>PhaseDiagram/</code>.</p>
+  <p class="dek">Четыре листа: слоистая карта пакетов <code>calc_core/</code>, пошаговый разбор одного флэша, оркестрация PVT-эксперимента по ступеням и карта дублирующихся реализаций в зоне <code>PhaseDiagram/</code>.</p>
   <div class="meta-row">
     <span><strong>Ветка:</strong> cleanup/remove-dead-legacy-modules</span>
     <span><strong>Источник:</strong> CLAUDE.md + трассировка импортов</span>
@@ -422,7 +422,7 @@
 
 <nav class="index">
   <ol>
-    <li><a href="#sheet-1"><span class="num">01</span><span class="label">Слои пакетов <code>_src/</code></span></a></li>
+    <li><a href="#sheet-1"><span class="num">01</span><span class="label">Слои пакетов <code>calc_core/</code></span></a></li>
     <li><a href="#sheet-2"><span class="num">02</span><span class="label">Один флэш: <code>Flash.calculate()</code></span></a></li>
     <li><a href="#sheet-3"><span class="num">03</span><span class="label">Эксперимент по ступеням (DLE/CCE/Separator)</span></a></li>
     <li><a href="#sheet-4"><span class="num">04</span><span class="label">Зона дублирования: <code>PhaseDiagram/</code></span></a></li>
@@ -432,7 +432,7 @@
 <!-- ===================== SHEET 1 ===================== -->
 <section class="sheet" id="sheet-1">
   <div class="sheet-head">
-    <div><span class="num">ЛИСТ 01</span><h2>Слои пакетов _src/</h2></div>
+    <div><span class="num">ЛИСТ 01</span><h2>Слои пакетов calc_core/</h2></div>
     <p class="sheet-note">Снизу вверх: каждый слой использует только нижележащие. Стрелки между полосами — направление зависимости.</p>
   </div>
   <div class="sheet-body">
@@ -526,7 +526,7 @@
       <div class="connector"><span class="arrow">↓</span><span class="payload">composition, conditions</span></div>
       <div class="step">
         <div class="title">Flash.calculate()</div>
-        <div class="sub"><code>_src/VLE/Flash.py</code></div>
+        <div class="sub"><code>calc_core/VLE/Flash.py</code></div>
       </div>
       <div class="connector"><span class="arrow">↓</span><span class="payload">composition, P, T</span></div>
       <div class="step">
@@ -655,7 +655,7 @@
         <span class="status-chip notebook">только в ноутбуке</span>
         <span class="file">test_notebook.ipynb, ячейки «From VBA» / «Parallel»</span>
         <span class="class">CriticalPointCalculator / PhaseDiagramCalculator</span>
-        <p class="note">Ещё 2 реализации существуют только внутри ячеек, не вынесены в _src/.</p>
+        <p class="note">Ещё 2 реализации существуют только внутри ячеек, не вынесены в calc_core/.</p>
       </div>
     </div>
     <div class="dup-callout">
@@ -665,7 +665,7 @@
 </section>
 
 <footer class="colophon">
-  PVTcalc / _src — построено по CLAUDE.md и трассировке импортов, 2026-07-11
+  PVTcalc / calc_core — построено по CLAUDE.md и трассировке импортов, 2026-07-11
 </footer>
 
 </body>

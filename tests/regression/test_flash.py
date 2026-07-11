@@ -9,8 +9,8 @@
 
 import pytest
 
-from _src.Utils.Conditions import Conditions
-from _src.VLE.Flash import Flash
+from calc_core.Utils.Conditions import Conditions
+from calc_core.VLE.Flash import Flash
 
 REL = 1e-6
 

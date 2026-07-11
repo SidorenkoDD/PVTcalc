@@ -2,7 +2,7 @@
 
 import pytest
 
-from _src.Composition.Composition import Composition
+from calc_core.Composition.Composition import Composition
 
 MODELS_JSON_PATH = "models.json"
 

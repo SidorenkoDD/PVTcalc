@@ -25,14 +25,11 @@ notebook = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-# Тестовая сборка: пакуем _src как есть (без переименования в pvtcalc —
-# это отдельное решение, см. обсуждение с автором). Импортируемое имя
-# после `pip install` остаётся _src.*, распространяемое имя — pvtcalc.
 [tool.setuptools.packages.find]
-include = ["_src*"]
+include = ["calc_core*"]
 
 [tool.setuptools.package-data]
-"_src.Utils" = ["DB.json"]
+"calc_core.Utils" = ["DB.json"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
