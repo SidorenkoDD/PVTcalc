@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PVTcalc — Диаграммы взаимодействия модулей</title>
+<style>
+  :root {
+    --paper: #eef1f4;
+    --paper-raised: #ffffff;
+    --ink: #1b222b;
+    --ink-dim: #566072;
+    --ink-faint: #7d8798;
+    --line: #ccd3da;
+    --line-strong: #a9b2bc;
+    --accent: #a85a1e;
+    --accent-ink: #ffffff;
+    --live: #1f7a5c;
+    --live-bg: #e3f2ec;
+    --warn: #ad4429;
+    --warn-bg: #fbe8e2;
+    --entry: #3a5a8c;
+    --entry-bg: #e6ecf6;
+    --shadow: 0 1px 0 rgba(27,34,43,0.05);
+    --font-display: "Archivo Narrow", "Roboto Condensed", "Arial Narrow", sans-serif;
+    --font-body: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Roboto Mono", monospace;
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #12161c;
+    --paper-raised: #171d25;
+    --ink: #e7ebef;
+    --ink-dim: #9aa7b6;
+    --ink-faint: #6d7889;
+    --line: #2a323d;
+    --line-strong: #3c4756;
+    --accent: #dd9350;
+    --accent-ink: #171106;
+    --live: #4bb894;
+    --live-bg: #14261f;
+    --warn: #e2846a;
+    --warn-bg: #2c1a15;
+    --entry: #85a6d9;
+    --entry-bg: #17202f;
+    --shadow: 0 1px 0 rgba(0,0,0,0.4);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #12161c;
+      --paper-raised: #171d25;
+      --ink: #e7ebef;
+      --ink-dim: #9aa7b6;
+      --ink-faint: #6d7889;
+      --line: #2a323d;
+      --line-strong: #3c4756;
+      --accent: #dd9350;
+      --accent-ink: #171106;
+      --live: #4bb894;
+      --live-bg: #14261f;
+      --warn: #e2846a;
+      --warn-bg: #2c1a15;
+      --entry: #85a6d9;
+      --entry-bg: #17202f;
+      --shadow: 0 1px 0 rgba(0,0,0,0.4);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    line-height: 1.5;
+    padding: 0 0 5rem;
+  }
+
+  a { color: var(--entry); }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  code, .mono { font-family: var(--font-mono); }
+
+  /* ---------- title block ---------- */
+  .titleblock {
+    max-width: 76rem;
+    margin: 0 auto;
+    padding: 3.2rem 1.75rem 1.75rem;
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 0.6rem;
+  }
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(1.9rem, 4vw, 2.75rem);
+    letter-spacing: 0.01em;
+    margin: 0 0 0.55rem;
+    text-wrap: balance;
+  }
+  .dek {
+    max-width: 42rem;
+    color: var(--ink-dim);
+    font-size: 1.02rem;
+    margin: 0 0 1.6rem;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.6rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    border-top: 1px solid var(--line);
+    padding-top: 0.9rem;
+  }
+  .meta-row strong { color: var(--ink-dim); font-weight: 600; }
+
+  /* ---------- legend ---------- */
+  .legend {
+    max-width: 76rem;
+    margin: 0 auto;
+    padding: 0 1.75rem 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.4rem;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.82rem;
+    color: var(--ink-dim);
+  }
+  .swatch {
+    width: 0.65rem;
+    height: 0.65rem;
+    flex: none;
+    border: 1px solid var(--line-strong);
+  }
+  .swatch.live { background: var(--live); border-color: var(--live); }
+  .swatch.warn { background: var(--warn); border-color: var(--warn); }
+  .swatch.entry { background: var(--entry); border-color: var(--entry); }
+  .swatch.plain { background: var(--paper-raised); }
+
+  /* ---------- sheet index ---------- */
+  .index {
+    max-width: 76rem;
+    margin: 1.4rem auto 0;
+    padding: 0 1.75rem;
+  }
+  .index ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 0.6rem;
+    border-top: 1px solid var(--line);
+    padding-top: 0.9rem;
+  }
+  .index a {
+    display: flex;
+    gap: 0.7rem;
+    align-items: baseline;
+    text-decoration: none;
+    color: var(--ink);
+    padding: 0.5rem 0.1rem;
+    border-bottom: 1px solid transparent;
+  }
+  .index a:hover { border-bottom-color: var(--line-strong); }
+  .index .num {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    font-size: 0.85rem;
+  }
+  .index .label { font-size: 0.92rem; color: var(--ink-dim); }
+
+  /* ---------- sheet ---------- */
+  .sheet {
+    max-width: 76rem;
+    margin: 2.6rem auto 0;
+    padding: 0 1.75rem;
+    scroll-margin-top: 1.5rem;
+  }
+  .sheet-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    border-bottom: 2px solid var(--ink);
+    padding-bottom: 0.6rem;
+    margin-bottom: 1.4rem;
+  }
+  .sheet-head .num {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    color: var(--accent);
+    letter-spacing: 0.06em;
+  }
+  .sheet-head h2 {
+    font-family: var(--font-display);
+    font-size: clamp(1.3rem, 2.6vw, 1.65rem);
+    margin: 0.15rem 0 0;
+    font-weight: 700;
+  }
+  .sheet-note {
+    max-width: 34rem;
+    font-size: 0.88rem;
+    color: var(--ink-dim);
+    text-align: right;
+  }
+  .sheet-body {
+    background: var(--paper-raised);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow);
+    padding: 1.8rem;
+  }
+
+  /* ---------- layered architecture (sheet 1) ---------- */
+  .layers { display: flex; flex-direction: column; gap: 0; }
+  .layer {
+    display: grid;
+    grid-template-columns: 9.5rem 1fr;
+    gap: 1.1rem;
+    padding: 1.05rem 0;
+    border-top: 1px dashed var(--line);
+  }
+  .layer:first-child { border-top: none; }
+  .layer-label {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--ink-faint);
+    letter-spacing: 0.03em;
+    padding-top: 0.35rem;
+  }
+  .layer-label .name {
+    display: block;
+    font-family: var(--font-body);
+    font-size: 0.92rem;
+    color: var(--ink);
+    font-weight: 600;
+    letter-spacing: 0;
+    margin-top: 0.2rem;
+  }
+  .node-row { display: flex; flex-wrap: wrap; gap: 0.6rem; }
+  .node {
+    border: 1px solid var(--line-strong);
+    background: var(--paper);
+    padding: 0.5rem 0.7rem;
+    min-width: 11rem;
+    flex: 1 1 11rem;
+  }
+  .node.live { border-left: 3px solid var(--live); }
+  .node.warn { border-left: 3px solid var(--warn); }
+  .node.entry { border-left: 3px solid var(--entry); }
+  .node .file {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--ink);
+    word-break: break-word;
+  }
+  .node .desc {
+    display: block;
+    font-size: 0.78rem;
+    color: var(--ink-dim);
+    margin-top: 0.2rem;
+  }
+  .layer-arrow {
+    text-align: center;
+    font-family: var(--font-mono);
+    color: var(--ink-faint);
+    font-size: 0.75rem;
+    padding: 0.15rem 0 0.15rem 9.5rem;
+  }
+
+  /* ---------- sequence flow (sheets 2 & 3) ---------- */
+  .flow { display: flex; flex-direction: column; align-items: stretch; gap: 0; max-width: 42rem; margin: 0 auto; }
+  .step {
+    border: 1px solid var(--line-strong);
+    background: var(--paper);
+    padding: 0.9rem 1.1rem;
+  }
+  .step .title { font-weight: 600; font-size: 0.94rem; }
+  .step .sub { font-size: 0.82rem; color: var(--ink-dim); margin-top: 0.25rem; }
+  .step code { font-size: 0.82rem; }
+  .connector {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0 0.5rem 1.4rem;
+  }
+  .connector .arrow {
+    color: var(--ink-faint);
+    font-size: 1rem;
+    line-height: 1;
+  }
+  .connector .payload {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    padding: 0.15rem 0.5rem;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .branch-wrap {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.4rem;
+    max-width: 46rem;
+    margin: 0.4rem auto 0;
+  }
+  .branch-wrap .flow { max-width: none; margin: 0; }
+  .branch-head {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding-bottom: 0.5rem;
+  }
+  .branch-head.stable { color: var(--warn); }
+  .branch-head.unstable { color: var(--live); }
+
+  /* ---------- duplication zone (sheet 4) ---------- */
+  .dup-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15.5rem, 1fr));
+    gap: 0.9rem;
+  }
+  .dup-card {
+    border: 1px solid var(--line-strong);
+    background: var(--paper);
+    padding: 0.9rem 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .dup-card .file { font-family: var(--font-mono); font-size: 0.84rem; font-weight: 600; }
+  .dup-card .class { font-family: var(--font-mono); font-size: 0.76rem; color: var(--ink-dim); }
+  .status-chip {
+    align-self: flex-start;
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    letter-spacing: 0.02em;
+    padding: 0.18rem 0.5rem;
+    border: 1px solid;
+  }
+  .status-chip.used { color: var(--live); border-color: var(--live); background: var(--live-bg); }
+  .status-chip.alt { color: var(--entry); border-color: var(--entry); background: var(--entry-bg); }
+  .status-chip.orphan { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+  .status-chip.notebook { color: var(--ink-dim); border-color: var(--line-strong); }
+  .dup-card .note { font-size: 0.8rem; color: var(--ink-dim); }
+  .dup-callout {
+    margin-top: 1.2rem;
+    border-left: 3px solid var(--warn);
+    background: var(--warn-bg);
+    padding: 0.8rem 1rem;
+    font-size: 0.86rem;
+    color: var(--ink);
+  }
+
+  /* ---------- shared bits ---------- */
+  .sheet-foot {
+    margin-top: 1.4rem;
+    font-size: 0.82rem;
+    color: var(--ink-faint);
+  }
+  footer.colophon {
+    max-width: 76rem;
+    margin: 3rem auto 0;
+    padding: 1.2rem 1.75rem 0;
+    border-top: 1px solid var(--line);
+    font-size: 0.78rem;
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+  }
+
+  @media (max-width: 40rem) {
+    .layer { grid-template-columns: 1fr; gap: 0.4rem; }
+    .layer-arrow { padding-left: 0; }
+    .branch-wrap { grid-template-columns: 1fr; }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .node, .dup-card, .step { transition: border-color 0.15s ease; }
+    .node:hover, .dup-card:hover { border-color: var(--ink-dim); }
+  }
+</style>
+</head>
+<body>
+
+<div class="titleblock">
+  <p class="eyebrow">PVTcalc · справочная документация</p>
+  <h1>Диаграммы взаимодействия модулей</h1>
+  <p class="dek">Четыре листа: слоистая карта пакетов <code>_src/</code>, пошаговый разбор одного флэша, оркестрация PVT-эксперимента по ступеням и карта дублирующихся реализаций в зоне <code>PhaseDiagram/</code>.</p>
+  <div class="meta-row">
+    <span><strong>Ветка:</strong> cleanup/remove-dead-legacy-modules</span>
+    <span><strong>Источник:</strong> CLAUDE.md + трассировка импортов</span>
+    <span><strong>Дата:</strong> 2026-07-11</span>
+  </div>
+</div>
+
+<div class="legend">
+  <span class="legend-item"><span class="swatch live"></span>живой модуль</span>
+  <span class="legend-item"><span class="swatch warn"></span>сохранён намеренно / зона дублирования</span>
+  <span class="legend-item"><span class="swatch entry"></span>точка входа / персистентность</span>
+  <span class="legend-item"><span class="swatch plain"></span>обычный внутренний модуль</span>
+</div>
+
+<nav class="index">
+  <ol>
+    <li><a href="#sheet-1"><span class="num">01</span><span class="label">Слои пакетов <code>_src/</code></span></a></li>
+    <li><a href="#sheet-2"><span class="num">02</span><span class="label">Один флэш: <code>Flash.calculate()</code></span></a></li>
+    <li><a href="#sheet-3"><span class="num">03</span><span class="label">Эксперимент по ступеням (DLE/CCE/Separator)</span></a></li>
+    <li><a href="#sheet-4"><span class="num">04</span><span class="label">Зона дублирования: <code>PhaseDiagram/</code></span></a></li>
+  </ol>
+</nav>
+
+<!-- ===================== SHEET 1 ===================== -->
+<section class="sheet" id="sheet-1">
+  <div class="sheet-head">
+    <div><span class="num">ЛИСТ 01</span><h2>Слои пакетов _src/</h2></div>
+    <p class="sheet-note">Снизу вверх: каждый слой использует только нижележащие. Стрелки между полосами — направление зависимости.</p>
+  </div>
+  <div class="sheet-body">
+    <div class="layers">
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 7<span class="name">Точка входа</span></div>
+        <div class="node-row">
+          <div class="node entry"><span class="file">test_notebook.ipynb</span><span class="desc">единственный интеграционный сценарий</span></div>
+          <div class="node entry"><span class="file">Utils/Export.py</span><span class="desc">ModelJSONDB → models.json</span></div>
+          <div class="node warn"><span class="file">Utils/Import.py</span><span class="desc">DBModelImport, заготовка — понадобится</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ использует</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 6<span class="name">Оркестрация сценариев</span></div>
+        <div class="node-row">
+          <div class="node live"><span class="file">CompositionalModel/CompositionalModel.py</span><span class="desc">фасад .flash(P, T)</span></div>
+          <div class="node live"><span class="file">Experiments/{DLE,CCE,SeparatorTest}.py</span><span class="desc">многоступенчатые PVT-эксперименты</span></div>
+          <div class="node warn"><span class="file">PhaseDiagram/*</span><span class="desc">Psat/Pdew/крит.точка — см. Лист 04</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ использует</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 5<span class="name">Равновесный движок</span></div>
+        <div class="node-row">
+          <div class="node live"><span class="file">VLE/Flash.py</span><span class="desc">оркестратор одного флэша → FlashResult</span></div>
+          <div class="node live"><span class="file">VLE/PhaseEquilibriumNewton.py</span><span class="desc">Rachford-Rice + Ньютон по фугитивностям</span></div>
+          <div class="node live"><span class="file">PhaseStability/TwoPhaseStabilityTest.py</span><span class="desc">тест Михельсена</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ использует</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 4<span class="name">EOS и свойства фаз</span></div>
+        <div class="node-row">
+          <div class="node live"><span class="file">EOS/BrusilovskiyEOS.py</span><span class="desc">фугитивности, Z-фактор, якобиан</span></div>
+          <div class="node live"><span class="file">Utils/FluidPropertiesCalculator.py</span><span class="desc">молярный объём/плотность/вязкость (LBC)</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ использует</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 3<span class="name">Состав флюида</span></div>
+        <div class="node-row">
+          <div class="node live"><span class="file">Composition/Composition.py</span><span class="desc">Composition: zi + composition_data</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ использует</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 2<span class="name">Данные и корреляции</span></div>
+        <div class="node-row">
+          <div class="node"><span class="file">Utils/JsonDBReader.py</span><span class="desc">+ BaseClasses.Reader → DB.json</span></div>
+          <div class="node"><span class="file">Utils/BRS_EOS_DB.py</span><span class="desc">EOS-параметры компонентов + BIP</span></div>
+          <div class="node"><span class="file">PlusComponents/*</span><span class="desc">6 корреляций свойств C7+</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ использует</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 1<span class="name">Фундамент</span></div>
+        <div class="node-row">
+          <div class="node"><span class="file">Utils/Constants.py</span><span class="desc">CONSTANT_R, допуски сходимости</span></div>
+          <div class="node"><span class="file">Utils/Errors.py</span><span class="desc">иерархия исключений</span></div>
+          <div class="node"><span class="file">Utils/Cardano.py</span><span class="desc">решатель кубического уравнения</span></div>
+          <div class="node"><span class="file">Utils/Conditions.py</span><span class="desc">P/T условия ⚠ баг 273.14</span></div>
+          <div class="node"><span class="file">EOS/BaseEOS.py</span><span class="desc">EOSType, абстрактный EOS</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  <p class="sheet-foot">Не показаны на диаграмме: 25 удалённых legacy-файлов (calculations.*) и намеренно сохранённый нерабочий <code>EOS/RootChooser.py</code> — см. CLAUDE.md, раздел «Live vs Legacy».</p>
+</section>
+
+<!-- ===================== SHEET 2 ===================== -->
+<section class="sheet" id="sheet-2">
+  <div class="sheet-head">
+    <div><span class="num">ЛИСТ 02</span><h2>Один флэш: Flash.calculate()</h2></div>
+    <p class="sheet-note">Что передаётся между модулями внутри одного вызова — от состава и условий до FlashResult.</p>
+  </div>
+  <div class="sheet-body">
+    <div class="flow">
+      <div class="step">
+        <div class="title">Composition(zi, T_res, eos_name) + Conditions(p_bar, t_C)</div>
+        <div class="sub">вход: мольные доли, давление, температура</div>
+      </div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, conditions</span></div>
+      <div class="step">
+        <div class="title">Flash.calculate()</div>
+        <div class="sub"><code>_src/VLE/Flash.py</code></div>
+      </div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, P, T</span></div>
+      <div class="step">
+        <div class="title">TwoPhaseStabilityTest.calculate_phase_stability()</div>
+        <div class="sub">внутри — BrusilovskiyEOS считает фугитивности пробных фаз (Wilson K-старт)</div>
+      </div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">stable: bool, k_values, S_v, S_l</span></div>
+    </div>
+
+    <div class="branch-wrap">
+      <div>
+        <div class="branch-head unstable">если unstable → 2 фазы</div>
+        <div class="flow">
+          <div class="step">
+            <div class="title">PhaseEquilibriumNewton.find_solve_loop()</div>
+            <div class="sub">Rachford-Rice (Fv) → Ньютон по ln(fugacity)</div>
+          </div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">xi_l, yi_v, Fv</span></div>
+          <div class="step">
+            <div class="title">FluidPropertiesCalculator ×2</div>
+            <div class="sub">по жидкости и по пару отдельно</div>
+          </div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">M, Vm, ρ, Z, μ (LBC)</span></div>
+          <div class="step">
+            <div class="title">FlashResult(vapor, liquid, is_two_phase=True)</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="branch-head stable">если stable → 1 фаза («ТРЮК»)</div>
+        <div class="flow">
+          <div class="step">
+            <div class="title">весь состав → жидкость</div>
+            <div class="sub">vapor.mole_fraction = 0.0, без проверки газ/жидкость</div>
+          </div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">composition.composition</span></div>
+          <div class="step">
+            <div class="title">FluidPropertiesCalculator ×1</div>
+          </div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">M, Vm, ρ, Z, μ</span></div>
+          <div class="step">
+            <div class="title">FlashResult(is_two_phase=False)</div>
+            <div class="sub">PhaseIdentificator мог бы уточнить фазу, но не интегрирован в Flash</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SHEET 3 ===================== -->
+<section class="sheet" id="sheet-3">
+  <div class="sheet-head">
+    <div><span class="num">ЛИСТ 03</span><h2>Эксперимент по ступеням</h2></div>
+    <p class="sheet-note">DLE / CCE / SeparatorTest — общий скелет, состав жидкости переходит со ступени на ступень.</p>
+  </div>
+  <div class="sheet-body">
+    <div class="flow">
+      <div class="step">
+        <div class="title">Composition (пластовый) + список ступеней</div>
+        <div class="sub">давления (DLE/CCE) или пары P/T (SeparatorTest)</div>
+      </div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, T</span></div>
+      <div class="step">
+        <div class="title">SaturationPressure.sp_convergence_loop()</div>
+        <div class="sub"><code>PhaseDiagram/new_methodv2.py</code> — напрямую через TwoPhaseStabilityTest, минуя Flash</div>
+      </div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">P_sat</span></div>
+      <div class="step">
+        <div class="title">цикл по ступеням i = 1…N</div>
+        <div class="sub">Flash(composition_i, conditions_i).calculate() → FlashResult_i</div>
+      </div>
+      <div class="connector"><span class="arrow">↻</span><span class="payload">composition.new_composition(xi_l)</span></div>
+      <div class="step">
+        <div class="title">жидкость со ступени i → состав ступени i+1</div>
+        <div class="sub">пар со ступени считается «ушедшим», не участвует дальше</div>
+      </div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">[FlashResult_1 … FlashResult_N]</span></div>
+      <div class="step">
+        <div class="title">_vectorize_dle_results(...)</div>
+        <div class="sub">Bo, Rs и т.п. — код дословно продублирован между DLE.py и SeparatorTest.py</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== SHEET 4 ===================== -->
+<section class="sheet" id="sheet-4">
+  <div class="sheet-head">
+    <div><span class="num">ЛИСТ 04</span><h2>Зона дублирования: PhaseDiagram/</h2></div>
+    <p class="sheet-note">Единственная область с 4–5 параллельными реализациями одной задачи. Ни одна не канонична.</p>
+  </div>
+  <div class="sheet-body">
+    <div class="dup-grid">
+      <div class="dup-card">
+        <span class="status-chip used">используется в проде</span>
+        <span class="file">new_methodv2.py</span>
+        <span class="class">SaturationPressure</span>
+        <p class="note">Вызывается напрямую из DLE / CCE / SeparatorTest — де-факто основная версия.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip alt">независимая реализация</span>
+        <span class="file">BubblePointPressure.py + DewPressure.py</span>
+        <span class="class">BubblePointCalculator / DewPointCalculator</span>
+        <p class="note">Используется в test_notebook.ipynb, но не в экспериментах.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip alt">версия Дениса</span>
+        <span class="file">SaturationPressure_den_v.py</span>
+        <span class="class">DewPointCalculator</span>
+        <p class="note">В коде открытая пометка: «непонятно, откуда брать K-факторы».</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip used">используется в проде</span>
+        <span class="file">CriticalPoint.py</span>
+        <span class="class">CriticalPointCalculator</span>
+        <p class="note">Критерий: минимизация зазора между bubble- и dew-кривой.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip orphan">осиротевший</span>
+        <span class="file">CriticalProperties_den_v.py</span>
+        <span class="class">CriticalPointCalculator</span>
+        <p class="note">Тот же класс, другой критерий (касательная плоскость). Единственный потребитель — сломанный CVD_den_v.py.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip notebook">только в ноутбуке</span>
+        <span class="file">test_notebook.ipynb, ячейки «From VBA» / «Parallel»</span>
+        <span class="class">CriticalPointCalculator / PhaseDiagramCalculator</span>
+        <p class="note">Ещё 2 реализации существуют только внутри ячеек, не вынесены в _src/.</p>
+      </div>
+    </div>
+    <div class="dup-callout">
+      При любой задаче, связанной с давлением насыщения, конденсации, критической точкой или фазовой огибающей — <strong>уточнять у пользователя, с какой реализацией работать</strong>, не выбирать самостоятельно.
+    </div>
+  </div>
+</section>
+
+<footer class="colophon">
+  PVTcalc / _src — построено по CLAUDE.md и трассировке импортов, 2026-07-11
+</footer>
+
+</body>
+</html>

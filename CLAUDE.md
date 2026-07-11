@@ -88,6 +88,8 @@ PVTcalc/
 
 ## Calculation Flow
 
+> Визуальная версия того, что описано ниже текстом (плюс слоистая карта пакетов `_src/` и карта зоны дублирования `PhaseDiagram/`) — см. [`docs/diagrams/module-interactions.html`](docs/diagrams/module-interactions.html) (откройте в браузере).
+
 Основной живой путь расчёта одного флэша:
 
 ```
