@@ -545,7 +545,7 @@ class PhaseEnvelopeNewton:
 
         return pd.DataFrame(self.results)
 
-    def _bootstrap_and_march_upper_dew(self, max_cycles: int = 1) -> None:
+    def _bootstrap_and_march_upper_dew(self, max_islands: int = 1) -> None:
         """
         Достраивает верхнюю ветку (`Bubble_bar`/`Dew_upper_bar`) за точкой, где
         основной march остановился — тем же приёмом, что и нижняя ретроградная
@@ -553,23 +553,37 @@ class PhaseEnvelopeNewton:
         `SaturationPointSSM.find_bubble_point` (несмотря на имя — как и в самом
         SSM, физический тип найденной точки может оказаться `'dew'` — обычный
         случай здесь, раз мы уже за критической точкой состава), потом снова
-        чистый Ньютон.
+        чистый Ньютон. Кандидат принимается, только если Ньютон, стартовав от
+        SSM-затравки НА ТОЙ ЖЕ T, сам подтверждает точку верификацией — SSM
+        может успешно "найти" что-то и там, где `DewPointCalculator` от этой
+        же точки сходится не к границе (см. ниже), поэтому доверять одному
+        только успеху SSM недостаточно.
 
-        В отличие от нижней ветки, здесь ОДНОЙ затравки обычно недостаточно:
-        основной march останавливается именно там, где считать труднее всего
-        (упор в саму критическую точку — Z_L≈Z_V), и "трудная зона" вокруг неё
-        имеет заметную ширину по T — Ньютон после затравки типично проходит
-        несколько точек и снова упирается в тот же эффект чуть дальше. Поэтому
-        весь процесс — ЦИКЛ (до `max_cycles` раз): затравка SSM → continuation
-        Ньютоном, пока не остановится → если дошли до конца диапазона, стоп;
-        если застряли раньше — затравка SSM ещё раз с места остановки, и так
-        далее, пока либо не дойдём до конца, либо очередная затравка не
-        продвинет вперёд ни на шаг (тупик — дальше не пытаемся).
+        В ОТЛИЧИЕ от нижней ветки, этот bootstrap ЧАСТО не может продвинуться
+        вообще — не из-за качества затравки, а из-за более широкой проблемы,
+        обнаруженной эмпирически (после исправления `calc_d_log_phi_i_dp`, см.
+        докстринг модуля): `DewPointCalculator` при любом вызове ВСЕГДА
+        пересобирает стартовые K-факторы заново по грубой корреляции Вильсона
+        от переданного P (не принимает готовый K с предыдущего шага) — и в
+        ШИРОКОЙ полосе T вокруг критической точки состава (на KRSNL — весь
+        диапазон T≈360-435°C, не только пара точек сразу у критики) это уводит
+        Ньютон к другому математическому корню уравнения Σzᵢ/Kᵢ=1, даже если
+        стартовое P было ТОЧНЫМ (проверено на нескольких T с P от самой SSM —
+        не сходится к границе нигде в этой полосе). Дальше по T (проверено:
+        T=440°C+) уравнение снова хорошо обусловлено для любого разумного P.
+        Пробовать "перепрыгнуть" всю эту полосу веером затравок дальше по T
+        технически работает, но каждая неудачная проба стоит отдельного вызова
+        SSM — в этой полосе это ощутимо (несколько секунд на попытку), поэтому
+        `max_islands` по умолчанию всего 1 (не гоняемся за этой веткой ценой
+        заметного времени — честный пробел здесь ожидаем и покрывается
+        `PhaseEnvelopeSSM`). Полноценное решение потребовало бы отдельного
+        изменения `DewPointCalculator` (принимать явный K-guess, а не только
+        P-guess) — вне рамок этой задачи.
         """
         bubble = self.results['Bubble_bar']
         dew_upper = self.results['Dew_upper_bar']
 
-        for _cycle in range(max_cycles):
+        for _island in range(max_islands):
             start_idx = next(
                 (i for i, (b, d) in enumerate(zip(bubble, dew_upper)) if pd.isna(b) and pd.isna(d)),
                 None,
@@ -577,36 +591,73 @@ class PhaseEnvelopeNewton:
             if start_idx is None:
                 return  # весь диапазон уже покрыт
 
+            remaining = len(self.temps_c) - start_idx
+            candidate_offsets = list(range(min(self.lower_dew_bootstrap_attempts, remaining)))
+
             seed_idx, seed_p, seed_type = None, None, None
-            attempts = min(self.lower_dew_bootstrap_attempts, len(self.temps_c) - start_idx)
-            for j in range(start_idx, start_idx + attempts):
+            for offset in candidate_offsets:
+                j = start_idx + min(offset, remaining - 1)
                 t_c = self.temps_c[j]
                 t_k = float(t_c) + 273.15
                 ssm_finder = SaturationPointSSM(
                     self.composition, t_k, self.p_max_bar, self.p_min_bar,
                     bracket_tol_rel=self.bootstrap_bracket_tol_rel,
                 )
-                pt = ssm_finder.find_bubble_point()
-                if pt is not None:
-                    seed_idx, seed_p, seed_type = j, pt.pressure, pt.point_type
-                    logger.info(
-                        "Newton: верхняя ветка затравлена через SSM на T=%.2f °C, "
-                        "P=%.4f бар, тип=%s", t_c, seed_p, seed_type,
+                ssm_pt = ssm_finder.find_bubble_point()
+                if ssm_pt is None:
+                    continue
+
+                # SSM сама по себе не страдает от эффекта ниже (её бисекция не
+                # зависит от Ньютоновского K-Вильсон-рестарта) и может успешно
+                # найти точку ДАЖЕ ВНУТРИ трудной зоны — проверено эмпирически:
+                # на этом составе SSM (loose tol) находит "точку" почти на
+                # каждом T от 360 до 425°C, но `DewPointCalculator`, стартуя
+                # ОТТУДА, всё равно сходится не к границе (обе стороны
+                # нестабильны — Newton уводит в сторону из-за пересборки
+                # K с нуля по Вильсону на каждом вызове, см. докстринг модуля).
+                # Поэтому кандидат считается принятым, только если Ньютон,
+                # стартовав от SSM-затравки, САМ подтверждает точку
+                # верификацией — иначе кандидат отбрасывается и пробуется
+                # следующий (более дальний) офсет, а не первый успех SSM.
+                verify_finder = SaturationPointNewton(
+                    self.composition, t_k, self.p_max_bar, self.p_min_bar,
+                    p_guess_bubble=ssm_pt.pressure if ssm_pt.point_type == 'bubble' else None,
+                    p_guess_dew=ssm_pt.pressure if ssm_pt.point_type == 'dew' else None,
+                    branch_hint=ssm_pt.point_type, tol=self.tol, max_iter=self.max_iter,
+                )
+                verified_pt = verify_finder.find_bubble_point()
+                if verified_pt is None:
+                    logger.debug(
+                        "Newton: SSM-затравка на T=%.2f °C (смещение %d) не "
+                        "подтвердилась Ньютоном — пробую следующий офсет",
+                        t_c, offset,
                     )
-                    break
+                    continue
+
+                seed_idx, seed_p, seed_type = j, verified_pt.pressure, verified_pt.point_type
+                if seed_type == 'bubble':
+                    bubble[j] = seed_p
+                else:
+                    dew_upper[j] = seed_p
+                logger.info(
+                    "Newton: верхняя ветка затравлена через SSM+Ньютон на "
+                    "T=%.2f °C (остров %d, смещение %d от разрыва в %d точек), "
+                    "P=%.4f бар, тип=%s",
+                    t_c, _island + 1, offset, remaining, seed_p, seed_type,
+                )
+                break
 
             if seed_idx is None:
                 logger.info(
-                    "Newton: не удалось затравить верхнюю ветку через SSM "
-                    "в первых %d точках после T=%.2f °C — останавливаюсь",
-                    attempts, self.temps_c[start_idx],
+                    "Newton: не удалось затравить верхнюю ветку ни в одной из "
+                    "%d проб (веером) после T=%.2f °C — останавливаюсь",
+                    len(candidate_offsets), self.temps_c[start_idx],
                 )
                 return
 
             prev_p, prev_type = seed_p, seed_type
             slow_streak = 0
-            progressed = False
-            for j in range(seed_idx, len(self.temps_c)):
+            for j in range(seed_idx + 1, len(self.temps_c)):
                 t_c = self.temps_c[j]
                 t_k = float(t_c) + 273.15
                 t0 = time.time()
@@ -634,7 +685,6 @@ class PhaseEnvelopeNewton:
                 else:
                     dew_upper[j] = pt.pressure
                 prev_p, prev_type = pt.pressure, pt.point_type
-                progressed = True
 
                 if slow_streak >= self.max_consecutive_slow_points:
                     logger.info(
@@ -645,13 +695,6 @@ class PhaseEnvelopeNewton:
                     break
             else:
                 return  # дошли до конца диапазона без остановки — готово
-
-            if not progressed:
-                logger.info(
-                    "Newton: затравка на T=%.2f °C не продвинула верхнюю ветку "
-                    "ни на шаг — останавливаюсь", self.temps_c[seed_idx],
-                )
-                return
 
     def _bootstrap_and_march_lower_dew(self) -> None:
         """

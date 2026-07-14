@@ -682,6 +682,28 @@ class BrusilovskiyEOS(EOS):
         Вектор d ln(phi_i) / dp для выбранного корня — производная логарифма
         коэффициента фугитивности по давлению.
 
+        ЧИСЛЕННАЯ (центральная разность), не аналитическая — раньше здесь было
+        аналитическое выражение (неявное дифференцирование по цепному правилу
+        через Z(P)/A_m(P)/B_m(P)/C_m(P)/D_m(P)/s_i(P)), но оно оказалось
+        ошибочным: сверка с производной по конечным разностям от уже
+        проверенной `_calc_fugacity_coef_logarithm_vector` показала расхождение
+        и по знаку, и по величине для большинства компонент (состав KRSNL,
+        T=110°C — например C10: численно +1.9e-4, было аналитически −7.5e-3;
+        `_calc_dz_dp`, от которой зависела и та формула, при этом сама сошлась
+        с численной производной до 9 знаков — ошибка была именно в сборке
+        остальных слагаемых). Единственные потребители — `BubblePointCalculator`/
+        `DewPointCalculator` (`calc_core/PhaseDiagram/*Pressure.py`), вне
+        основного pipeline `Flash`/`PhaseEquilibriumNewton` (там свой, рабочий
+        якобиан — `calc_d_log_phi_i_dxk`, по составу, а не по давлению) —
+        поэтому баг не проявлялся раньше.
+
+        Центральная разность строится вокруг ВЫБРАННОГО корня (`self._z_factor`),
+        а не вокруг того, что выбрала бы независимая минимизация энергии Гиббса
+        при сдвинутом P — вблизи критической точки состава, где действительных
+        корней несколько и они близки, это мог бы оказаться другой физический
+        корень; здесь нужна производная именно вдоль текущей ветки, поэтому из
+        `real_roots_eos` при P±h берётся корень, ближайший к `self._z_factor`.
+
         Returns
         -------
         np.ndarray, shape (nc,)
@@ -689,44 +711,20 @@ class BrusilovskiyEOS(EOS):
         if self._dlogphi_dp is not None:
             return self._dlogphi_dp
 
-        z = self._z_factor
+        z_anchor = self._z_factor
+        h = max(abs(self._p) * 1e-5, 1e-6)
 
-        A_m = self._A_mixture
-        B_m = self._B_mixture
-        C_m = self._C_mixture
-        D_m = self._D_mixture
+        def ln_phi_at(p_shifted):
+            eos = BrusilovskiyEOS(self._composition, p_shifted, self._t)
+            eos.calc_eos()
+            roots = eos.real_roots_eos
+            nearest_root = roots[np.argmin(np.abs(roots - z_anchor))]
+            return eos.get_fugacity_coef_vector_by_root(nearest_root)
 
-        sum_xj_Aij = 0.5 * self._calc_dAm_dx()
+        ln_phi_plus = ln_phi_at(self._p + h)
+        ln_phi_minus = ln_phi_at(self._p - h)
 
-        dBm_dp = B_m / self._p
-        dCm_dp = C_m / self._p
-        dDm_dp = D_m / self._p
-        dCi_dp = self._C / self._p
-        dDi_dp = self._D / self._p
-
-        dz_dp = self._calc_dz_dp()
-
-        part1 = (1.0 / (z - B_m)) * (
-            (dz_dp - dBm_dp) * (1.0 + self._B / (z - B_m)) - dBm_dp
-        )
-
-        part21 = (
-            2.0 * sum_xj_Aij / A_m - (self._C - self._D) / (C_m - D_m)
-        ) * (
-            (dz_dp + dCm_dp) / (z + C_m) - (dz_dp + dDm_dp) / (z + D_m)
-        )
-
-        part22 = (
-            dCi_dp * (z + C_m) - self._C * (dz_dp + dCm_dp)
-        ) / ((z + C_m) ** 2)
-
-        part23 = (
-            dDi_dp * (z + D_m) - self._D * (dz_dp + dDm_dp)
-        ) / ((z + D_m) ** 2)
-
-        part2 = A_m / (C_m - D_m) * (part21 + part22 - part23)
-
-        self._dlogphi_dp = -part1 - part2
+        self._dlogphi_dp = (ln_phi_plus - ln_phi_minus) / (2.0 * h)
         return self._dlogphi_dp
 
     def calc_d_log_phi_i_dxk(self, component_i, component_k):
