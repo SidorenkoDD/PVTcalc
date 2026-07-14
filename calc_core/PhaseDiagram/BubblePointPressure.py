@@ -131,10 +131,6 @@ class BubblePointCalculator:
 
             dF_dP = np.sum(z * K_new * (dlnphiL_dP - dlnphiV_dP))
 
-            if dF_dP > 0:
-                logger.debug(f"Iter {j}: Sign correction for dF/dP. Original: {dF_dP:.2e} -> {-abs(dF_dP):.2e}")
-                dF_dP = -abs(dF_dP)
-
             if abs(dF_dP) < 1e-15:
                 logger.warning(f"dF/dP too small at iteration {j}. Stopping.")
                 break
