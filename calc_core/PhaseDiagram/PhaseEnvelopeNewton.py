@@ -89,19 +89,22 @@ dew-уравнение): даже стартуя Ньютон ПРЯМО с ис
 ОДНУ хорошую стартовую точку, дальше по T оно само бежит быстро и устойчиво
 (численно проверено: от разового seed при T=400°C(3.17 бар) до T=465°C(21.5
 бар) на составе KRSNL — 14 точек за 0.67 сек, 3-21 итераций на точку,
-совпадение с SSM до 4-5 значащих цифр). Поэтому `calculate()` (только
-последовательный вариант, не `calculate_parallel()`) после остановки
-основного march'а ОДИН РАЗ прибегает к `SaturationPointSSM.find_dew_point`
-(bootstrap, `_bootstrap_lower_dew_seed`) — пробует несколько соседних T сразу
-после точки остановки (ретроградная область только-только открывается там,
-поэтому первые попытки могут быть слишком узкими и не дать разрешимого
-результата), находит один seed, и дальше продолжает уже чистым Ньютоном
-(`SaturationPointNewton.find_dew_point`) до конца запрошенного диапазона —
-с той же верификацией и тем же бюджетом времени на шаг, что и у основной
-ветки. Это единственное место в модуле, где `SaturationPointSSM` вообще
-используется (сам SSM-модуль по-прежнему не редактируется ни строкой) — как
-редкий, ограниченный по числу вызовов "затравочный" инструмент, а не как
-основной путь расчёта.
+совпадение с SSM до 4-5 значащих цифр). Затравка ищется не бисекцией
+(`SaturationPointSSM`, дороже), а через ДЕШЁВЫЙ сеточный скан стабильности —
+`PhaseEnvelopeFromStability.py` (простой P×T скан `TwoPhaseStabilityTest` без
+бисекции, ~4.3 сек на 50×97 точек, joblib-параллельно) — `_build_stability_grid`
+находит по каждому T-столбцу ВСЕ смены флага стабильности; второй (нижний)
+переход в столбце — надёжный дешёвый признак "здесь есть ретроградная зона",
+его середина — сразу `P_guess` для `SaturationPointNewton.find_dew_point`
+(который сам верифицирует находку — отдельного шага верификации затравки не
+нужно). `calculate()` (только последовательный вариант, не
+`calculate_parallel()`) после остановки основного march'а вызывает сетку ОДИН
+раз (`_build_stability_grid`) и по ней ищет первый T с подтверждённой
+ретроградной зоной, дальше продолжает уже чистым Ньютоном continuation'ом по
+P и K до конца запрошенного диапазона — с той же верификацией и тем же
+бюджетом времени на шаг, что и у основной ветки. `PhaseEnvelopeFromStability`
+(как и `PhaseEnvelopeSSM`) не редактируется ни строкой — только
+импортируется и вызывается как есть.
 
 Для верхней ветки (`_coast_through_upper_dew`) первая версия делала
 СИММЕТРИЧНОЕ нижней ветке: одна затравка через `SaturationPointSSM.
@@ -170,7 +173,8 @@ from joblib import Parallel, delayed, effective_n_jobs
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseDiagram.BubblePointPressure import BubblePointCalculator
 from calc_core.PhaseDiagram.DewPressure import DewPointCalculator
-from calc_core.PhaseDiagram.PhaseEnvelopeSuccessiveSubstitution import SaturationPoint, SaturationPointSSM
+from calc_core.PhaseDiagram.PhaseEnvelopeFromStability import PhaseEnvelopeFromStability
+from calc_core.PhaseDiagram.PhaseEnvelopeSuccessiveSubstitution import SaturationPoint
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
@@ -447,15 +451,16 @@ class PhaseEnvelopeNewton:
     графике). Основной march (bubble/dew upper с continuation по P и K)
     останавливается у критической точки состава — `calculate()` (не
     `calculate_parallel()`) следом достраивает обе оставшиеся ветки отдельными
-    проходами: нижнюю ретроградную (`Dew_lower_bar`) — через одну затравку
-    `SaturationPointSSM` и дальше continuation Ньютоном (см.
+    проходами: нижнюю ретроградную (`Dew_lower_bar`) — через одну затравку из
+    дешёвого сеточного скана стабильности (`_build_stability_grid`,
+    `PhaseEnvelopeFromStability`) и дальше continuation Ньютоном по P и K (см.
     `_bootstrap_and_march_lower_dew`); верхнюю (`Dew_upper_bar`) сразу за
     критикой — "проездом" через несколько неверифицированных шагов подряд с
     последней уже верифицированной точки основного march'а (см.
-    `_coast_through_upper_dew`), без обращения к SSM вообще. Обе достройки
-    покрывают то, что могут, но не гарантируют полного покрытия до самого
-    конца запрошенного диапазона — для гарантии в критической/ретроградной
-    зоне остаётся `PhaseEnvelopeSSM`.
+    `_coast_through_upper_dew`). Ни один из этих проходов не использует
+    `SaturationPointSSM`/бисекцию. Обе достройки покрывают то, что могут, но
+    не гарантируют полного покрытия до самого конца запрошенного диапазона —
+    для гарантии в критической/ретроградной зоне остаётся `PhaseEnvelopeSSM`.
     """
 
     def __init__(
@@ -472,8 +477,8 @@ class PhaseEnvelopeNewton:
         slow_point_budget_s: float = 0.5,
         max_consecutive_slow_points: int = 2,
         bootstrap_lower_dew: bool = True,
-        lower_dew_bootstrap_attempts: int = 6,
-        bootstrap_bracket_tol_rel: float = 0.03,
+        grid_pressure_points: int = 50,
+        grid_temperature_points: int | None = None,
     ):
         self.composition = composition
         self.t_min_c = t_min_c
@@ -486,18 +491,18 @@ class PhaseEnvelopeNewton:
         self.dew_bubble_min_gap_rel = dew_bubble_min_gap_rel
         self.slow_point_budget_s = slow_point_budget_s
         self.max_consecutive_slow_points = max_consecutive_slow_points
-        # Затравка нижней ретроградной ветки через SSM (см. докстринг модуля) —
-        # запускается только в calculate() (не в calculate_parallel()), только
-        # один раз за march, и только если основная ветка вообще покинула
-        # bubble-область в запрошенном диапазоне T.
+        # Затравка нижней ретроградной ветки через сеточный скан стабильности
+        # (см. докстринг модуля и `_build_stability_grid`) — запускается только
+        # в calculate() (не в calculate_parallel()), только один раз за march,
+        # и только если основная ветка вообще покинула bubble-область в
+        # запрошенном диапазоне T.
         self.bootstrap_lower_dew = bootstrap_lower_dew
-        self.lower_dew_bootstrap_attempts = lower_dew_bootstrap_attempts
-        # Затравочные вызовы SSM используют НАМНОГО более грубый bracket_tol_rel,
-        # чем дефолт SSM (1e-3) — нам нужна только стартовая точка для Ньютона,
-        # который сам уточнит её на порядки точнее; на этом составе вблизи
-        # критической точки это отличие — разница между ~0.6 сек и ~5+ сек на
-        # один затравочный вызов (см. докстринг модуля).
-        self.bootstrap_bracket_tol_rel = bootstrap_bracket_tol_rel
+        # Разрешение сетки `PhaseEnvelopeFromStability` для затравки — по P
+        # фиксированное, по T по умолчанию совпадает с уже запрошенным шагом
+        # march'а (`len(self.temps_c)`), можно переопределить явно (например,
+        # для другого состава/диапазона может понадобиться другое разрешение).
+        self.grid_pressure_points = grid_pressure_points
+        self.grid_temperature_points = grid_temperature_points
 
         self.temps_c = np.arange(t_min_c, t_max_c + t_step_c / 2.0, t_step_c)
         self.results = {'Temp_C': [], 'Bubble_bar': [], 'Dew_upper_bar': [], 'Dew_lower_bar': []}
@@ -628,9 +633,75 @@ class PhaseEnvelopeNewton:
             # Сначала верхняя ветка (Bubble/Dew_upper) — нижняя ветка сверяется
             # с ней при отбраковке дублей (см. ниже), поэтому порядок важен.
             self._coast_through_upper_dew(last_primary_p, last_primary_k)
-            self._bootstrap_and_march_lower_dew()
+            grid = self._build_stability_grid()
+            self._bootstrap_and_march_lower_dew(grid)
 
         return pd.DataFrame(self.results)
+
+    def _build_stability_grid(self) -> dict[float, list[tuple[float, float]]]:
+        """
+        Грубая (но дешёвая) карта переходов стабильности по сетке P×T —
+        затравка для `_bootstrap_and_march_lower_dew`. Использует уже
+        существующий `PhaseEnvelopeFromStability` (простой скан стабильности
+        по решётке, без бисекции — не путать с `PhaseEnvelopeSSM`, тот файл
+        тоже не редактируется, только импортируется и вызывается как есть).
+
+        Численно проверено (состав KRSNL, 50×97 точек, полный диапазон
+        10-480°C): скан занимает ~4.3 сек и КОРРЕКТНО обнаруживает структуру
+        переходов флага стабильности по каждому T-столбцу — 1 переход ниже
+        критической точки состава (обычная bubble-граница), 2 перехода в
+        ретроградной зоне (нижняя и верхняя граница) и 0 переходов за
+        крикондентермом (однофазный газ при любом P — тоже физически верно).
+        Именно наличие ВТОРОГО (нижнего) перехода на T — надёжный, дешёвый
+        признак "здесь есть ретроградная область", без которого
+        `_bootstrap_and_march_lower_dew` раньше приходилось узнавать только
+        через дорогую бисекцию `SaturationPointSSM.find_dew_point` (убрана).
+
+        Разрешение по T `PhaseEnvelopeFromStability` всегда строит от 0°C
+        (`np.linspace(273.15, max_temperature+273.15, ...)`), не от
+        `t_min_c` — поэтому её T-сетка в общем случае не совпадает 1:1 с
+        `self.temps_c`; сопоставление делается по ближайшему T при
+        использовании результата (см. `_bootstrap_and_march_lower_dew`).
+
+        Returns
+        -------
+        dict[float, list[tuple[float, float]]]
+            `{T_c (из сетки PhaseEnvelopeFromStability): [(p_lo, p_hi), ...]}`
+            — по одной паре `(p_lo, p_hi)` вокруг каждой найденной смены флага
+            стабильности на этом T, отсортированные по возрастанию P (первый
+            элемент — самый нижний переход, если их несколько).
+        """
+        grid = PhaseEnvelopeFromStability(
+            self.composition,
+            max_pressure=self.p_max_bar,
+            max_temperature=self.t_max_c,
+            pressure_points=self.grid_pressure_points,
+            temperature_points=self.grid_temperature_points or len(self.temps_c),
+        )
+        grid.run_parallel()
+
+        p_arr = np.array(grid.result_pressure_arr)
+        t_arr = np.array(grid.result_temperature_arr)
+        f_arr = np.array(grid.result_stability_flag_arr)
+
+        transitions_by_t: dict[float, list[tuple[float, float]]] = {}
+        for t_c in np.unique(t_arr):
+            mask = np.isclose(t_arr, t_c)
+            p_col = p_arr[mask]
+            f_col = f_arr[mask]
+            order = np.argsort(p_col)
+            p_sorted = p_col[order]
+            f_sorted = f_col[order]
+
+            transitions = [
+                (float(p_sorted[i]), float(p_sorted[i + 1]))
+                for i in range(len(f_sorted) - 1)
+                if f_sorted[i] != f_sorted[i + 1]
+            ]
+            if transitions:
+                transitions_by_t[float(t_c)] = transitions
+
+        return transitions_by_t
 
     def _coast_through_upper_dew(
         self, seed_p: float | None, seed_k: dict | None, max_unverified_run: int = 12,
@@ -736,7 +807,7 @@ class PhaseEnvelopeNewton:
                     )
                     return
 
-    def _bootstrap_and_march_lower_dew(self) -> None:
+    def _bootstrap_and_march_lower_dew(self, grid: dict[float, list[tuple[float, float]]]) -> None:
         """
         Достраивает нижнюю ретроградную dew-ветку (`Dew_lower_bar`) поверх уже
         посчитанного `self.results` — см. докстринг модуля за обоснованием.
@@ -746,44 +817,65 @@ class PhaseEnvelopeNewton:
            NaN в `Bubble_bar`) — раньше этой точки ретроградной области
            физически быть не может (см. докстринг модуля). Если такого
            индекса нет (весь диапазон — bubble), делать нечего.
-        2. Пробует затравить нижнюю точку через `SaturationPointSSM.
-           find_dew_point` на нескольких соседних T подряд начиная с этого
-           индекса (первые попытки могут провалиться — ретроградная область
-           там ещё слишком узкая) — до `lower_dew_bootstrap_attempts` раз.
-        3. От найденной затравки продолжает чистым Ньютоном
-           (`SaturationPointNewton.find_dew_point`) до конца диапазона, с той
-           же верификацией/бюджетом времени на шаг, что и основная ветка.
+        2. Идёт по T начиная с этого индекса и ищет первый T, для которого
+           `grid` (см. `_build_stability_grid`) показывает ВТОРОЙ (нижний)
+           переход стабильности — то есть достоверный, дешёвый признак, что
+           здесь физически есть ретроградная зона. Середина этого перехода —
+           `P_guess` для `SaturationPointNewton.find_dew_point` (холодный
+           старт по K, но не по P — уже не Вильсон, а точка из сетки).
+        3. От найденной (и уже верифицированной — `find_dew_point` сам это
+           делает) затравки продолжает чистым Ньютоном continuation'ом по P
+           и K до конца диапазона, с той же верификацией/бюджетом времени на
+           шаг, что и основная ветка.
         """
         bubble = self.results['Bubble_bar']
         start_idx = next((i for i, v in enumerate(bubble) if pd.isna(v)), None)
         if start_idx is None:
             return
 
-        seed_idx, seed_p = None, None
-        attempts = min(self.lower_dew_bootstrap_attempts, len(self.temps_c) - start_idx)
-        for j in range(start_idx, start_idx + attempts):
+        if not grid:
+            logger.info("Newton: сеточная затравка нижней ветки недоступна — пустая сетка стабильности")
+            return
+
+        grid_temps = np.array(sorted(grid.keys()))
+
+        seed_idx, seed_p, seed_k = None, None, None
+        for j in range(start_idx, len(self.temps_c)):
             t_c = self.temps_c[j]
+            nearest_t = float(grid_temps[np.argmin(np.abs(grid_temps - t_c))])
+            transitions = grid[nearest_t]
+            if len(transitions) < 2:
+                continue  # по сетке здесь ретроградной зоны нет (или мимо разрешения)
+
+            p_lo, p_hi = transitions[0]  # самый нижний переход в этом T-столбце
+            guess = (p_lo + p_hi) / 2.0
+
             t_k = float(t_c) + 273.15
-            ssm_finder = SaturationPointSSM(self.composition, t_k, self.p_max_bar, self.p_min_bar)
-            pt = ssm_finder.find_dew_point(self.p_max_bar)
-            if pt is not None and pt.point_type == 'dew':
-                seed_idx, seed_p = j, pt.pressure
+            finder = SaturationPointNewton(
+                self.composition, t_k, self.p_max_bar, self.p_min_bar,
+                p_guess_dew_lower=guess, tol=self.tol, max_iter=self.max_iter,
+            )
+            pt = finder.find_dew_point(self.p_max_bar)
+            if pt is not None:
+                seed_idx, seed_p, seed_k = j, pt.pressure, finder.last_k
+                self.results['Dew_lower_bar'][j] = seed_p
                 logger.info(
-                    "Newton: нижняя ретроградная ветка затравлена через SSM на "
-                    "T=%.2f °C, P=%.4f бар", t_c, seed_p,
+                    "Newton: нижняя ретроградная ветка затравлена по сетке "
+                    "стабильности на T=%.2f °C, P=%.4f бар (сетка: %.2f бар)",
+                    t_c, seed_p, guess,
                 )
                 break
 
         if seed_idx is None:
             logger.info(
-                "Newton: не удалось затравить нижнюю ретроградную ветку через SSM "
-                "в первых %d точках после T=%.2f °C", attempts, self.temps_c[start_idx],
+                "Newton: сетка не показала подтверждённой ретроградной зоны "
+                "в запрошенном диапазоне T (после T=%.2f °C)", self.temps_c[start_idx],
             )
             return
 
-        prev_p, prev_k = seed_p, None
+        prev_p, prev_k = seed_p, seed_k
         slow_streak = 0
-        for j in range(seed_idx, len(self.temps_c)):
+        for j in range(seed_idx + 1, len(self.temps_c)):
             t_c = self.temps_c[j]
             t_k = float(t_c) + 273.15
             t0 = time.time()
