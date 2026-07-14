@@ -48,14 +48,26 @@ dew-уравнение): даже стартуя Ньютон ПРЯМО с ис
 на границе): при одностороннем сдвиге вниз это выглядело как "нестабильно,
 похоже на dew" и проходило старую (одностороннюю) проверку, но сдвиг вверх
 от 161.2 ТОЖЕ показывает нестабильно — то есть 161.2 не граница вообще.
-Причина — судя по всему, в самом `DewPointCalculator`/`BubblePointCalculator`:
-их аналитическая производная `dF/dP` почти на каждой итерации получается
-"неправильного" знака и принудительно инвертируется веткой "Sign correction"
-(см. побочную находку в конце этого докстринга) — вблизи критической точки
-это может уводить шаг не туда даже от идеального старта. Это свойство
-существующих калькуляторов (не трогаются в рамках этой задачи), но именно
-поэтому проверка здесь обязана быть двусторонней и независимой, а не
-доверять `converged=True`.
+
+Изначально это списывалось на баг знака в аналитической производной
+`dF/dP` (`calc_d_log_phi_i_dp`/"Sign correction" — см. побочную находку в
+конце докстринга) — производная действительно была неверна (сверка с
+конечными разностями, исправлена в `BrusilovskiyEOS`), но её исправление
+СКОРОСТЬ подняло резко (3-7 итераций вместо 20-70 в "спокойной" зоне), а
+именно этот эффект (уход к корню внутри области) не убрало. Настоящая
+причина — ДРУГАЯ и глубже: `BubblePointCalculator`/`DewPointCalculator` при
+КАЖДОМ вызове пересобирают стартовые K-факторы заново по грубой корреляции
+Вильсона от переданного P, а не принимают continuation по K с предыдущего
+шага — вблизи критической точки состава Вильсон систематически даёт K,
+далёкий от истинного равновесного, и Ньютон (даже с верной производной и
+точным P) уходит к другому математическому корню уравнения. Добавлены
+`K_guess`/`result_K` в оба калькулятора (`BubblePointPressure.py`/
+`DewPressure.py`) — march теперь продолжает не только P, но и K между
+соседними шагами по T (см. `SaturationPointNewton.last_k` и его
+использование в `PhaseEnvelopeNewton.calculate()`), это и есть основной
+инструмент, которым ниже "проезжается" трудная зона у критической точки.
+Ни то, ни другое не отменяет необходимость двусторонней верификации —
+доверять `converged=True` по-прежнему нельзя.
 
 С этой (исправленной) проверкой march уверенно и быстро идёт от низких T
 через bubble-ветку, корректно переключается на dew (upper) ровно там же, где
@@ -91,21 +103,29 @@ dew-уравнение): даже стартуя Ньютон ПРЯМО с ис
 редкий, ограниченный по числу вызовов "затравочный" инструмент, а не как
 основной путь расчёта.
 
-Для верхней ветки (`_bootstrap_and_march_upper_dew`) СИММЕТРИЧНАЯ идея —
-затравка через `SaturationPointSSM.find_bubble_point`, потом Ньютон — тоже
-реализована, но, в отличие от нижней ветки, не гарантирует продвижения СРАЗУ
-ЗА критической точкой: это не вопрос качества затравки (двусторонняя
-верификация теперь надёжно отбраковывает плохие корни — см. выше), а
-свойство самих `BubblePointCalculator`/`DewPointCalculator` там же — их
-Ньютон-шаг может не сойтись к границе вообще ни от какого guess'а вплотную к
-критике (та же причина, что и в находке про "Sign correction" выше). Поэтому
-`max_cycles=1` (не пытаемся героически перезатравливаться много раз подряд
-именно в этой полосе — предыдущая версия с `max_cycles=5` пробовала и просто
-теряла время, скатываясь по стоимости к самой SSM, не получая взамен ничего
-воспроизводимо верного). Результат: `Dew_upper_bar` сразу за критической
-точкой состава честно остаётся NaN шириной в несколько шагов T (столько же,
-сколько занимает основной march), пока верхняя ветка снова не станет хорошо
-обусловленной — эта полоса покрывается только `PhaseEnvelopeSSM`.
+Для верхней ветки (`_coast_through_upper_dew`) первая версия делала
+СИММЕТРИЧНОЕ нижней ветке: одна затравка через `SaturationPointSSM.
+find_bubble_point`, потом Ньютон. Не сработала — SSM (бисекция по флагу
+стабильности) успешно "находит" точку почти на любом T в трудной зоне
+(T≈360-435°C на KRSNL), но `DewPointCalculator`, стартуя оттуда, всё равно
+сходился не к границе (см. выше про Вильсон-K) — затравка была не тем
+узким местом. Реальным узким местом было отсутствие continuation по K.
+
+С `K_guess` текущая версия (`_coast_through_upper_dew`) устроена иначе — без
+SSM вообще: продолжает P И K с ПОСЛЕДНЕЙ уже верифицированной точки
+основного march'а (обычно ещё bubble, вплотную к критике) шаг за шагом по
+dew-уравнению, но, в отличие от основного march'а, НЕ останавливается на
+первой же неверифицированной точке — "проезжает" через несколько таких
+шагов подряд (P/K продолжают передаваться дальше, даже когда точка не
+записывается в результат), пока уравнение снова не станет хорошо
+обусловленным. Проверено эмпирически на составе KRSNL: от конца основного
+march'а (T=375°C, bubble) требуется "проехать" через T≈380-395°C без единой
+верифицированной точки, прежде чем T=400-425°C снова начинают сходиться и
+верифицироваться (согласие с SSM — 0.1-1%). Останавливается, если много
+шагов подряд (`max_unverified_run`) не верифицируются ИЛИ Ньютон вовсе не
+сходится — то, что осталось непокрытым (включая саму трудную зону, даже
+если её "проехали" без записи точек), — по-прежнему честный NaN, покрывается
+`PhaseEnvelopeSSM`.
 
 Вблизи критической точки отдельные шаги могут резко замедляться (до
 секунды и больше на точку) — не из-за числа итераций Ньютона, а из-за
@@ -123,19 +143,20 @@ dew-уравнение): даже стартуя Ньютон ПРЯМО с ис
 ~0.03%, см. докстринг SSM) — это на порядок сокращает число итераций Ньютона
 в "спокойной" зоне (с ~40-70 до ~10-20) без потери практической точности.
 
-ПОБОЧНАЯ НАХОДКА (не часть этой задачи, объясняет ограничение выше): у
-`BubblePointCalculator`/`DewPointCalculator` производная `dF/dP` почти на
-каждой итерации получается "не того" знака и принудительно инвертируется
-веткой `if dF_dP > 0: dF_dP = -abs(dF_dP)` — судя по названию ветки
-("Sign correction"), задумывалась как редкий edge case, а по факту (по логам)
-срабатывает почти всегда, даже вдали от критической точки, где для этого нет
-явной физической причины. Вдали от критики это не портит результат
-(подтверждено многократно: см. T=110°C выше) — просто больше итераций, чем
-у "настоящего" Ньютона. Но именно вплотную к критической точке состава эта
-принудительная инверсия, судя по всему, может увести шаг не туда даже от
-идеального guess'а (см. пример с T=390°C выше) — отсюда и ограничение на
-`Dew_upper_bar` сразу за критикой. Не исправляю в рамках этой задачи (файлы
-не мои для правки без отдельного запроса).
+ИСТОРИЯ НАХОДКИ (для контекста — сами баги уже исправлены, не в этом файле):
+изначально у `BubblePointCalculator` производная `dF/dP` почти на каждой
+итерации получалась "не того" знака и принудительно инвертировалась веткой
+`if dF_dP > 0: dF_dP = -abs(dF_dP)` ("Sign correction") — расследование
+показало, что дело не в этой строке, а в самой аналитической производной
+`calc_d_log_phi_i_dp` (`BrusilovskiyEOS._calc_dlogphi_dp_vector`) — она была
+неверна (сверка с производной по конечным разностям разошлась и по знаку, и
+по величине). Исправлена на численную (центральная разность), "Sign
+correction" убрана как ставший ненужным костыль — с этим `BubblePointCalculator`
+сходится за 3-7 итераций вместо 20-70. Отдельно от этого — тот самый уход к
+корню ВНУТРИ двухфазной области у критической точки (пример с T=390°C выше)
+это НЕ объясняло и НЕ исправляло: причина оказалась в отсутствии continuation
+по K (см. выше) — исправлено добавлением `K_guess`/`result_K` в оба
+калькулятора.
 """
 
 import logging
@@ -172,7 +193,11 @@ class SaturationPointNewton:
         p_max_bar: float,
         p_min_bar: float = 0.1,
         p_guess_bubble: float | None = None,
-        p_guess_dew: float | None = None,
+        p_guess_dew_upper: float | None = None,
+        p_guess_dew_lower: float | None = None,
+        k_guess_bubble: dict | None = None,
+        k_guess_dew_upper: dict | None = None,
+        k_guess_dew_lower: dict | None = None,
         branch_hint: str = 'bubble',
         tol: float = 1e-4,
         max_iter: int = 60,
@@ -183,26 +208,47 @@ class SaturationPointNewton:
         self.p_max_bar = p_max_bar
         self.p_min_bar = p_min_bar
         self.p_guess_bubble = p_guess_bubble
-        self.p_guess_dew = p_guess_dew
+        # dew_upper — guess для dew-ветки ВНУТРИ `find_bubble_point` (fallback
+        # первичного/верхнего поиска); dew_lower — guess для `find_dew_point`
+        # (нижняя ретроградная точка). Раньше это был ОДИН и тот же атрибут
+        # (`p_guess_dew`) — из-за чего верхний dew-fallback внутри march'а по
+        # ошибке получал continuation-guess от НИЖНЕЙ ветки (физически другое
+        # давление, ~10x меньше) вместо своего собственного — разделены.
+        self.p_guess_dew_upper = p_guess_dew_upper
+        self.p_guess_dew_lower = p_guess_dew_lower
+        # K_guess — continuation по K-факторам с предыдущего сошедшегося шага
+        # по T (не только по P). Без этого `BubblePointCalculator`/
+        # `DewPointCalculator` при КАЖДОМ вызове пересобирают K заново по
+        # грубой корреляции Вильсона от текущего P — вблизи критической точки
+        # состава это может увести Ньютон к другому математическому корню
+        # даже от точного P_guess (см. докстринг модуля). `last_k` — K
+        # последней УСПЕШНО решённой точки (какого бы типа она ни была),
+        # чтобы вызывающий код (march в `PhaseEnvelopeNewton`) мог передать
+        # его дальше как continuation для следующего T.
+        self.k_guess_bubble = k_guess_bubble
+        self.k_guess_dew_upper = k_guess_dew_upper
+        self.k_guess_dew_lower = k_guess_dew_lower
+        self.last_k: dict | None = None
         self.branch_hint = branch_hint if branch_hint in ('bubble', 'dew') else 'bubble'
         self.tol = tol
         self.max_iter = max_iter
         self.verify_nudge_rel = verify_nudge_rel
 
-    def _solve_bubble(self, guess: float | None) -> tuple[float | None, bool]:
+    def _solve_bubble(self, guess: float | None, k_guess: dict | None) -> tuple[float | None, bool, dict | None]:
         calc = BubblePointCalculator(
-            self.composition, self.t_k, P_guess=guess, tol=self.tol, max_iter=self.max_iter,
+            self.composition, self.t_k, P_guess=guess, K_guess=k_guess,
+            tol=self.tol, max_iter=self.max_iter,
         )
         p = calc.calculate()
-        return p, calc.converged
+        return p, calc.converged, calc.result_K
 
-    def _solve_dew(self, guess: float | None, dew_point_type: str) -> tuple[float | None, bool]:
+    def _solve_dew(self, guess: float | None, k_guess: dict | None, dew_point_type: str) -> tuple[float | None, bool, dict | None]:
         calc = DewPointCalculator(
             self.composition, self.t_k, dew_point_type=dew_point_type,
-            P_guess=guess, tol=self.tol, max_iter=self.max_iter,
+            P_guess=guess, K_guess=k_guess, tol=self.tol, max_iter=self.max_iter,
         )
         p = calc.calculate()
-        return p, calc.converged
+        return p, calc.converged, calc.result_K
 
     def _verify(self, p: float, nudge_sign: float) -> str | None:
         """
@@ -266,9 +312,9 @@ class SaturationPointNewton:
 
         for kind in order:
             if kind == 'bubble':
-                p, converged = self._solve_bubble(self.p_guess_bubble)
+                p, converged, result_k = self._solve_bubble(self.p_guess_bubble, self.k_guess_bubble)
             else:
-                p, converged = self._solve_dew(self.p_guess_dew, 'upper')
+                p, converged, result_k = self._solve_dew(self.p_guess_dew_upper, self.k_guess_dew_upper, 'upper')
 
             if not converged or p is None:
                 continue
@@ -288,6 +334,7 @@ class SaturationPointNewton:
                 "Newton: верхняя точка насыщения P=%.4f бар (T=%.2f K), тип=%s",
                 p, self.t_k, label,
             )
+            self.last_k = result_k
             return SaturationPoint(pressure=float(p), point_type=label)
 
         logger.info("Newton: верхняя точка насыщения не найдена/не верифицирована (T=%.2f K)", self.t_k)
@@ -297,11 +344,11 @@ class SaturationPointNewton:
         """
         Поиск второй (нижней, ретроградной) точки насыщения — только
         dew-уравнение (`dew_point_type='lower'`), только по continuation-guess
-        (`p_guess_dew`). Без явного guess практически не сходится к верному
-        корню (см. докстринг модуля) — в отличие от `SaturationPointSSM`, тут
-        нет бисекции/скана, которые могли бы обнаружить эту точку "вслепую".
+        (`p_guess_dew_lower`). Без явного guess практически не сходится к
+        верному корню (см. докстринг модуля) — в отличие от `SaturationPointSSM`,
+        тут нет бисекции/скана, которые могли бы обнаружить эту точку "вслепую".
         """
-        if self.p_guess_dew is None:
+        if self.p_guess_dew_lower is None:
             logger.debug(
                 "Newton: нижняя точка насыщения не ищется без guess (T=%.2f K) — "
                 "у метода нет надёжного холодного старта для этой ветки",
@@ -309,7 +356,7 @@ class SaturationPointNewton:
             )
             return None
 
-        p, converged = self._solve_dew(self.p_guess_dew, 'lower')
+        p, converged, result_k = self._solve_dew(self.p_guess_dew_lower, self.k_guess_dew_lower, 'lower')
         if not converged or p is None:
             return None
         if not (self.p_min_bar < p < min(p_upper_bound, self.p_max_bar)):
@@ -324,6 +371,7 @@ class SaturationPointNewton:
             return None
 
         logger.info("Newton: нижняя точка насыщения P=%.4f бар (T=%.2f K)", p, self.t_k)
+        self.last_k = result_k
         return SaturationPoint(pressure=float(p), point_type='dew')
 
 
@@ -345,7 +393,11 @@ def _calculate_envelope_chunk_worker(
 
     results = []
     prev_pb: float | None = None
-    prev_pdew: float | None = None
+    prev_p_dew_upper: float | None = None
+    prev_p_dew_lower: float | None = None
+    prev_kb: dict | None = None
+    prev_k_dew_upper: dict | None = None
+    prev_k_dew_lower: dict | None = None
     prev_type = 'bubble'
     slow_streak = 0
 
@@ -355,12 +407,17 @@ def _calculate_envelope_chunk_worker(
 
         finder = SaturationPointNewton(
             comp, t_k, p_max_bar, p_min_bar,
-            p_guess_bubble=prev_pb, p_guess_dew=prev_pdew,
+            p_guess_bubble=prev_pb, p_guess_dew_upper=prev_p_dew_upper,
+            p_guess_dew_lower=prev_p_dew_lower,
+            k_guess_bubble=prev_kb, k_guess_dew_upper=prev_k_dew_upper,
+            k_guess_dew_lower=prev_k_dew_lower,
             branch_hint=prev_type, tol=tol, max_iter=max_iter,
         )
         primary = finder.find_bubble_point()
+        primary_k = finder.last_k
         p_upper_for_dew = primary.pressure if primary is not None else p_max_bar
         secondary = finder.find_dew_point(p_upper_for_dew)
+        secondary_k = finder.last_k if secondary is not None else None
 
         elapsed = time.time() - t0
         slow_streak = slow_streak + 1 if elapsed > slow_point_budget_s else 0
@@ -370,9 +427,13 @@ def _calculate_envelope_chunk_worker(
             break
 
         results.append((float(t_c), primary, secondary))
-        prev_pb, prev_type = primary.pressure, primary.point_type
+        prev_type = primary.point_type
+        if primary.point_type == 'bubble':
+            prev_pb, prev_kb = primary.pressure, primary_k
+        else:
+            prev_p_dew_upper, prev_k_dew_upper = primary.pressure, primary_k
         if secondary is not None:
-            prev_pdew = secondary.pressure
+            prev_p_dew_lower, prev_k_dew_lower = secondary.pressure, secondary_k
 
     return results
 
@@ -383,12 +444,18 @@ class PhaseEnvelopeNewton:
     независимый от `PhaseEnvelopeSSM` способ построить огибающую (см.
     докстринг модуля за мотивацией/ограничениями). Тот же интерфейс и формат
     результата, что у `PhaseEnvelopeSSM` (для прямого сравнения/наложения на
-    графике). Основная (bubble/dew upper) ветка ЧИСТО ОСТАНАВЛИВАЕТСЯ у
-    критической точки состава, вместо того чтобы пытаться пройти её (как это
-    делает SSM) — но `calculate()` (не `calculate_parallel()`) следом
-    достраивает нижнюю ретроградную ветку (`Dew_lower_bar`) отдельным
-    проходом: одна затравочная точка через `SaturationPointSSM`, дальше —
-    снова чистый Ньютон (см. `_bootstrap_and_march_lower_dew`).
+    графике). Основной march (bubble/dew upper с continuation по P и K)
+    останавливается у критической точки состава — `calculate()` (не
+    `calculate_parallel()`) следом достраивает обе оставшиеся ветки отдельными
+    проходами: нижнюю ретроградную (`Dew_lower_bar`) — через одну затравку
+    `SaturationPointSSM` и дальше continuation Ньютоном (см.
+    `_bootstrap_and_march_lower_dew`); верхнюю (`Dew_upper_bar`) сразу за
+    критикой — "проездом" через несколько неверифицированных шагов подряд с
+    последней уже верифицированной точки основного march'а (см.
+    `_coast_through_upper_dew`), без обращения к SSM вообще. Обе достройки
+    покрывают то, что могут, но не гарантируют полного покрытия до самого
+    конца запрошенного диапазона — для гарантии в критической/ретроградной
+    зоне остаётся `PhaseEnvelopeSSM`.
     """
 
     def __init__(
@@ -491,9 +558,15 @@ class PhaseEnvelopeNewton:
         self.results = {'Temp_C': [], 'Bubble_bar': [], 'Dew_upper_bar': [], 'Dew_lower_bar': []}
 
         prev_pb: float | None = None
-        prev_pdew: float | None = None
+        prev_p_dew_upper: float | None = None
+        prev_p_dew_lower: float | None = None
+        prev_kb: dict | None = None
+        prev_k_dew_upper: dict | None = None
+        prev_k_dew_lower: dict | None = None
         prev_type = 'bubble'
         slow_streak = 0
+        last_primary_p: float | None = None
+        last_primary_k: dict | None = None
 
         for i, t_c in enumerate(self.temps_c):
             t_k = float(t_c) + 273.15
@@ -501,12 +574,17 @@ class PhaseEnvelopeNewton:
 
             finder = SaturationPointNewton(
                 self.composition, t_k, self.p_max_bar, self.p_min_bar,
-                p_guess_bubble=prev_pb, p_guess_dew=prev_pdew,
+                p_guess_bubble=prev_pb, p_guess_dew_upper=prev_p_dew_upper,
+                p_guess_dew_lower=prev_p_dew_lower,
+                k_guess_bubble=prev_kb, k_guess_dew_upper=prev_k_dew_upper,
+                k_guess_dew_lower=prev_k_dew_lower,
                 branch_hint=prev_type, tol=self.tol, max_iter=self.max_iter,
             )
             primary = finder.find_bubble_point()
+            primary_k = finder.last_k
             p_upper_for_dew = primary.pressure if primary is not None else self.p_max_bar
             secondary = finder.find_dew_point(p_upper_for_dew)
+            secondary_k = finder.last_k if secondary is not None else None
             secondary = self._filter_near_duplicate_dew(t_c, primary, secondary)
 
             elapsed = time.time() - t0
@@ -533,168 +611,130 @@ class PhaseEnvelopeNewton:
                 break
 
             self._append_result(t_c, primary, secondary)
-            prev_pb, prev_type = primary.pressure, primary.point_type
+            prev_type = primary.point_type
+            if primary.point_type == 'bubble':
+                prev_pb, prev_kb = primary.pressure, primary_k
+            else:
+                prev_p_dew_upper, prev_k_dew_upper = primary.pressure, primary_k
             if secondary is not None:
-                prev_pdew = secondary.pressure
+                prev_p_dew_lower, prev_k_dew_lower = secondary.pressure, secondary_k
+            # Последняя верифицированная точка march'а (любого типа) — лучшая
+            # доступная затравка для "проезда" через трудную зону вокруг
+            # критической точки состава (см. `_coast_through_upper_dew`):
+            # точнее, чем затравка через SSM с ослабленным допуском.
+            last_primary_p, last_primary_k = primary.pressure, primary_k
 
         if self.bootstrap_lower_dew:
             # Сначала верхняя ветка (Bubble/Dew_upper) — нижняя ветка сверяется
             # с ней при отбраковке дублей (см. ниже), поэтому порядок важен.
-            self._bootstrap_and_march_upper_dew()
+            self._coast_through_upper_dew(last_primary_p, last_primary_k)
             self._bootstrap_and_march_lower_dew()
 
         return pd.DataFrame(self.results)
 
-    def _bootstrap_and_march_upper_dew(self, max_islands: int = 1) -> None:
+    def _coast_through_upper_dew(
+        self, seed_p: float | None, seed_k: dict | None, max_unverified_run: int = 12,
+    ) -> None:
         """
-        Достраивает верхнюю ветку (`Bubble_bar`/`Dew_upper_bar`) за точкой, где
-        основной march остановился — тем же приёмом, что и нижняя ретроградная
-        ветка (см. `_bootstrap_and_march_lower_dew`): затравка через
-        `SaturationPointSSM.find_bubble_point` (несмотря на имя — как и в самом
-        SSM, физический тип найденной точки может оказаться `'dew'` — обычный
-        случай здесь, раз мы уже за критической точкой состава), потом снова
-        чистый Ньютон. Кандидат принимается, только если Ньютон, стартовав от
-        SSM-затравки НА ТОЙ ЖЕ T, сам подтверждает точку верификацией — SSM
-        может успешно "найти" что-то и там, где `DewPointCalculator` от этой
-        же точки сходится не к границе (см. ниже), поэтому доверять одному
-        только успеху SSM недостаточно.
+        Пробует "проехать" верхнюю ветку (`Dew_upper_bar`) через трудную зону
+        вокруг критической точки состава, где основной march остановился —
+        не отдельными затравками через SSM (как было раньше — см. историю
+        находки ниже), а continuation'ом P И K с ПОСЛЕДНЕЙ УЖЕ верифицированной
+        точки march'а (`seed_p`/`seed_k`), продолжая уравнение "dew" по T шаг
+        за шагом БЕЗ остановки на первой же неверифицированной точке.
 
-        В ОТЛИЧИЕ от нижней ветки, этот bootstrap ЧАСТО не может продвинуться
-        вообще — не из-за качества затравки, а из-за более широкой проблемы,
-        обнаруженной эмпирически (после исправления `calc_d_log_phi_i_dp`, см.
-        докстринг модуля): `DewPointCalculator` при любом вызове ВСЕГДА
-        пересобирает стартовые K-факторы заново по грубой корреляции Вильсона
-        от переданного P (не принимает готовый K с предыдущего шага) — и в
-        ШИРОКОЙ полосе T вокруг критической точки состава (на KRSNL — весь
-        диапазон T≈360-435°C, не только пара точек сразу у критики) это уводит
-        Ньютон к другому математическому корню уравнения Σzᵢ/Kᵢ=1, даже если
-        стартовое P было ТОЧНЫМ (проверено на нескольких T с P от самой SSM —
-        не сходится к границе нигде в этой полосе). Дальше по T (проверено:
-        T=440°C+) уравнение снова хорошо обусловлено для любого разумного P.
-        Пробовать "перепрыгнуть" всю эту полосу веером затравок дальше по T
-        технически работает, но каждая неудачная проба стоит отдельного вызова
-        SSM — в этой полосе это ощутимо (несколько секунд на попытку), поэтому
-        `max_islands` по умолчанию всего 1 (не гоняемся за этой веткой ценой
-        заметного времени — честный пробел здесь ожидаем и покрывается
-        `PhaseEnvelopeSSM`). Полноценное решение потребовало бы отдельного
-        изменения `DewPointCalculator` (принимать явный K-guess, а не только
-        P-guess) — вне рамок этой задачи.
+        Смена философии по сравнению с первой версией этого метода: раньше
+        continuation обрывался сразу, как только точка не проходила
+        верификацию. Обнаружено эмпирически (ручной прогон вне модуля): если
+        ПРОДОЛЖАТЬ continuation через несколько таких неподтверждённых шагов
+        подряд (перенося P и K дальше, даже не записывая их в результат), то
+        через какое-то число шагов T уравнение "dew" снова становится хорошо
+        обусловленным, и точки снова начинают проходить верификацию — на
+        составе KRSNL удалось дойти от T=375°C (bubble, конец основного
+        march'а) до T=425°C (dew, верифицировано, совпадает с SSM до 0.2-0.5%)
+        за 2-3 итерации Ньютона на шаг. Причина, по которой первая версия
+        (одна SSM-затравка сразу за разрывом, без "проезда") не работала:
+        сам `DewPointCalculator` пересобирает K заново по Вильсону при
+        КАЖДОМ вызове без continuation — SSM это ограничение не имеет
+        (бисекция по флагу стабильности, не Ньютон), но найти НАСТОЯЩУЮ
+        границу от SSM-затравки `DewPointCalculator` всё равно не мог — не
+        потому что затравка плохая, а потому что continuation'а по K не было
+        вообще (только по P). Теперь есть (`K_guess`/`result_K` в
+        `BubblePointCalculator`/`DewPointCalculator`).
+
+        Только ВЕРИФИЦИРОВАННЫЕ точки записываются в `Dew_upper_bar` —
+        непройденные остаются NaN (честно), но их P/K всё равно используются
+        как continuation-основа для следующего шага (в этом и смысл "проезда").
+        Обрывается, если `max_unverified_run` шагов подряд не сходятся вообще
+        (Newton не сошёлся) — за пределами этого счётчика зона считается
+        непроходимой в разумное время, и `PhaseEnvelopeSSM` — единственный
+        вариант для неё.
         """
-        bubble = self.results['Bubble_bar']
+        if seed_p is None or seed_k is None:
+            return
+
         dew_upper = self.results['Dew_upper_bar']
+        bubble = self.results['Bubble_bar']
+        start_idx = next(
+            (i for i, (b, d) in enumerate(zip(bubble, dew_upper)) if pd.isna(b) and pd.isna(d)),
+            None,
+        )
+        if start_idx is None:
+            return  # весь диапазон уже покрыт
 
-        for _island in range(max_islands):
-            start_idx = next(
-                (i for i, (b, d) in enumerate(zip(bubble, dew_upper)) if pd.isna(b) and pd.isna(d)),
-                None,
+        prev_p, prev_k = seed_p, seed_k
+        unverified_run = 0
+
+        for j in range(start_idx, len(self.temps_c)):
+            t_c = self.temps_c[j]
+            t_k = float(t_c) + 273.15
+
+            calc = DewPointCalculator(
+                self.composition, t_k, dew_point_type='upper',
+                P_guess=prev_p, K_guess=prev_k, tol=self.tol, max_iter=self.max_iter,
             )
-            if start_idx is None:
-                return  # весь диапазон уже покрыт
+            p = calc.calculate()
 
-            remaining = len(self.temps_c) - start_idx
-            candidate_offsets = list(range(min(self.lower_dew_bootstrap_attempts, remaining)))
-
-            seed_idx, seed_p, seed_type = None, None, None
-            for offset in candidate_offsets:
-                j = start_idx + min(offset, remaining - 1)
-                t_c = self.temps_c[j]
-                t_k = float(t_c) + 273.15
-                ssm_finder = SaturationPointSSM(
-                    self.composition, t_k, self.p_max_bar, self.p_min_bar,
-                    bracket_tol_rel=self.bootstrap_bracket_tol_rel,
+            if p is None or not calc.converged or not (self.p_min_bar < p < self.p_max_bar):
+                unverified_run += 1
+                logger.debug(
+                    "Newton (coast-through): не сошлось на T=%.2f °C (%d/%d "
+                    "неудач подряд)", t_c, unverified_run, max_unverified_run,
                 )
-                ssm_pt = ssm_finder.find_bubble_point()
-                if ssm_pt is None:
-                    continue
-
-                # SSM сама по себе не страдает от эффекта ниже (её бисекция не
-                # зависит от Ньютоновского K-Вильсон-рестарта) и может успешно
-                # найти точку ДАЖЕ ВНУТРИ трудной зоны — проверено эмпирически:
-                # на этом составе SSM (loose tol) находит "точку" почти на
-                # каждом T от 360 до 425°C, но `DewPointCalculator`, стартуя
-                # ОТТУДА, всё равно сходится не к границе (обе стороны
-                # нестабильны — Newton уводит в сторону из-за пересборки
-                # K с нуля по Вильсону на каждом вызове, см. докстринг модуля).
-                # Поэтому кандидат считается принятым, только если Ньютон,
-                # стартовав от SSM-затравки, САМ подтверждает точку
-                # верификацией — иначе кандидат отбрасывается и пробуется
-                # следующий (более дальний) офсет, а не первый успех SSM.
-                verify_finder = SaturationPointNewton(
-                    self.composition, t_k, self.p_max_bar, self.p_min_bar,
-                    p_guess_bubble=ssm_pt.pressure if ssm_pt.point_type == 'bubble' else None,
-                    p_guess_dew=ssm_pt.pressure if ssm_pt.point_type == 'dew' else None,
-                    branch_hint=ssm_pt.point_type, tol=self.tol, max_iter=self.max_iter,
-                )
-                verified_pt = verify_finder.find_bubble_point()
-                if verified_pt is None:
-                    logger.debug(
-                        "Newton: SSM-затравка на T=%.2f °C (смещение %d) не "
-                        "подтвердилась Ньютоном — пробую следующий офсет",
-                        t_c, offset,
-                    )
-                    continue
-
-                seed_idx, seed_p, seed_type = j, verified_pt.pressure, verified_pt.point_type
-                if seed_type == 'bubble':
-                    bubble[j] = seed_p
-                else:
-                    dew_upper[j] = seed_p
-                logger.info(
-                    "Newton: верхняя ветка затравлена через SSM+Ньютон на "
-                    "T=%.2f °C (остров %d, смещение %d от разрыва в %d точек), "
-                    "P=%.4f бар, тип=%s",
-                    t_c, _island + 1, offset, remaining, seed_p, seed_type,
-                )
-                break
-
-            if seed_idx is None:
-                logger.info(
-                    "Newton: не удалось затравить верхнюю ветку ни в одной из "
-                    "%d проб (веером) после T=%.2f °C — останавливаюсь",
-                    len(candidate_offsets), self.temps_c[start_idx],
-                )
-                return
-
-            prev_p, prev_type = seed_p, seed_type
-            slow_streak = 0
-            for j in range(seed_idx + 1, len(self.temps_c)):
-                t_c = self.temps_c[j]
-                t_k = float(t_c) + 273.15
-                t0 = time.time()
-
-                finder = SaturationPointNewton(
-                    self.composition, t_k, self.p_max_bar, self.p_min_bar,
-                    p_guess_bubble=prev_p if prev_type == 'bubble' else None,
-                    p_guess_dew=prev_p if prev_type == 'dew' else None,
-                    branch_hint=prev_type, tol=self.tol, max_iter=self.max_iter,
-                )
-                pt = finder.find_bubble_point()
-
-                elapsed = time.time() - t0
-                slow_streak = slow_streak + 1 if elapsed > self.slow_point_budget_s else 0
-
-                if pt is None:
+                if unverified_run > max_unverified_run:
                     logger.info(
-                        "Newton: верхняя ветка (после затравки) остановлена на "
-                        "T=%.2f °C (точка не верифицирована)", t_c,
+                        "Newton: верхняя ветка (coast-through) остановлена на "
+                        "T=%.2f °C — %d шагов подряд не сходятся вообще",
+                        t_c, unverified_run,
                     )
-                    break
+                    return
+                continue  # продолжаем со СТАРОЙ (prev_p, prev_k) основы
 
-                if pt.point_type == 'bubble':
-                    bubble[j] = pt.pressure
-                else:
-                    dew_upper[j] = pt.pressure
-                prev_p, prev_type = pt.pressure, pt.point_type
+            verify_finder = SaturationPointNewton(self.composition, t_k, self.p_max_bar, self.p_min_bar)
+            label = verify_finder._verify(p, nudge_sign=-1.0)
 
-                if slow_streak >= self.max_consecutive_slow_points:
-                    logger.info(
-                        "Newton: верхняя ветка (после затравки) остановлена на "
-                        "T=%.2f °C (%d шагов подряд дольше %.1f сек)",
-                        t_c, slow_streak, self.slow_point_budget_s,
-                    )
-                    break
+            # Продолжаем ВСЕГДА (даже без верификации) — в этом и есть смысл
+            # "проезда": сам факт сходимости Ньютона (даже к нефизичному
+            # корню) обычно ближе к истинной равновесной траектории K(T), чем
+            # застревание на старой точке.
+            prev_p, prev_k = p, calc.result_K
+
+            if label == 'dew':
+                dew_upper[j] = p
+                unverified_run = 0
+                logger.info(
+                    "Newton: верхняя ветка (coast-through) — верифицированная "
+                    "точка на T=%.2f °C, P=%.4f бар", t_c, p,
+                )
             else:
-                return  # дошли до конца диапазона без остановки — готово
+                unverified_run += 1
+                if unverified_run > max_unverified_run:
+                    logger.info(
+                        "Newton: верхняя ветка (coast-through) остановлена на "
+                        "T=%.2f °C — %d шагов подряд не верифицируются",
+                        t_c, unverified_run,
+                    )
+                    return
 
     def _bootstrap_and_march_lower_dew(self) -> None:
         """
@@ -741,7 +781,7 @@ class PhaseEnvelopeNewton:
             )
             return
 
-        prev_p = seed_p
+        prev_p, prev_k = seed_p, None
         slow_streak = 0
         for j in range(seed_idx, len(self.temps_c)):
             t_c = self.temps_c[j]
@@ -750,7 +790,8 @@ class PhaseEnvelopeNewton:
 
             finder = SaturationPointNewton(
                 self.composition, t_k, self.p_max_bar, self.p_min_bar,
-                p_guess_dew=prev_p, tol=self.tol, max_iter=self.max_iter,
+                p_guess_dew_lower=prev_p, k_guess_dew_lower=prev_k,
+                tol=self.tol, max_iter=self.max_iter,
             )
             pt = finder.find_dew_point(self.p_max_bar)
 
@@ -775,7 +816,7 @@ class PhaseEnvelopeNewton:
                 break
 
             self.results['Dew_lower_bar'][j] = pt.pressure
-            prev_p = pt.pressure
+            prev_p, prev_k = pt.pressure, finder.last_k
 
             if slow_streak >= self.max_consecutive_slow_points:
                 logger.info(

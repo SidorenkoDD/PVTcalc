@@ -19,6 +19,7 @@ class BubblePointCalculator:
         composition: Composition,
         T: float,
         P_guess: float = None,
+        K_guess: dict = None,
         max_iter: int = 200,
         tol: float = 1e-8,
     ):
@@ -26,11 +27,13 @@ class BubblePointCalculator:
         self.T = T
         self.composition.T = self.T
         self.P_guess = P_guess
+        self.K_guess = K_guess
         self.max_iter = max_iter
         self.tol = tol
 
         self.result_P = None
         self.result_F = None
+        self.result_K = None
         self.converged = False
         self.iterations_done = 0
 
@@ -54,7 +57,16 @@ class BubblePointCalculator:
         else:
             P = self.P_guess
 
-        K = (Pc / P) * exp_term
+        # K_guess — continuation с предыдущего сошедшегося шага по T (не
+        # только P): вблизи критической точки состава Вильсон systematически
+        # даёт K, далёкий от истинного равновесного, из-за чего Ньютон может
+        # уйти к другому математическому корню даже от точного P_guess (см.
+        # PhaseEnvelopeNewton.py за находкой на DewPointCalculator — тот же
+        # эффект применим и здесь).
+        if self.K_guess is not None:
+            K = np.array([self.K_guess[c] for c in components])
+        else:
+            K = (Pc / P) * exp_term
 
         # Проверяем стабильность при начальном P и находим область нестабильности
         P, K = self._find_unstable_region(P, K, z, components)
@@ -114,6 +126,7 @@ class BubblePointCalculator:
                 logger.info(f"Bubble point converged in {j+1} iterations. P = {P:.4f}, F = {F:.2e}")
                 self.result_P = P
                 self.result_F = F
+                self.result_K = {c: float(K_new[i]) for i, c in enumerate(components)}
                 self.converged = True
                 self.iterations_done = j + 1
                 return P

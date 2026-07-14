@@ -21,22 +21,25 @@ class DewPointCalculator:
         T: float,
         dew_point_type: str = 'upper',
         P_guess: float = None,
+        K_guess: dict = None,
         max_iter: int = 100,
         tol: float = 1e-10,
     ):
         if dew_point_type not in ['upper', 'lower']:
             raise ValueError(f"dew_point_type must be 'upper' or 'lower', got '{dew_point_type}'")
-        
+
         self.composition = composition
         self.T = T
         self.composition.T = self.T
         self.dew_point_type = dew_point_type
         self.P_guess = P_guess
+        self.K_guess = K_guess
         self.max_iter = max_iter
         self.tol = tol
 
         self.result_P = None
         self.result_F = None
+        self.result_K = None
         self.converged = False
         self.iterations_done = 0
 
@@ -70,10 +73,20 @@ class DewPointCalculator:
                 P = 1.0 / np.sum(z / K_wilson)
             logger.info(f"Initial pressure estimate (Wilson): P={P:.4f} bar")
         
-        # Шаг 2: Оцениваем K-факторы по уравнению Вильсона
-        exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
-        K = (Pc / P) * exp_term
-        logger.debug(f"Initial K-factors (Wilson): {dict(zip(components, K))}")
+        # Шаг 2: Начальные K-факторы — либо переданный K_guess (continuation с
+        # предыдущего сошедшегося шага по T, а не пересборка с нуля), либо
+        # (по умолчанию, как раньше) оценка по Вильсону при текущем P. Вблизи
+        # критической точки состава Вильсон systematически даёт K, далёкий от
+        # истинного равновесного — тогда даже точный P_guess не спасает: Ньютон
+        # уходит к другому математическому корню Σzᵢ/Kᵢ=1 (см. PhaseEnvelopeNewton.py
+        # за находкой). K_guess — обходной путь для continuation по T.
+        if self.K_guess is not None:
+            K = np.array([self.K_guess[c] for c in components])
+            logger.debug(f"Initial K-factors (continuation guess): {dict(zip(components, K))}")
+        else:
+            exp_term = np.exp(5.373 * (1.0 + omega) * (1.0 - Tc / self.T))
+            K = (Pc / P) * exp_term
+            logger.debug(f"Initial K-factors (Wilson): {dict(zip(components, K))}")
         
         # Основной цикл итераций (шаги 3-9)
         for j in range(self.max_iter):
@@ -142,6 +155,7 @@ class DewPointCalculator:
                 
                 self.result_P = P
                 self.result_F = F
+                self.result_K = {c: float(K_new[i]) for i, c in enumerate(components)}
                 self.converged = True
                 self.iterations_done = j + 1
                 return P
