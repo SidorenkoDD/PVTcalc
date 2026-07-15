@@ -51,6 +51,18 @@ class PhaseEnvelopeFacade:
         """
         self._model = model
 
+    def _composition_copy(self):
+        """
+        Независимая копия `model.composition` для передачи в calc_core-калькулятор.
+
+        Почти все calc_core-калькуляторы мутируют переданный им `Composition`
+        напрямую (`composition.T = ...` — тяжёлый setter, пересчитывает
+        EOS-зависимые свойства/BIP, см. `Composition.T`). Без этой копии
+        `model.composition` тихо менялся бы при каждом вызове фасада.
+        """
+        composition = self._model.composition
+        return composition.new_composition(composition.composition, deep_copy=True)
+
     def bubble_point(self, T: float, **kwargs) -> float:
         """
         Давление точки кипения (Ньютон по производным летучести).
@@ -73,7 +85,7 @@ class PhaseEnvelopeFacade:
         ConvergenceError
             Если `BubblePointCalculator` не сошёлся.
         """
-        calc = BubblePointCalculator(self._model.composition, T, **kwargs)
+        calc = BubblePointCalculator(self._composition_copy(), T, **kwargs)
         p = calc.calculate()
 
         self._model.result_store_object.add(
@@ -108,7 +120,7 @@ class PhaseEnvelopeFacade:
         ConvergenceError
             Если `DewPointCalculator` не сошёлся или вернул `None`.
         """
-        calc = DewPointCalculator(self._model.composition, T, **kwargs)
+        calc = DewPointCalculator(self._composition_copy(), T, **kwargs)
         p = calc.calculate()
 
         self._model.result_store_object.add(
@@ -141,7 +153,7 @@ class PhaseEnvelopeFacade:
         ConvergenceError
             Если критическая точка не найдена (`calculate()` вернул `None`).
         """
-        calc = CriticalPointCalculator(self._model.composition, **kwargs)
+        calc = CriticalPointCalculator(self._composition_copy(), **kwargs)
         result = calc.calculate()
 
         self._model.result_store_object.add(
@@ -171,7 +183,7 @@ class PhaseEnvelopeFacade:
             прочие атрибуты. В историю (`result_store_object`) кладётся не
             он сам, а снэпшот его массивов на момент вызова.
         """
-        calc = PhaseEnvelopeGrid(self._model.composition, **kwargs)
+        calc = PhaseEnvelopeGrid(self._composition_copy(), **kwargs)
         calc.run_parallel()
 
         self._model.result_store_object.add(
@@ -207,7 +219,7 @@ class PhaseEnvelopeFacade:
         pandas.DataFrame
             Таблица `Temp_C`/`Bubble_bar`/`Dew_upper_bar`/`Dew_lower_bar`.
         """
-        calc = PhaseEnvelopeSSM(self._model.composition, t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
+        calc = PhaseEnvelopeSSM(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
         df = calc.calculate_parallel() if parallel else calc.calculate()
 
         self._model.result_store_object.add(
@@ -244,7 +256,7 @@ class PhaseEnvelopeFacade:
         -------
         pandas.DataFrame
         """
-        calc = PhaseEnvelopeNewton(self._model.composition, t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
+        calc = PhaseEnvelopeNewton(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
         df = calc.calculate_parallel() if parallel else calc.calculate()
 
         self._model.result_store_object.add(
