@@ -687,36 +687,48 @@ class PhaseEnvelopeSSM:
 
     def plot(self, show: bool = True, save_path: str | None = None):
         """
-        P-T диаграмма с тремя физически различными кривыми (см. докстринг
-        класса): Bubble, Dew upper (за критической точкой состава — там, где
-        поиск "сверху вниз" находит уже не bubble, а верхнюю точку росы) и
-        Dew lower (нижняя ретроградная точка, если найдена).
+        P-T диаграмма фазовой огибающей как ОДНОЙ непрерывной линии (без
+        маркеров точек).
+
+        `Bubble_bar`/`Dew_upper_bar` — взаимодополняющие половины одной и той
+        же физической кривой (см. докстринг класса: за критической точкой
+        состава поиск "сверху вниз" находит уже не bubble, а верхнюю точку
+        росы) — объединяются в одну верхнюю ветку через `combine_first`, без
+        разрыва в точке перехода.
+
+        `Dew_lower_bar` (нижняя ретроградная точка) физически смыкается с
+        верхней веткой у критической точки состава — пристыковывается к ней в
+        обратном порядке по температуре, замыкая контур одной линией вместо
+        трёх стилистически разных кусков. Из-за отбрасывания "почти-дублей"
+        (`dew_bubble_min_gap_rel`, см. `_filter_near_duplicate_dew`) сама
+        точка смыкания в данных отсутствует — линия соединяет ближайшие
+        оставшиеся точки напрямую, без дополнительного сглаживания.
         """
-        df = pd.DataFrame(self.results)
+        df = pd.DataFrame(self.results).sort_values('Temp_C').reset_index(drop=True)
         if df.empty:
             logger.warning("Нет данных для построения — вызовите calculate() перед plot().")
             return None
 
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        bubble = df.dropna(subset=['Bubble_bar'])
-        dew_upper = df.dropna(subset=['Dew_upper_bar'])
-        dew_lower = df.dropna(subset=['Dew_lower_bar'])
+        upper = df['Bubble_bar'].combine_first(df['Dew_upper_bar'])
+        upper_mask = upper.notna()
+        upper_t = df.loc[upper_mask, 'Temp_C'].to_numpy()
+        upper_p = upper[upper_mask].to_numpy()
 
-        if not bubble.empty:
-            ax.plot(bubble['Temp_C'], bubble['Bubble_bar'], 'b-o',
-                    label='Bubble Point (насыщение)', markersize=4, linewidth=2)
-        if not dew_upper.empty:
-            ax.plot(dew_upper['Temp_C'], dew_upper['Dew_upper_bar'], 'r-s',
-                    label='Dew Point, upper (начало конденсации)', markersize=4, linewidth=2)
-        if not dew_lower.empty:
-            ax.plot(dew_lower['Temp_C'], dew_lower['Dew_lower_bar'], 'r--^',
-                    label='Dew Point, lower (ретроградная)', markersize=4, linewidth=2)
+        lower = df.dropna(subset=['Dew_lower_bar']).sort_values('Temp_C', ascending=False)
+        lower_t = lower['Temp_C'].to_numpy()
+        lower_p = lower['Dew_lower_bar'].to_numpy()
 
-        ax.set_xlabel('Температура, °C')
-        ax.set_ylabel('Давление, бар')
-        ax.set_title('Фазовая огибающая (метод последовательных приближений)')
-        ax.legend()
+        envelope_t = np.concatenate([upper_t, lower_t])
+        envelope_p = np.concatenate([upper_p, lower_p])
+
+        if envelope_t.size:
+            ax.plot(envelope_t, envelope_p, 'b-', linewidth=2)
+
+        ax.set_xlabel('Temperature, °C')
+        ax.set_ylabel('Pressure, bar')
+        ax.set_title('Phase envelope')
         ax.grid(True, linestyle='--', alpha=0.6)
         fig.tight_layout()
 
