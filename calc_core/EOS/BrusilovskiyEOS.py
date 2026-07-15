@@ -329,6 +329,41 @@ class BrusilovskiyEOS(EOS):
         """
         return self._Aij @ self._x
 
+    @staticmethod
+    def _fugacity_coef_logarithm_from_dimensionless(
+        z: float, A_m: float, B_m: float, C_m: float, D_m: float,
+        B_i: np.ndarray, C_i: np.ndarray, D_i: np.ndarray, sum_xi_Aij: np.ndarray,
+    ):
+        """
+        Формула ln(phi_i) из безразмерных Z/A_m/B_m/C_m/D_m + покомпонентных
+        B_i/C_i/D_i/sum_xi_Aij — без привязки к тому, ОТКУДА эти величины
+        взялись (решённая при фиксированном P кубика, как в `_calc_fugacity_
+        coef_logarithm_vector`, или явная (T,V,n)-оценка, как в
+        `eval_pv_lnphi`). Выделено в чистую функцию, чтобы формула была
+        одна на оба пути — см. `eval_pv_lnphi`.
+
+        Returns
+        -------
+        np.ndarray, shape (nc,)
+            Нулевой вектор, если `z <= B_m` (физически недопустимый корень).
+        """
+        if z <= B_m:
+            return np.zeros_like(B_i)
+
+        log_term = math.log((z + C_m) / (z + D_m))
+        cd_diff = C_m - D_m
+
+        part1 = -math.log(z - B_m)
+        part2 = -A_m / cd_diff * (
+            (2.0 * sum_xi_Aij) / A_m - (C_i - D_i) / cd_diff
+        ) * log_term
+        part3 = B_i / (z - B_m)
+        part4 = -A_m / cd_diff * (
+            C_i / (z + C_m) - D_i / (z + D_m)
+        )
+
+        return part1 + part2 + part3 + part4
+
     def _calc_fugacity_coef_logarithm_vector(self, root: float):
         """
         Возвращает вектор ln(phi_i) для заданного корня Z.
@@ -344,30 +379,101 @@ class BrusilovskiyEOS(EOS):
             Нулевой вектор, если `root <= B_m` (физически недопустимый корень).
         """
         z = float(root)
-
-        A_m = self._A_mixture
-        B_m = self._B_mixture
-        C_m = self._C_mixture
-        D_m = self._D_mixture
-
-        if z <= B_m:
-            return np.zeros(self._nc, dtype=np.float64)
-
         sum_xi_Aij = self._calc_sum_xi_Aij()
 
-        log_term = math.log((z + C_m) / (z + D_m))
-        cd_diff = C_m - D_m
-
-        part1 = -math.log(z - B_m)
-        part2 = -A_m / cd_diff * (
-            (2.0 * sum_xi_Aij) / A_m - (self._C - self._D) / cd_diff
-        ) * log_term
-        part3 = self._B / (z - B_m)
-        part4 = -A_m / cd_diff * (
-            self._C / (z + C_m) - self._D / (z + D_m)
+        return self._fugacity_coef_logarithm_from_dimensionless(
+            z, self._A_mixture, self._B_mixture, self._C_mixture, self._D_mixture,
+            self._B, self._C, self._D, sum_xi_Aij,
         )
 
-        return part1 + part2 + part3 + part4
+    @staticmethod
+    def eval_pv_lnphi(
+        a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray, bip: np.ndarray,
+        x: np.ndarray, t: float, v: float,
+    ):
+        """
+        (T,V,n)-нативная оценка EOS: P и ln(phi_i) явной функцией от объёма,
+        БЕЗ решения кубического уравнения — в отличие от основного пути
+        класса (`calc_eos()`), который фиксирует P и решает кубику за Z.
+        Нужна для метода Михельсена определения критической точки
+        (`CriticalPointMichelsen.py`): там T и V — независимые переменные, а
+        P — вычисляемая величина (см. книгу Michelsen & Mollerup, гл. 9).
+
+        Явная форма давления для этого семейства EOS (Брусиловский —
+        обобщение PR/SRK с 4 параметрами a/b/c/d):
+
+            P = RT/(V - b_m) - a_m / ((V + c_m)(V + d_m))
+
+        Формула получена и проверена алгебраической подстановкой Z=PV/(RT) в
+        неё и сверкой с E0/E1/E2 из `_calc_roots_eos` — совпадает с ними
+        почленно, то есть это ТА ЖЕ кубика, просто явно разрешённая
+        относительно P при заданном V (а не Z при заданном P). Дополнительно
+        проверяется численно, см. `tests/regression/test_eos_volume_explicit.py`.
+
+        Parameters
+        ----------
+        a, b, c, d : np.ndarray, shape (nc,)
+            Параметры EOS компонент при температуре `t` (то есть уже взятые
+            из `composition_data` ПОСЛЕ того, как `composition.T` выставлена
+            в `t` — `a` зависит от T, `b/c/d` нет, см. `BRS_EOS_DB.calc_a_b_c_d`).
+        bip : np.ndarray, shape (nc,nc)
+            Матрица коэффициентов парного взаимодействия при температуре `t`
+            (для Брусиловского зависит от T — как и `a`, должна быть снята
+            с `composition_data['bip']` после установки `composition.T = t`).
+        x : np.ndarray, shape (nc,)
+            Мольные доли (не обязаны быть исходным составом — метод
+            Михельсена вызывает это на возмущённых пробных составах).
+        t : float
+            Температура, K.
+        v : float
+            Молярный объём во ВНУТРЕННИХ ("сырых") единицах EOS — то есть
+            тех же, в которых заданы `a/b/c/d` в `composition_data` (не см³/
+            моль — см. CLAUDE.md/докстринг `CriticalPointMichelsen.py` про
+            расхождение x10 с `FluidPropertiesCalculator.molar_volume`).
+
+        Returns
+        -------
+        tuple[float, np.ndarray]
+            `(P, ln_phi)` — давление (бар) и вектор ln(phi_i), shape (nc,).
+        """
+        rt = CONSTANT_R * t
+
+        Aij_raw = np.sqrt(np.outer(a, a)) * (1.0 - bip)
+        a_m = float(x @ Aij_raw @ x)
+        b_m = float(x @ b)
+        c_m = float(x @ c)
+        d_m = float(x @ d)
+
+        p = rt / (v - b_m) - a_m / ((v + c_m) * (v + d_m))
+        z = p * v / rt
+
+        A_m = a_m * p / (rt ** 2)
+        B_m = b_m * p / rt
+        C_m = c_m * p / rt
+        D_m = d_m * p / rt
+
+        B_i = b * p / rt
+        C_i = c * p / rt
+        D_i = d * p / rt
+        sum_xi_Aij = (p / (rt ** 2)) * (Aij_raw @ x)
+
+        ln_phi = BrusilovskiyEOS._fugacity_coef_logarithm_from_dimensionless(
+            z, A_m, B_m, C_m, D_m, B_i, C_i, D_i, sum_xi_Aij,
+        )
+        return p, ln_phi
+
+    def eval_at_volume(self, v: float):
+        """
+        Удобная обёртка `eval_pv_lnphi` для собственного (не возмущённого)
+        состава/температуры этого экземпляра — см. `eval_pv_lnphi` за
+        подробностями и единицами `v`.
+
+        Returns
+        -------
+        tuple[float, np.ndarray]
+            `(P, ln_phi)`.
+        """
+        return self.eval_pv_lnphi(self._a, self._b, self._c, self._d, self._bip, self._x, self._t, v)
 
     def _calc_fugacity_logarithm_vector(self, root: float):
         """

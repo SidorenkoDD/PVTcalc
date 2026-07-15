@@ -101,6 +101,17 @@ class SaturationPoint(NamedTuple):
     point_type: str  # 'bubble' | 'dew'
 
 
+class SaturationTemperaturePoint(NamedTuple):
+    """
+    Аналог `SaturationPoint` для изобарного поиска (`SaturationTemperatureSSM`)
+    — найденная величина здесь температура, а не давление, отсюда отдельный
+    NamedTuple вместо переиспользования `SaturationPoint` (чтобы не было поля
+    `pressure`, которое на самом деле температура).
+    """
+    temperature: float
+    point_type: str  # 'bubble' | 'dew'
+
+
 def _wilson_bubble_pressure_estimate(composition: Composition, t_k: float) -> float:
     """
     Дешёвая аналитическая оценка давления насыщения по корреляции Вильсона —
@@ -477,6 +488,274 @@ class SaturationPointSSM:
         return SaturationPoint(pressure=result, point_type=point_type)
 
 
+class SaturationTemperatureSSM:
+    """
+    Изобарный (P задано) поиск температур насыщения — зеркало
+    `SaturationPointSSM` с переставленными ролями T и P: та же бисекция по
+    дискретному флагу стабильности Михельсена, но сканируется T при
+    фиксированном P, а не наоборот.
+
+    Нужен только для уточнения крикондентермы (см. `PhaseEnvelopeExtrema.py::
+    CricondenthermCalculator`) — все остальные решатели в проекте
+    (`SaturationPointSSM`, `BubblePointPressure.py`/`DewPressure.py`) дают P
+    по T. Крикондентерма — точка максимума T на огибающей, а значит locally
+    касательная к огибающей там вертикальна (dP/dT -> ∞) — вблизи неё T(P)
+    численно устойчивее, чем P(T) (тот же принцип, по которому
+    `PhaseEnvelopeNewton.py` вблизи критической точки состава останавливается
+    и подключает SSM — см. его докстринг).
+
+    Роли стабильных концов зеркальны `SaturationPointSSM` по ФИЗИЧЕСКОМУ
+    смыслу, не по числовому направлению: `t_min_k` (холодный, устойчивый как
+    жидкость) играет роль `p_max_bar` (сжатое, тоже устойчиво как жидкость) —
+    обе точки старта для `find_bubble_*`; `t_max_k` (горячий, устойчивый как
+    пар) играет роль `p_min_bar` (разреженное, тоже устойчиво как пар) — обе
+    точки старта для `find_dew_*`. Физический ТИП найденной точки (bubble/
+    dew) по-прежнему определяется ОТДЕЛЬНО, тем же критерием Михельсена — см.
+    `_classify_point_type`/докстринг `SaturationPointSSM`.
+
+    В отличие от `SaturationPointSSM` (там T фиксирована на весь срок жизни
+    объекта и выставляется в `composition.T` один раз в `__init__`), здесь T
+    — как раз то, что варьируется при поиске, поэтому `composition.T`
+    переустанавливается на каждом пробном шаге (`_is_stable`/
+    `_classify_point_type`) — это ощутимо дороже одного вызова
+    `TwoPhaseStabilityTest` при фиксированной T (пересчёт a/b/c/d/BIP при
+    каждой смене T, см. `Composition.T.setter`), поэтому класс расчитан на
+    точечное уточнение вблизи уже известного грубого приближения (узкий
+    `quick_bracket` через `t_guess_*`), а не на скан широкого диапазона.
+    """
+
+    def __init__(
+        self,
+        composition: Composition,
+        p_bar: float,
+        t_max_k: float,
+        t_min_k: float,
+        t_guess_bubble: float | None = None,
+        t_guess_dew: float | None = None,
+        bracket_tol_rel: float = 1e-3,
+        bracket_tol_abs: float = 1e-3,
+        max_iter: int = 100,
+    ):
+        self.composition = composition
+        self.p_bar = p_bar
+
+        self.t_min_k = t_min_k
+        self.t_max_k = t_max_k
+        # См. `SaturationPointSSM.__init__` за обоснованием относительного
+        # допуска и дефолта 1e-3 — те же соображения (критическое замедление
+        # теста стабильности вблизи самой границы) применимы и здесь.
+        self.bracket_tol_rel = bracket_tol_rel
+        self.bracket_tol_abs = bracket_tol_abs
+        self.max_iter = max_iter
+
+        self._t_guess_bubble = t_guess_bubble
+        self._t_guess_dew = t_guess_dew
+
+    def _is_stable(self, t: float) -> bool | None:
+        """Тест стабильности в точке `t` (K) при фиксированном `self.p_bar`.
+        См. `SaturationPointSSM._is_stable` — то же самое, T и P поменяны местами."""
+        try:
+            self.composition.T = t
+            stab = TwoPhaseStabilityTest(self.composition, self.p_bar, t)
+            stab.calculate_phase_stability()
+            return stab.stable
+        except StopIterationError:
+            logger.warning(
+                "Тест стабильности не сошёлся при T=%.4f K (P=%.4f бар)",
+                t, self.p_bar,
+            )
+            return None
+
+    def _classify_point_type(self, t: float, nudge_sign: float) -> str:
+        """См. `SaturationPointSSM._classify_point_type`. `nudge_sign` здесь
+        задаётся направлением ХОДА поиска (в какую сторону от найденной T
+        лежит неустойчивая сторона), а не именем метода — см. докстринг
+        класса и `find_bubble_temperature`/`find_dew_temperature`."""
+        t_test = t * (1.0 + nudge_sign * 10.0 * self.bracket_tol_rel)
+        self.composition.T = t_test
+        stab = TwoPhaseStabilityTest(self.composition, self.p_bar, t_test)
+        stab.calculate_phase_stability()
+        return 'bubble' if (stab.S_v - 1.0) >= (stab.S_l - 1.0) else 'dew'
+
+    def _bracket_is_tight(self, t_lo: float, t_hi: float) -> bool:
+        width = abs(t_hi - t_lo)
+        scale = min(t_lo, t_hi)
+        return width < max(self.bracket_tol_abs, self.bracket_tol_rel * scale)
+
+    def _find_transition_scanning(
+        self, t_from: float, t_to: float,
+        initial_log_step: float = 0.05, max_iter: int = 40,
+    ) -> tuple[float, float] | None:
+        """См. `SaturationPointSSM._find_transition_scanning` — идентичная
+        логика (геометрически растущий шаг по log(T) от `t_from` к `t_to`),
+        T вместо P."""
+        log_from = np.log(t_from)
+        log_to = np.log(t_to)
+        direction = 1.0 if log_to >= log_from else -1.0
+
+        prev_t = t_from
+        prev_flag = self._is_stable(prev_t)
+        if prev_flag is None:
+            return None
+
+        step = initial_log_step
+        log_t = log_from
+
+        for _ in range(max_iter):
+            log_t += direction * step
+            reached_end = direction * (log_t - log_to) >= 0
+            if reached_end:
+                log_t = log_to
+
+            t = float(np.exp(log_t))
+            flag = self._is_stable(t)
+
+            if flag is not None:
+                if flag != prev_flag:
+                    return (prev_t, t) if prev_flag else (t, prev_t)
+                prev_t, prev_flag = t, flag
+
+            if reached_end:
+                break
+            step *= 2.0
+
+        return None
+
+    def _bisect_stability_boundary(
+        self,
+        t_stable_end: float,
+        t_unstable_end: float,
+        quick_bracket: tuple[float, float] | None,
+    ) -> float | None:
+        """См. `SaturationPointSSM._bisect_stability_boundary` — идентичная
+        логика, T вместо P."""
+        t_lo = t_hi = None
+
+        if quick_bracket is not None:
+            t_a, t_b = quick_bracket
+            if abs(t_a - t_stable_end) <= abs(t_b - t_stable_end):
+                t_s, t_u = t_a, t_b
+            else:
+                t_s, t_u = t_b, t_a
+            if self._is_stable(t_s) is True and self._is_stable(t_u) is False:
+                t_lo, t_hi = t_s, t_u
+
+        if t_lo is None:
+            scan_bracket = self._find_transition_scanning(t_stable_end, t_unstable_end)
+            if scan_bracket is None:
+                return None
+            t_lo, t_hi = scan_bracket
+
+        for _ in range(self.max_iter):
+            if self._bracket_is_tight(t_lo, t_hi):
+                break
+
+            t_mid = (t_lo + t_hi) / 2.0
+            flag_mid = self._is_stable(t_mid)
+
+            if flag_mid is None:
+                t_mid = t_lo + (t_mid - t_lo) * 0.5
+                flag_mid = self._is_stable(t_mid)
+                if flag_mid is None:
+                    logger.warning(
+                        "Бисекция прервана: тест стабильности не сходится "
+                        "вблизи T=%.4f K (P=%.4f бар)", t_mid, self.p_bar,
+                    )
+                    break
+
+            if flag_mid:
+                t_lo = t_mid
+            else:
+                t_hi = t_mid
+
+        return (t_lo + t_hi) / 2.0
+
+    def find_bubble_temperature(self) -> SaturationTemperaturePoint | None:
+        """
+        Поиск снизу вверх от `t_min_k` (холодный, устойчивый жидкий конец) к
+        `t_max_k` — зеркало `find_bubble_point` (там: сверху вниз от
+        `p_max_bar`, тоже устойчивый жидкий конец; см. докстринг класса за
+        соответствием ролей). Ход поиска — в сторону РОСТА T, поэтому
+        неустойчивая сторона относительно найденной точки — выше её
+        (`nudge_sign=+1`).
+
+        Как и в `SaturationPointSSM`, физический тип результата определяется
+        отдельно и может оказаться `'dew'` — имя метода отражает направление
+        поиска, а не гарантированный тип.
+        """
+        quick_bracket = None
+        if self._t_guess_bubble is not None:
+            g = self._t_guess_bubble
+            quick_bracket = (
+                max(self.t_min_k, g * 0.7),
+                min(self.t_max_k, g * 1.3),
+            )
+
+        result = self._bisect_stability_boundary(
+            t_stable_end=self.t_min_k,
+            t_unstable_end=self.t_max_k,
+            quick_bracket=quick_bracket,
+        )
+        if result is None:
+            logger.info("Нижняя (по T) точка насыщения не найдена (P=%.4f бар)", self.p_bar)
+            return None
+
+        point_type = self._classify_point_type(result, nudge_sign=1.0)
+        logger.info(
+            "Нижняя (по T) точка насыщения: T=%.4f K (P=%.4f бар), тип=%s",
+            result, self.p_bar, point_type,
+        )
+        return SaturationTemperaturePoint(temperature=result, point_type=point_type)
+
+    def find_dew_temperature(self, t_lower_bound: float) -> SaturationTemperaturePoint | None:
+        """
+        Поиск сверху вниз от `t_max_k` (горячий, устойчивый паровой конец) к
+        `t_lower_bound` — зеркало `find_dew_point`. Это и есть ветка, которая
+        нужна крикондентерме (`CricondenthermCalculator`): она отслеживает ту
+        же "верхнюю"/внешнюю границу огибающей, что `find_bubble_point`
+        отслеживает для криконденбары, только по T вместо P. Ход поиска — в
+        сторону УБЫВАНИЯ T, поэтому неустойчивая сторона — ниже найденной
+        точки (`nudge_sign=-1`).
+
+        `t_lower_bound` ограничивает поиск снизу (обычно — уже известная
+        нижняя по T точка на этом же P, если она есть), аналогично
+        `p_upper_bound` в `find_dew_point`.
+        """
+        t_min = max(t_lower_bound, self.t_min_k)
+        t_unstable_ref = t_min + max(self.bracket_tol_abs * 10.0, t_min * self.bracket_tol_rel * 10.0)
+
+        quick_bracket = None
+        if self._t_guess_dew is not None:
+            g = self._t_guess_dew
+            quick_bracket = (
+                max(t_unstable_ref, g * 0.7),
+                min(self.t_max_k, g * 1.3),
+            )
+
+        result = self._bisect_stability_boundary(
+            t_stable_end=self.t_max_k,
+            t_unstable_end=t_unstable_ref,
+            quick_bracket=quick_bracket,
+        )
+        if result is None:
+            logger.info("Верхняя (по T) точка насыщения не найдена (P=%.4f бар)", self.p_bar)
+            return None
+
+        point_type = self._classify_point_type(result, nudge_sign=-1.0)
+        if point_type != 'dew':
+            logger.warning(
+                "Верхняя (по T) точка насыщения T=%.4f K (P=%.4f бар) классифицирована "
+                "как '%s' — физически неожиданно (ожидалась 'dew')",
+                result, self.p_bar, point_type,
+            )
+        else:
+            logger.info(
+                "Верхняя (по T) точка насыщения: T=%.4f K (P=%.4f бар), тип=%s",
+                result, self.p_bar, point_type,
+            )
+        return SaturationTemperaturePoint(temperature=result, point_type=point_type)
+
+
 def _calculate_envelope_chunk_worker(
     composition: Composition, t_c_chunk: list[float], p_max_bar: float, p_min_bar: float,
 ) -> list[tuple[float, SaturationPoint | None, SaturationPoint | None]]:
@@ -687,36 +966,48 @@ class PhaseEnvelopeSSM:
 
     def plot(self, show: bool = True, save_path: str | None = None):
         """
-        P-T диаграмма с тремя физически различными кривыми (см. докстринг
-        класса): Bubble, Dew upper (за критической точкой состава — там, где
-        поиск "сверху вниз" находит уже не bubble, а верхнюю точку росы) и
-        Dew lower (нижняя ретроградная точка, если найдена).
+        P-T диаграмма фазовой огибающей как ОДНОЙ непрерывной линии (без
+        маркеров точек).
+
+        `Bubble_bar`/`Dew_upper_bar` — взаимодополняющие половины одной и той
+        же физической кривой (см. докстринг класса: за критической точкой
+        состава поиск "сверху вниз" находит уже не bubble, а верхнюю точку
+        росы) — объединяются в одну верхнюю ветку через `combine_first`, без
+        разрыва в точке перехода.
+
+        `Dew_lower_bar` (нижняя ретроградная точка) физически смыкается с
+        верхней веткой у критической точки состава — пристыковывается к ней в
+        обратном порядке по температуре, замыкая контур одной линией вместо
+        трёх стилистически разных кусков. Из-за отбрасывания "почти-дублей"
+        (`dew_bubble_min_gap_rel`, см. `_filter_near_duplicate_dew`) сама
+        точка смыкания в данных отсутствует — линия соединяет ближайшие
+        оставшиеся точки напрямую, без дополнительного сглаживания.
         """
-        df = pd.DataFrame(self.results)
+        df = pd.DataFrame(self.results).sort_values('Temp_C').reset_index(drop=True)
         if df.empty:
             logger.warning("Нет данных для построения — вызовите calculate() перед plot().")
             return None
 
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        bubble = df.dropna(subset=['Bubble_bar'])
-        dew_upper = df.dropna(subset=['Dew_upper_bar'])
-        dew_lower = df.dropna(subset=['Dew_lower_bar'])
+        upper = df['Bubble_bar'].combine_first(df['Dew_upper_bar'])
+        upper_mask = upper.notna()
+        upper_t = df.loc[upper_mask, 'Temp_C'].to_numpy()
+        upper_p = upper[upper_mask].to_numpy()
 
-        if not bubble.empty:
-            ax.plot(bubble['Temp_C'], bubble['Bubble_bar'], 'b-o',
-                    label='Bubble Point (насыщение)', markersize=4, linewidth=2)
-        if not dew_upper.empty:
-            ax.plot(dew_upper['Temp_C'], dew_upper['Dew_upper_bar'], 'r-s',
-                    label='Dew Point, upper (начало конденсации)', markersize=4, linewidth=2)
-        if not dew_lower.empty:
-            ax.plot(dew_lower['Temp_C'], dew_lower['Dew_lower_bar'], 'r--^',
-                    label='Dew Point, lower (ретроградная)', markersize=4, linewidth=2)
+        lower = df.dropna(subset=['Dew_lower_bar']).sort_values('Temp_C', ascending=False)
+        lower_t = lower['Temp_C'].to_numpy()
+        lower_p = lower['Dew_lower_bar'].to_numpy()
 
-        ax.set_xlabel('Температура, °C')
-        ax.set_ylabel('Давление, бар')
-        ax.set_title('Фазовая огибающая (метод последовательных приближений)')
-        ax.legend()
+        envelope_t = np.concatenate([upper_t, lower_t])
+        envelope_p = np.concatenate([upper_p, lower_p])
+
+        if envelope_t.size:
+            ax.plot(envelope_t, envelope_p, 'b-', linewidth=2)
+
+        ax.set_xlabel('Temperature, °C')
+        ax.set_ylabel('Pressure, bar')
+        ax.set_title('Phase envelope')
         ax.grid(True, linestyle='--', alpha=0.6)
         fig.tight_layout()
 
