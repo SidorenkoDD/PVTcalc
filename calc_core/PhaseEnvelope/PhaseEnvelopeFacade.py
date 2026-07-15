@@ -33,7 +33,8 @@ from calc_core.PhaseEnvelope.CriticalPoint import CriticalPointCalculator
 from calc_core.PhaseEnvelope.PhaseEnvelopeGrid import PhaseEnvelopeGrid
 from calc_core.PhaseEnvelope.PhaseEnvelopeSuccessiveSubstitution import PhaseEnvelopeSSM
 from calc_core.PhaseEnvelope.PhaseEnvelopeNewton import PhaseEnvelopeNewton
-from calc_core.Utils.Errors import ConvergenceError
+from calc_core.Utils.Errors import ConvergenceError, InputValidationError
+from calc_core.Utils.Validation import validate_positive_pressure, validate_temperature_kelvin, validate_temperature_celsius
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,16 @@ class PhaseEnvelopeFacade:
         composition = self._model.composition
         return composition.new_composition(composition.composition, deep_copy=True)
 
+    @staticmethod
+    def _validate_envelope_range(t_min_c, t_max_c, p_max_bar):
+        """Валидация общего для `ssm`/`newton` диапазона огибающей (T в °C, P в бар)."""
+        validate_temperature_celsius(t_min_c, name='t_min_c')
+        validate_temperature_celsius(t_max_c, name='t_max_c')
+        validate_positive_pressure(p_max_bar, name='p_max_bar')
+        if t_max_c <= t_min_c:
+            raise InputValidationError(
+                f'Диапазон температур пуст: t_max_c ({t_max_c}) должно быть больше t_min_c ({t_min_c}).')
+
     def bubble_point(self, T: float, **kwargs) -> float:
         """
         Давление точки кипения (Ньютон по производным летучести).
@@ -82,9 +93,12 @@ class PhaseEnvelopeFacade:
 
         Raises
         ------
+        InputValidationError
+            Если `T` <= 0 K.
         ConvergenceError
             Если `BubblePointCalculator` не сошёлся.
         """
+        validate_temperature_kelvin(T)
         calc = BubblePointCalculator(self._composition_copy(), T, **kwargs)
         p = calc.calculate()
 
@@ -117,9 +131,12 @@ class PhaseEnvelopeFacade:
 
         Raises
         ------
+        InputValidationError
+            Если `T` <= 0 K.
         ConvergenceError
             Если `DewPointCalculator` не сошёлся или вернул `None`.
         """
+        validate_temperature_kelvin(T)
         calc = DewPointCalculator(self._composition_copy(), T, **kwargs)
         p = calc.calculate()
 
@@ -182,7 +199,14 @@ class PhaseEnvelopeFacade:
             Сам calc-объект после `run_parallel()` — сохраняет `.plot()` и
             прочие атрибуты. В историю (`result_store_object`) кладётся не
             он сам, а снэпшот его массивов на момент вызова.
+
+        Raises
+        ------
+        InputValidationError
+            Если переданы `max_pressure` <= 0.
         """
+        if 'max_pressure' in kwargs:
+            validate_positive_pressure(kwargs['max_pressure'], name='max_pressure')
         calc = PhaseEnvelopeGrid(self._composition_copy(), **kwargs)
         calc.run_parallel()
 
@@ -218,7 +242,14 @@ class PhaseEnvelopeFacade:
         -------
         pandas.DataFrame
             Таблица `Temp_C`/`Bubble_bar`/`Dew_upper_bar`/`Dew_lower_bar`.
+
+        Raises
+        ------
+        InputValidationError
+            Если `p_max_bar` <= 0, температуры ниже абсолютного нуля или
+            `t_max_c` <= `t_min_c`.
         """
+        self._validate_envelope_range(t_min_c, t_max_c, p_max_bar)
         calc = PhaseEnvelopeSSM(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
         df = calc.calculate_parallel() if parallel else calc.calculate()
 
@@ -255,7 +286,14 @@ class PhaseEnvelopeFacade:
         Returns
         -------
         pandas.DataFrame
+
+        Raises
+        ------
+        InputValidationError
+            Если `p_max_bar` <= 0, температуры ниже абсолютного нуля или
+            `t_max_c` <= `t_min_c`.
         """
+        self._validate_envelope_range(t_min_c, t_max_c, p_max_bar)
         calc = PhaseEnvelopeNewton(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
         df = calc.calculate_parallel() if parallel else calc.calculate()
 

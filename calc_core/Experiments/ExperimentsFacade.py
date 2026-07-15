@@ -34,6 +34,7 @@ import pandas as pd
 from calc_core.Experiments.DLE import DLE
 from calc_core.Experiments.CCE import CCE
 from calc_core.Experiments.SeparatorTest import SeparatorTest
+from calc_core.Utils.Validation import validate_positive_pressure, validate_temperature_kelvin, validate_temperature_celsius
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,15 @@ class ExperimentsFacade:
         -------
         pandas.DataFrame
             Таблица по ступеням давления с колонками `Bo`/`Rs`.
+
+        Raises
+        ------
+        InputValidationError
+            Если давления <= 0 или температура ниже абсолютного нуля.
         """
+        validate_positive_pressure(pressure_arr_bar, name='pressure_arr_bar')
+        validate_positive_pressure(reservoir_pressure_bar, name='reservoir_pressure_bar')
+        validate_temperature_celsius(reservoir_temperature_c, name='reservoir_temperature_c')
         calc = DLE(self._composition_copy(), list(pressure_arr_bar),
                    reservoir_pressure_bar, reservoir_temperature_c)
         calc.calculate()
@@ -106,7 +115,14 @@ class ExperimentsFacade:
         -------
         pandas.DataFrame
             Таблица по ступеням давления с колонками `v/v_res`, `v/v_sat`, `Compressibility`.
+
+        Raises
+        ------
+        InputValidationError
+            Если давления <= 0 или температура <= 0 K.
         """
+        validate_positive_pressure(pressure_arr_bar, name='pressure_arr_bar')
+        validate_temperature_kelvin(reservoir_temperature, name='reservoir_temperature')
         calc = CCE(self._composition_copy(), list(pressure_arr_bar), reservoir_temperature)
         df = calc.calculate()
 
@@ -143,10 +159,17 @@ class ExperimentsFacade:
 
         Raises
         ------
+        InputValidationError
+            Если давления <= 0 или температуры (пластовая/ступеней) ниже абсолютного нуля.
         LenthMissMatchError
             Если `pressure_arr_bar` и `temperature_arr_c` разной длины
             (поднимается изнутри `SeparatorTest.calculate()`).
         """
+        validate_positive_pressure(pressure_arr_bar, name='pressure_arr_bar')
+        validate_positive_pressure(reservoir_pressure_bar, name='reservoir_pressure_bar')
+        validate_temperature_celsius(reservoir_temperature_c, name='reservoir_temperature_c')
+        for stage_t in temperature_arr_c:
+            validate_temperature_celsius(stage_t, name='temperature_arr_c')
         calc = SeparatorTest(self._composition_copy(), list(pressure_arr_bar), list(temperature_arr_c),
                              reservoir_pressure_bar, reservoir_temperature_c)
         calc.calculate()

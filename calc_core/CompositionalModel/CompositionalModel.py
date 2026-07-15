@@ -16,6 +16,7 @@ from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from calc_core.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 from calc_core.Utils.Results import ResultStore
+from calc_core.Utils.Validation import validate_composition_normalized, validate_positive_pressure, validate_temperature_kelvin
 from calc_core.PhaseEnvelope.PhaseEnvelopeFacade import PhaseEnvelopeFacade
 from calc_core.Experiments.ExperimentsFacade import ExperimentsFacade
 
@@ -30,8 +31,16 @@ class CompositionalModel:
         Parameters
         ----------
         composition : Composition
-            Состав с уже посчитанными `composition_data`.
+            Состав с уже посчитанными `composition_data` и нормированными
+            мольными долями (сумма = 1). Ненормированный состав отклоняется —
+            вызовите `composition.normalize_composition()` заранее.
+
+        Raises
+        ------
+        InputValidationError
+            Если сумма мольных долей состава != 1.
         """
+        validate_composition_normalized(composition.composition)
         self.composition = composition
         self.result_store_object = ResultStore()
         self.phase_envelope = PhaseEnvelopeFacade(self)
@@ -61,7 +70,14 @@ class CompositionalModel:
         dict
             То же, что возвращает `PhaseEquilibriumNewton.find_solve_loop()`:
             `{"yi_v", "xi_l", "Ki", "Fv", "Fl", "Z_v", "Z_l"}`.
+
+        Raises
+        ------
+        InputValidationError
+            Если `P` <= 0 или `T` <= 0 K.
         """
+        validate_positive_pressure(P, name='P')
+        validate_temperature_kelvin(T, name='T')
         logger.debug("CompositionalModel.flash: P=%s, T=%s", P, T)
         phase_stability_obj = TwoPhaseStabilityTest(composition = self.composition,
                                                     p = P,

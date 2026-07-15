@@ -1,42 +1,78 @@
-"""Иерархия исключений проекта (все — плоские подклассы Exception, без своих атрибутов)."""
+"""
+Иерархия исключений проекта.
+
+Все исключения, которые движок бросает осознанно, наследуются от базового
+`PVTCalcError` — чтобы внешний код (в первую очередь UI/сервисный слой) мог
+одним `except PVTCalcError` отделить «доменную» ошибку движка от неожиданного
+бага (обычного `Exception`). Две смысловые ветки:
+
+- `InputValidationError` — некорректный вход от вызывающего кода/пользователя
+  (то, что UI показывает пользователю: «поправьте состав/давление/температуру»).
+- `ConvergenceError` — численный метод не сошёлся (то, что UI показывает как
+  «расчёт не сошёлся», а не как некорректный ввод).
+
+Имена классов и пути импорта сохранены прежними — переподчинение меняет только
+базовый класс, поэтому существующий `except NoComponentError`/`except
+StopIterationError` продолжает работать, а `except PVTCalcError` теперь ловит
+их все.
+"""
 
 
-class NoComponentError(Exception):
+class PVTCalcError(Exception):
+    """Базовое исключение движка — всё, что PVTcalc бросает осознанно."""
+    pass
+
+
+class InputValidationError(PVTCalcError):
+    """Некорректный вход от вызывающего кода/пользователя (см. `Utils/Validation.py`)."""
+    pass
+
+
+class ConvergenceError(PVTCalcError):
+    """Численный метод не сошёлся (поднимается фасадами по сигналу калькулятора, см. `PhaseEnvelopeFacade`)."""
+    pass
+
+
+class NoComponentError(InputValidationError):
     """Компонент отсутствует в БД (`Utils/DB.json`) — см. `Composition.check_and_sort_composition`."""
     pass
 
-class LenthMissMatchError(Exception):
-    """Не совпадают длины двух массивов (опечатка в имени — Length; используется в живом коде `SeparatorTest`)."""
-    pass
 
-class nStagesError(Exception):
-    """Заготовлено под ошибку количества ступеней эксперимента; в текущем живом коде не используется."""
-    pass
-
-class CompositionSumError(Exception):
-    """Заготовлено под ошибку суммы мольных долей состава; в текущем живом коде не используется."""
-    pass
-
-class InvalidMolarFractionError(Exception):
+class InvalidMolarFractionError(InputValidationError):
     """Мольная доля компонента <= 0 — см. `Composition._normalize_composition`."""
     pass
 
-class InvalidPressureSequence(Exception):
-    """Заготовлено под ошибку немонотонной последовательности давлений; в текущем живом коде не используется."""
+
+class CompositionSumError(InputValidationError):
+    """Сумма мольных долей состава != 1 — см. `Utils/Validation.validate_composition_normalized`."""
     pass
 
-class InvalidExcelComponentType(Exception):
-    """Некорректный тип данных для компонента при загрузке состава из Excel (`Utils/CompositionLoader.py`)."""
-    pass
 
-class InvalidExcelValueType(Exception):
-    """Некорректный тип значения при загрузке состава из Excel (`Utils/CompositionLoader.py`)."""
-    pass
-
-class StopIterationError(Exception):
+class StopIterationError(ConvergenceError):
     """Итеративный расчёт (тест стабильности, флэш) не сошёлся за отведённый лимит итераций."""
     pass
 
-class ConvergenceError(Exception):
-    """Заготовлено под общую ошибку несходимости; в текущем живом коде не используется (используется StopIterationError)."""
+
+class LenthMissMatchError(PVTCalcError):
+    """Не совпадают длины двух массивов (опечатка в имени — Length; используется в живом коде `SeparatorTest`)."""
+    pass
+
+
+class nStagesError(PVTCalcError):
+    """Заготовлено под ошибку количества ступеней эксперимента; в текущем живом коде не используется."""
+    pass
+
+
+class InvalidPressureSequence(PVTCalcError):
+    """Заготовлено под ошибку немонотонной последовательности давлений; в текущем живом коде не используется."""
+    pass
+
+
+class InvalidExcelComponentType(PVTCalcError):
+    """Некорректный тип данных для компонента при загрузке состава из Excel (`Utils/CompositionLoader.py`)."""
+    pass
+
+
+class InvalidExcelValueType(PVTCalcError):
+    """Некорректный тип значения при загрузке состава из Excel (`Utils/CompositionLoader.py`)."""
     pass
