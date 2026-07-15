@@ -15,6 +15,7 @@ import numpy as np
 
 from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from calc_core.Composition.Composition import Composition
+from calc_core.Utils.Errors import ConvergenceError
 from calc_core.Utils.Constants import (
     TOL_TWO_PHASE_FLASH_CONVERGENCE,
     TOL_TWO_PHASE_FLASH_TRIVIAL_SOLUTION,
@@ -37,6 +38,7 @@ class PhaseEquilibriumNewton:
     _RR_EPS = 1e-12
     _RR_NEWTON_TOL = 1e-10
     _RR_MAX_ITER = 1000
+    _FUG_MAX_ITER = 1000  # лимит итераций внешнего цикла Ньютона по ln(K)
 
     def __init__(self, composition: Composition, p: float, t: float, k_values):
         """
@@ -492,6 +494,14 @@ class PhaseEquilibriumNewton:
             составы фаз, K-значения, мольные доли пара/жидкости и их
             Z-факторы. Используется напрямую как `phase_equil_result`
             в `VLE.Flash.calculate()`.
+
+        Raises
+        ------
+        ConvergenceError
+            Если внешний цикл Ньютона по ln(K) не сошёлся за `_FUG_MAX_ITER`
+            итераций (раньше возвращался последний несошедшийся результат —
+            теперь это явный сигнал). Тривиальное решение (K->1) и штатная
+            сходимость по фугитивностям — не ошибка, возвращают dict как обычно.
         """
         i = 0
 
@@ -532,9 +542,15 @@ class PhaseEquilibriumNewton:
                 break
 
             i += 1
-            if i > 1000:
-                logger.warning("PhaseEquilibriumNewton: превышен лимит итераций (1000), возвращён последний Fv=%.6f", self.fv)
-                break
+            if i > self._FUG_MAX_ITER:
+                logger.warning(
+                    "PhaseEquilibriumNewton: не сошлось за %d итераций (P=%s, T=%s), последний Fv=%.6f",
+                    self._FUG_MAX_ITER, self._p, self._t, self.fv,
+                )
+                raise ConvergenceError(
+                    f"Двухфазное равновесие не сошлось за {self._FUG_MAX_ITER} итераций "
+                    f"(P={self._p} бар, T={self._t} K)"
+                )
 
         return {
             "yi_v": self.yi_v,
