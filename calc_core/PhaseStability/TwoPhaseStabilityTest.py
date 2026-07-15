@@ -425,7 +425,7 @@ class TwoPhaseStabilityTest:
     def k_vals_for_sat_point_calculation(self):
         """
         dict | None: K-значения для использования в поиске давления насыщения
-        (`PhaseDiagram/new_methodv2.py::SaturationPressure` и подобные).
+        (`PhaseEnvelope/new_methodv2.py::SaturationPressure` и подобные).
 
         `None`, если тест ещё не запускался или система стабильна. Если
         обе пробные суммы `S_v`/`S_l` > 1 — берёт K от той пробной фазы,

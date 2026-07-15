@@ -91,7 +91,7 @@ dew-уравнение): даже стартуя Ньютон ПРЯМО с ис
 бар) на составе KRSNL — 14 точек за 0.67 сек, 3-21 итераций на точку,
 совпадение с SSM до 4-5 значащих цифр). Затравка ищется не бисекцией
 (`SaturationPointSSM`, дороже), а через ДЕШЁВЫЙ сеточный скан стабильности —
-`PhaseEnvelopeFromStability.py` (простой P×T скан `TwoPhaseStabilityTest` без
+`PhaseEnvelopeGrid.py` (простой P×T скан `TwoPhaseStabilityTest` без
 бисекции, ~4.3 сек на 50×97 точек, joblib-параллельно) — `_build_stability_grid`
 находит по каждому T-столбцу ВСЕ смены флага стабильности; второй (нижний)
 переход в столбце — надёжный дешёвый признак "здесь есть ретроградная зона",
@@ -102,7 +102,7 @@ dew-уравнение): даже стартуя Ньютон ПРЯМО с ис
 раз (`_build_stability_grid`) и по ней ищет первый T с подтверждённой
 ретроградной зоной, дальше продолжает уже чистым Ньютоном continuation'ом по
 P и K до конца запрошенного диапазона — с той же верификацией и тем же
-бюджетом времени на шаг, что и у основной ветки. `PhaseEnvelopeFromStability`
+бюджетом времени на шаг, что и у основной ветки. `PhaseEnvelopeGrid`
 (как и `PhaseEnvelopeSSM`) не редактируется ни строкой — только
 импортируется и вызывается как есть.
 
@@ -171,10 +171,10 @@ import matplotlib.pyplot as plt
 from joblib import Parallel, delayed, effective_n_jobs
 
 from calc_core.Composition.Composition import Composition
-from calc_core.PhaseDiagram.BubblePointPressure import BubblePointCalculator
-from calc_core.PhaseDiagram.DewPressure import DewPointCalculator
-from calc_core.PhaseDiagram.PhaseEnvelopeFromStability import PhaseEnvelopeFromStability
-from calc_core.PhaseDiagram.PhaseEnvelopeSuccessiveSubstitution import SaturationPoint
+from calc_core.PhaseEnvelope.BubblePointPressure import BubblePointCalculator
+from calc_core.PhaseEnvelope.DewPressure import DewPointCalculator
+from calc_core.PhaseEnvelope.PhaseEnvelopeGrid import PhaseEnvelopeGrid
+from calc_core.PhaseEnvelope.PhaseEnvelopeSuccessiveSubstitution import SaturationPoint
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 
 logger = logging.getLogger(__name__)
@@ -453,7 +453,7 @@ class PhaseEnvelopeNewton:
     `calculate_parallel()`) следом достраивает обе оставшиеся ветки отдельными
     проходами: нижнюю ретроградную (`Dew_lower_bar`) — через одну затравку из
     дешёвого сеточного скана стабильности (`_build_stability_grid`,
-    `PhaseEnvelopeFromStability`) и дальше continuation Ньютоном по P и K (см.
+    `PhaseEnvelopeGrid`) и дальше continuation Ньютоном по P и K (см.
     `_bootstrap_and_march_lower_dew`); верхнюю (`Dew_upper_bar`) сразу за
     критикой — "проездом" через несколько неверифицированных шагов подряд с
     последней уже верифицированной точки основного march'а (см.
@@ -497,7 +497,7 @@ class PhaseEnvelopeNewton:
         # и только если основная ветка вообще покинула bubble-область в
         # запрошенном диапазоне T.
         self.bootstrap_lower_dew = bootstrap_lower_dew
-        # Разрешение сетки `PhaseEnvelopeFromStability` для затравки — по P
+        # Разрешение сетки `PhaseEnvelopeGrid` для затравки — по P
         # фиксированное, по T по умолчанию совпадает с уже запрошенным шагом
         # march'а (`len(self.temps_c)`), можно переопределить явно (например,
         # для другого состава/диапазона может понадобиться другое разрешение).
@@ -642,7 +642,7 @@ class PhaseEnvelopeNewton:
         """
         Грубая (но дешёвая) карта переходов стабильности по сетке P×T —
         затравка для `_bootstrap_and_march_lower_dew`. Использует уже
-        существующий `PhaseEnvelopeFromStability` (простой скан стабильности
+        существующий `PhaseEnvelopeGrid` (простой скан стабильности
         по решётке, без бисекции — не путать с `PhaseEnvelopeSSM`, тот файл
         тоже не редактируется, только импортируется и вызывается как есть).
 
@@ -657,7 +657,7 @@ class PhaseEnvelopeNewton:
         `_bootstrap_and_march_lower_dew` раньше приходилось узнавать только
         через дорогую бисекцию `SaturationPointSSM.find_dew_point` (убрана).
 
-        Разрешение по T `PhaseEnvelopeFromStability` всегда строит от 0°C
+        Разрешение по T `PhaseEnvelopeGrid` всегда строит от 0°C
         (`np.linspace(273.15, max_temperature+273.15, ...)`), не от
         `t_min_c` — поэтому её T-сетка в общем случае не совпадает 1:1 с
         `self.temps_c`; сопоставление делается по ближайшему T при
@@ -666,12 +666,12 @@ class PhaseEnvelopeNewton:
         Returns
         -------
         dict[float, list[tuple[float, float]]]
-            `{T_c (из сетки PhaseEnvelopeFromStability): [(p_lo, p_hi), ...]}`
+            `{T_c (из сетки PhaseEnvelopeGrid): [(p_lo, p_hi), ...]}`
             — по одной паре `(p_lo, p_hi)` вокруг каждой найденной смены флага
             стабильности на этом T, отсортированные по возрастанию P (первый
             элемент — самый нижний переход, если их несколько).
         """
-        grid = PhaseEnvelopeFromStability(
+        grid = PhaseEnvelopeGrid(
             self.composition,
             max_pressure=self.p_max_bar,
             max_temperature=self.t_max_c,

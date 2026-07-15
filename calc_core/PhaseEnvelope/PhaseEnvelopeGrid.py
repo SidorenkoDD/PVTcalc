@@ -4,7 +4,7 @@ from joblib import Parallel, delayed
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 
-class PhaseEnvelopeFromStability:  # Исправлена опечатка в названии
+class PhaseEnvelopeGrid:
     def __init__(self, composition: Composition,
                  max_pressure: float = 800,
                  max_temperature: float = 800,

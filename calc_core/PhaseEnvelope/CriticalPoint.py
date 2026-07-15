@@ -3,8 +3,8 @@ import logging
 from typing import Optional, Dict, Any
 from scipy.optimize import minimize_scalar
 from calc_core.Composition.Composition import Composition
-from calc_core.PhaseDiagram.BubblePointPressure import BubblePointCalculator
-from calc_core.PhaseDiagram.DewPressure import DewPointCalculator
+from calc_core.PhaseEnvelope.BubblePointPressure import BubblePointCalculator
+from calc_core.PhaseEnvelope.DewPressure import DewPointCalculator
 
 logger = logging.getLogger(__name__)
 

@@ -692,7 +692,7 @@ class BrusilovskiyEOS(EOS):
         `_calc_dz_dp`, от которой зависела и та формула, при этом сама сошлась
         с численной производной до 9 знаков — ошибка была именно в сборке
         остальных слагаемых). Единственные потребители — `BubblePointCalculator`/
-        `DewPointCalculator` (`calc_core/PhaseDiagram/*Pressure.py`), вне
+        `DewPointCalculator` (`calc_core/PhaseEnvelope/*Pressure.py`), вне
         основного pipeline `Flash`/`PhaseEquilibriumNewton` (там свой, рабочий
         якобиан — `calc_d_log_phi_i_dxk`, по составу, а не по давлению) —
         поэтому баг не проявлялся раньше.

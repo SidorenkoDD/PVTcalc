@@ -15,7 +15,7 @@ import logging
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.Conditions import Conditions
 from calc_core.VLE.Flash import Flash
-from calc_core.PhaseDiagram.new_methodv2 import SaturationPressure
+from calc_core.PhaseEnvelope.new_methodv2 import SaturationPressure
 from calc_core.Utils.Conditions import Conditions, StandardConditions
 from calc_core.Utils.Errors import LenthMissMatchError
 import numpy as np

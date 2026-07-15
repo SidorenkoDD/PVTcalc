@@ -12,7 +12,7 @@ import logging
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.Conditions import Conditions
 from calc_core.VLE.Flash import Flash
-from calc_core.PhaseDiagram.new_methodv2 import SaturationPressure
+from calc_core.PhaseEnvelope.new_methodv2 import SaturationPressure
 from calc_core.Utils.Conditions import Conditions, StandardConditions
 from calc_core.Utils.Errors import LenthMissMatchError
 import numpy as np
@@ -71,7 +71,7 @@ class CCE:
 
     def _calc_saturation_pressure(self):
         """
-        Находит давление насыщения (`PhaseDiagram.new_methodv2.SaturationPressure`)
+        Находит давление насыщения (`PhaseEnvelope.new_methodv2.SaturationPressure`)
         для текущего состава при `reservoir_temperature + 273.15` — **обратите
         внимание**: здесь добавляется +273.15 поверх `reservoir_temperature`,
         то есть предполагается, что `reservoir_temperature` уже в Кельвинах

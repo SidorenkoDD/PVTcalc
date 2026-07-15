@@ -2,7 +2,7 @@
 Дифференциальная конденсация (Differential Liberation Experiment).
 
 Стандартный PVT-эксперимент: пластовые условия → находим давление насыщения
-(`PhaseDiagram.new_methodv2.SaturationPressure`) → ступенчато снижаем
+(`PhaseEnvelope.new_methodv2.SaturationPressure`) → ступенчато снижаем
 давление при постоянной температуре, на каждой ступени выделившийся газ
 считается полностью удалённым из системы (в отличие от CCE), в расчёт на
 следующей ступени идёт только жидкость (`composition.new_composition(...)`
@@ -15,7 +15,7 @@ import logging
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.Conditions import Conditions
 from calc_core.VLE.Flash import Flash
-from calc_core.PhaseDiagram.new_methodv2 import SaturationPressure
+from calc_core.PhaseEnvelope.new_methodv2 import SaturationPressure
 from calc_core.Utils.Conditions import Conditions, StandardConditions
 from calc_core.Utils.Errors import LenthMissMatchError
 import numpy as np
@@ -291,7 +291,7 @@ class DLE:
             Главная точка входа: полный прогон дифференциальной конденсации.
 
             Порядок: флэш на пластовых условиях → находим P_sat
-            (`PhaseDiagram.new_methodv2.SaturationPressure`) → флэш на P_sat →
+            (`PhaseEnvelope.new_methodv2.SaturationPressure`) → флэш на P_sat →
             цикл по `self.pressure_arr` (флэш на каждой ступени, состав
             жидкости переходит на следующую через `new_composition(...,
             deep_copy=True)`) → флэш на стандартных условиях → векторизация

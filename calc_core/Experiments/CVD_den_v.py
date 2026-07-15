@@ -3,8 +3,8 @@ import numpy as np
 from calc_core.Experiments.BaseExperiment import PVTExperiment
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
-from calc_core.PhaseDiagram.SaturationPressure_den_v import SaturationPointCalculator
-from calc_core.PhaseDiagram.CriticalProperties_den_v import CriticalPointCalculator
+from calc_core.PhaseEnvelope.SaturationPressure_den_v import SaturationPointCalculator
+from calc_core.PhaseEnvelope.CriticalProperties_den_v import CriticalPointCalculator
 from calc_core.Utils.FluidPropertiesCalculator import FluidPropertiesCalculator
 from calc_core.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 from calc_core.Utils.Constants import CONSTANT_R
