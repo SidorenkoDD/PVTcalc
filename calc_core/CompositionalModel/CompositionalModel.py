@@ -16,6 +16,7 @@ from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from calc_core.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 from calc_core.Utils.Results import ResultStore
+from calc_core.PhaseEnvelope.PhaseEnvelopeFacade import PhaseEnvelopeFacade
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class CompositionalModel:
         """
         self.composition = composition
         self.result_store_object = ResultStore()
+        self.phase_envelope = PhaseEnvelopeFacade(self)
 
     def flash(self, P, T):
         """
