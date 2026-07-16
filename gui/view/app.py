@@ -16,6 +16,7 @@
 
 import logging
 import threading
+from pathlib import Path
 
 import dearpygui.dearpygui as dpg
 
@@ -84,6 +85,9 @@ class PVTcalcApp:
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
         # модели, чей workspace уже восстановлен из сессии в этом запуске
         self._restored_models: set[str] = set()
+        # импорт Excel: выбранный файл и id окна параметров
+        self._excel_path: str | None = None
+        self._excel_opts: dict = {}
         # форма создания нового флюида (экран new_fluid)
         self._new_fluid_form = NewFluidForm(
             get_db_path=lambda: self._state.db_path,
@@ -355,9 +359,75 @@ class PVTcalcApp:
         self._expanded_models.add(model_id)
         self._state.enter_model(model_id)
 
+    # --- импорт Excel -------------------------------------------------------
+
     def _on_import_excel(self, sender=None, app_data=None, user_data=None) -> None:
-        # Этап 4: файловый диалог + параметры листа
-        self._set_status("Excel import - coming in the next step.")
+        """Открывает файловый диалог (создаётся по требованию, авто-id)."""
+        dialog = dpg.add_file_dialog(
+            label="Select Excel file with composition",
+            directory_selector=False, show=True, modal=True,
+            width=720, height=440,
+            callback=self._on_excel_file_chosen,
+            cancel_callback=lambda s, a: dpg.delete_item(s))
+        dpg.add_file_extension(".xlsx", parent=dialog)
+        dpg.add_file_extension(".xls", parent=dialog)
+        dpg.add_file_extension(".*", parent=dialog)
+
+    def _on_excel_file_chosen(self, sender, app_data) -> None:
+        if sender and dpg.does_item_exist(sender):
+            dpg.delete_item(sender)
+        path = (app_data or {}).get("file_path_name") or ""
+        if not path:
+            return
+        self._excel_path = path
+        # мини-окно параметров чтения (header/sheet)
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label="Excel import options", modal=True, no_resize=True,
+                        width=470, height=200,
+                        pos=(max(0, w // 2 - 235), max(0, h // 2 - 100))) as win:
+            self._excel_opts = {"win": win}
+            dpg.add_text(Path(path).name)
+            self._excel_opts["header"] = dpg.add_checkbox(
+                label="First row is a header", default_value=True,
+                callback=self._on_excel_header_toggle)
+            self._excel_opts["sheet"] = dpg.add_input_text(
+                label="Sheet name", default_value="Sheet1", width=180)
+            dpg.add_text("Note: sheet name is used only when the header is on\n"
+                         "(without a header the first sheet is read).")
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Import", width=120,
+                               callback=self._on_excel_confirm)
+                dpg.add_button(label="Cancel", width=120,
+                               callback=lambda: dpg.delete_item(win))
+
+    def _on_excel_header_toggle(self, sender, app_data) -> None:
+        # причуда CompositionExcelLoader: без заголовка sheet игнорируется
+        if dpg.does_item_exist(self._excel_opts.get("sheet", 0)):
+            dpg.configure_item(self._excel_opts["sheet"], enabled=bool(app_data))
+
+    def _on_excel_confirm(self, sender=None, app_data=None, user_data=None) -> None:
+        opts = self._excel_opts
+        header = bool(dpg.get_value(opts["header"]))
+        sheet = dpg.get_value(opts["sheet"])
+        dpg.delete_item(opts["win"])
+        try:
+            res = proj_svc.import_excel(self._excel_path, header, sheet)
+        except Exception as exc:  # noqa: BLE001 — кривой файл/лист/типы
+            logger.exception("Импорт Excel не удался")
+            self._set_status(f"Excel import failed: {exc}")
+            return
+        if not res["recognized"]:
+            self._set_status("Excel import: no recognized components found.")
+            return
+        self._new_fluid_form.set_prefill(
+            res["recognized"], name=Path(self._excel_path).stem,
+            unrecognized=res["unrecognized"])
+        self._state.show_new_fluid()
+        self._new_fluid_form.render(_NEW_FLUID_CONTENT)
+        n_bad = len(res["unrecognized"])
+        self._set_status(
+            f"Imported {len(res['recognized'])} components from Excel"
+            + (f", {n_bad} unrecognized skipped." if n_bad else "."))
 
     # ==================================================================
     #  Дерево (левая панель)
