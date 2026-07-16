@@ -27,11 +27,12 @@ class SessionState:
     active_model_id: Optional[str] = None
     window_width: int = 1280
     window_height: int = 800
-    # было ли открыто отдельное окно редактора состава
-    composition_window_open: bool = False
-    # состояние узла флэша: {"P": float, "T": float, "result": snapshot|None}
+    # открытые вкладки активного варианта (id узлов) и активная из них
+    open_tabs: Optional[list] = None
+    active_tab: Optional[str] = None
+    # история флэшей активного варианта: [{"P","T","result": snapshot|None}]
     # snapshot — сериализуемый слепок FlashResult (см. flash_service)
-    flash: Optional[dict] = None
+    flashes: Optional[list] = None
     # ISO-время последнего сохранения (проставляется в save_session)
     saved_at: Optional[str] = None
 

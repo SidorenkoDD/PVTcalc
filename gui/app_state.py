@@ -3,13 +3,18 @@
 
 Этот модуль **не импортирует DearPyGui** — только `calc_core` и сервисы
 `gui.services`. Здесь описан вычислительный граф `Проект → Модель →
-Варианты → Узлы` и статусы узлов (актуален / устарел / считается), на
-который опирается реактивная стратегия «ленивая инвалидация + пересчитать
-всё» (см. docs/GUI.md). View читает это состояние и вызывает его команды.
+Вариант → Узлы` и статусы узлов (актуален / устарел / считается), на
+который опирается реактивная стратегия «ленивая инвалидация» (см. docs/GUI.md).
+View читает это состояние и вызывает его команды.
 
-В Фазе 0+1 наполнены загрузка списка моделей из `models.json` и открытие
-модели (корневой узел «Состав»). Узлы экспериментов (флэш и т.д.) заведены
-как заготовки — их вычисление добавляется в последующих фазах.
+Узлы одного варианта:
+- один корневой узел «Composition» (id `composition`) — состав + свойства;
+- ноль и более узлов «Flash» (id `flash_1`, `flash_2`, …) — история
+  проведённых флэш-расчётов (каждый запуск = отдельный узел).
+
+Вариант хранит, какие узлы **открыты как вкладки** (`open_node_ids`) и какой
+из них активен (`active_node_id`) — так каждая модель помнит свой набор
+вкладок при переключении.
 """
 
 import logging
@@ -39,7 +44,7 @@ class NodeKind(Enum):
 
     COMPOSITION = auto()   # корневой узел: состав + свойства
     FLASH = auto()         # флэш в точке P,T
-    # CCE / DLE / PHASE_ENVELOPE / ... — добавляются в следующих фазах
+    # SATURATION / CCE / DLE / PHASE_ENVELOPE / ... — добавляются позже
 
 
 @dataclass
@@ -68,15 +73,21 @@ class Variant:
     """
     Вариант модели = форк с другими свойствами / корреляциями / EOS.
 
-    В Фазе 0+1 у каждой модели заводится единственный вариант `Base` с
-    корневым узлом состава; наследование вариантов — открытый вопрос
-    следующих сессий (см. docs/GUI.md).
+    Пока у каждой модели единственный вариант `Base`. Наследование вариантов —
+    открытый вопрос следующих сессий (см. docs/GUI.md).
     """
 
     variant_id: str
     title: str
     composition: Optional[Composition] = None
     nodes: dict[str, GraphNode] = field(default_factory=dict)
+    flash_seq: int = 0                                  # счётчик id флэш-узлов
+    open_node_ids: list[str] = field(default_factory=list)   # вкладки
+    active_node_id: Optional[str] = None                # активная вкладка
+
+    def flash_runs(self) -> list[GraphNode]:
+        """Все флэш-узлы варианта в порядке добавления (история расчётов)."""
+        return [n for n in self.nodes.values() if n.kind is NodeKind.FLASH]
 
 
 @dataclass
@@ -96,7 +107,7 @@ class AppState:
     """
     Корень состояния приложения. Держит список моделей проекта и активный
     выбор (модель / вариант / узел). View подписан на изменения через
-    коллбэки `on_change` (простой наблюдатель без внешних зависимостей).
+    коллбэки (простой наблюдатель без внешних зависимостей).
     """
 
     def __init__(self, repository: ModelRepository):
@@ -104,7 +115,6 @@ class AppState:
         self.models: dict[str, Model] = {}
         self.active_model_id: Optional[str] = None
         self.active_variant_id: Optional[str] = None
-        self.active_node_id: Optional[str] = None
         self._listeners: list = []
 
     # --- наблюдатель -----------------------------------------------------
@@ -122,7 +132,6 @@ class AppState:
     def refresh_model_list(self) -> None:
         """Читает сводку моделей из репозитория (без загрузки составов)."""
         summaries: list[ModelSummary] = self._repo.list_models()
-        # сохраняем уже загруженные варианты, если модель осталась в файле
         existing = self.models
         self.models = {}
         for s in summaries:
@@ -141,17 +150,13 @@ class AppState:
         logger.info("Список моделей обновлён: %d шт.", len(self.models))
         self._notify()
 
-    # --- открытие модели -------------------------------------------------
+    # --- загрузка / выбор модели ----------------------------------------
 
-    def open_model(self, model_id: str) -> None:
-        """
-        Загружает состав модели из `models.json` (лениво, один раз) и делает
-        её активной, создавая вариант `Base` с корневым узлом «Состав».
-        """
+    def _ensure_loaded(self, model_id: str) -> Model:
+        """Лениво загружает состав модели и заводит вариант `Base` с узлом состава."""
         model = self.models.get(model_id)
         if model is None:
             raise KeyError(f"Модель '{model_id}' отсутствует в списке")
-
         if not model.loaded:
             composition = self._repo.load_composition(model_id)
             base = Variant(variant_id="base", title="Base", composition=composition)
@@ -165,38 +170,66 @@ class AppState:
                     "correlations": comp_svc.default_correlations(),
                 },
             )
-            base.nodes["flash"] = GraphNode(
-                node_id="flash",
-                kind=NodeKind.FLASH,
-                title="Flash",
-                status=NodeStatus.EMPTY,
-                params={"P": 100.0, "T": round(composition.T - 273.15, 2)},
-                upstream=["composition"],
-            )
             model.variants["base"] = base
             model.loaded = True
             logger.info("Модель '%s' загружена (%d компонентов)",
                         model_id, model.n_components)
+        return model
 
+    def set_active_model(self, model_id: str) -> None:
+        """Делает модель активной (лениво загрузив состав). Вкладки не трогает."""
+        self._ensure_loaded(model_id)
         self.active_model_id = model_id
         self.active_variant_id = "base"
-        self.active_node_id = "composition"
+        self._notify()
+
+    # обратная совместимость со старым именем
+    open_model = set_active_model
+
+    # --- вкладки (открытые узлы) ----------------------------------------
+
+    def open_node(self, node_id: str) -> None:
+        """Открывает узел как вкладку (или фокусирует уже открытую), делает активным."""
+        variant = self.active_variant
+        if variant is None or node_id not in variant.nodes:
+            return
+        if node_id not in variant.open_node_ids:
+            variant.open_node_ids.append(node_id)
+        variant.active_node_id = node_id
+        self._notify()
+
+    def focus_node(self, node_id: str) -> None:
+        """Делает узел активным без перерисовки рабочей области (напр. смена вкладки)."""
+        variant = self.active_variant
+        if variant is not None and node_id in variant.open_node_ids:
+            variant.active_node_id = node_id
+
+    def close_node(self, node_id: str) -> None:
+        """Закрывает вкладку узла; активной становится соседняя (или ни одной)."""
+        variant = self.active_variant
+        if variant is None or node_id not in variant.open_node_ids:
+            return
+        idx = variant.open_node_ids.index(node_id)
+        variant.open_node_ids.remove(node_id)
+        if variant.active_node_id == node_id:
+            if variant.open_node_ids:
+                variant.active_node_id = variant.open_node_ids[min(
+                    idx, len(variant.open_node_ids) - 1)]
+            else:
+                variant.active_node_id = None
         self._notify()
 
     # --- команды корневого узла «Состав» --------------------------------
     #
-    # Immediate-правки (zi/свойство/BIP применяются движком сразу и остаются
-    # консистентными) НЕ дёргают наблюдателя — иначе View пересобрал бы поля
-    # ввода и потерял фокус. Дискретные действия (EOS/корреляции/пересчёт/
-    # нормировка) вызывают `_notify()` и полную перерисовку.
+    # Immediate-правки (zi/свойство/BIP) НЕ дёргают наблюдателя — иначе View
+    # пересобрал бы поля ввода и потерял фокус. Дискретные действия
+    # (EOS/корреляции/пересчёт/нормировка) вызывают `_notify()`.
 
     @property
     def composition_node(self) -> Optional[GraphNode]:
         """Корневой узел «Состав» активного варианта (или None)."""
         variant = self.active_variant
-        if variant is None:
-            return None
-        return variant.nodes.get("composition")
+        return None if variant is None else variant.nodes.get("composition")
 
     def set_composition_eos(self, eos_value: str) -> None:
         """Меняет EOS активного состава (применяется сразу) и перерисовывает."""
@@ -210,10 +243,7 @@ class AppState:
         self._notify()
 
     def set_correlation(self, property_name: str, method: str) -> None:
-        """
-        Запоминает выбор корреляции C7+ и помечает узел `STALE` — значение
-        вступит в силу после `recalculate_composition()`.
-        """
+        """Запоминает выбор корреляции C7+ и помечает узел `STALE` (до пересчёта)."""
         node = self.composition_node
         if node is None:
             return
@@ -273,61 +303,92 @@ class AppState:
             comp_svc.edit_bip(composition, comp1, comp2, value)
             self._invalidate_flash()
 
-    # --- команды узла «Флэш» --------------------------------------------
+    # --- узлы «Флэш» (история расчётов) ----------------------------------
     #
-    # Расчёт выполняется во View в отдельном потоке (движок не прерываемый),
-    # эти методы лишь переводят статус узла и хранят результат/ошибку.
+    # Расчёт выполняется во View в отдельном потоке (движок непрерываемый),
+    # эти методы лишь заводят узел, переводят статус и хранят результат.
 
-    @property
-    def flash_node(self) -> Optional[GraphNode]:
-        """Узел «Флэш» активного варианта (или None)."""
+    def node_by_id(self, node_id: str) -> Optional[GraphNode]:
         variant = self.active_variant
-        if variant is None:
+        return None if variant is None else variant.nodes.get(node_id)
+
+    def new_flash_run(self, p: Optional[float] = None,
+                      t: Optional[float] = None) -> Optional[str]:
+        """
+        Заводит новый узел флэша (по умолчанию P/T как у последнего расчёта или
+        пластовые) и открывает его вкладку. Возвращает id узла.
+        """
+        variant = self.active_variant
+        composition = self.active_composition
+        if variant is None or composition is None:
             return None
-        return variant.nodes.get("flash")
+        if p is None or t is None:
+            runs = variant.flash_runs()
+            if runs:
+                p = runs[-1].params.get("P", 100.0) if p is None else p
+                t = runs[-1].params.get("T", 20.0) if t is None else t
+            else:
+                p = 100.0 if p is None else p
+                t = round(composition.T - 273.15, 2) if t is None else t
+
+        variant.flash_seq += 1
+        node_id = f"flash_{variant.flash_seq}"
+        variant.nodes[node_id] = GraphNode(
+            node_id=node_id,
+            kind=NodeKind.FLASH,
+            title="Flash",
+            status=NodeStatus.EMPTY,
+            params={"P": float(p), "T": float(t)},
+            upstream=["composition"],
+        )
+        self.open_node(node_id)
+        return node_id
 
     def _invalidate_flash(self) -> None:
-        """Помечает посчитанный флэш `STALE` при изменении состава (реактивность)."""
-        node = self.flash_node
-        if node is not None and node.status is NodeStatus.FRESH:
-            node.status = NodeStatus.STALE
+        """Помечает все посчитанные флэши `STALE` при изменении состава."""
+        variant = self.active_variant
+        if variant is None:
+            return
+        for node in variant.flash_runs():
+            if node.status is NodeStatus.FRESH:
+                node.status = NodeStatus.STALE
 
-    def set_flash_params(self, p: float, t: float) -> None:
-        """Сохраняет введённые P (бар)/T (°C) в параметрах узла (без перерисовки)."""
-        node = self.flash_node
+    def set_flash_params(self, node_id: str, p: float, t: float) -> None:
+        """Сохраняет P (бар)/T (°C) в параметрах узла (без перерисовки)."""
+        node = self.node_by_id(node_id)
         if node is not None:
             node.params["P"] = float(p)
             node.params["T"] = float(t)
 
-    def set_flash_running(self) -> None:
-        """Переводит узел в `RUNNING` и перерисовывает (показать прогресс)."""
-        node = self.flash_node
+    def set_flash_running(self, node_id: str) -> None:
+        """Переводит узел флэша в `RUNNING` и перерисовывает."""
+        node = self.node_by_id(node_id)
         if node is not None:
             node.status = NodeStatus.RUNNING
             node.error = None
             self._notify()
 
-    def set_flash_result(self, result: object) -> None:
+    def set_flash_result(self, node_id: str, result: object) -> None:
         """Сохраняет результат флэша, узел → `FRESH`, перерисовка."""
-        node = self.flash_node
+        node = self.node_by_id(node_id)
         if node is not None:
             node.result = result
             node.status = NodeStatus.FRESH
             node.error = None
             self._notify()
 
-    def set_flash_error(self, message: str) -> None:
+    def set_flash_error(self, node_id: str, message: str) -> None:
         """Сохраняет ошибку флэша, узел → `STALE`, перерисовка."""
-        node = self.flash_node
+        node = self.node_by_id(node_id)
         if node is not None:
             node.result = None
             node.status = NodeStatus.STALE
             node.error = message
             self._notify()
 
-    def clear_flash(self) -> None:
+    def reset_flash(self, node_id: str) -> None:
         """Сбрасывает узел флэша в `EMPTY` (например, при отмене), перерисовка."""
-        node = self.flash_node
+        node = self.node_by_id(node_id)
         if node is not None:
             node.status = NodeStatus.EMPTY
             node.error = None
@@ -352,3 +413,10 @@ class AppState:
     def active_composition(self) -> Optional[Composition]:
         variant = self.active_variant
         return None if variant is None else variant.composition
+
+    @property
+    def active_node(self) -> Optional[GraphNode]:
+        variant = self.active_variant
+        if variant is None or variant.active_node_id is None:
+            return None
+        return variant.nodes.get(variant.active_node_id)

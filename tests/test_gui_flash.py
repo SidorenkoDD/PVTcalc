@@ -55,52 +55,76 @@ def test_property_rows_keys_present(repo):
         assert key in result.liquid.properties, key
 
 
-# --- узел «Флэш» в AppState -----------------------------------------------
+# --- узлы «Флэш» (история) в AppState -------------------------------------
 
-def test_flash_node_created_on_open(state):
-    node = state.flash_node
-    assert node is not None
+def test_new_flash_run_creates_node_and_tab(state):
+    nid = state.new_flash_run(50, 20)
+    node = state.node_by_id(nid)
     assert node.kind is NodeKind.FLASH
     assert node.status is NodeStatus.EMPTY
     assert node.upstream == ["composition"]
-    assert "P" in node.params and "T" in node.params
+    assert node.params["P"] == 50 and node.params["T"] == 20
+    # открылся вкладкой и стал активным
+    assert nid in state.active_variant.open_node_ids
+    assert state.active_variant.active_node_id == nid
+
+
+def test_history_multiple_runs_ordered(state):
+    a = state.new_flash_run(50, 20)
+    b = state.new_flash_run(200, 80)
+    assert [r.node_id for r in state.active_variant.flash_runs()] == [a, b]
 
 
 def test_flash_status_transitions(state):
+    nid = state.new_flash_run(200, 80)
     events: list = []
-    state.subscribe(lambda: events.append(state.flash_node.status))
-    node = state.flash_node
+    state.subscribe(lambda: events.append(1))
 
-    state.set_flash_running()
-    assert node.status is NodeStatus.RUNNING
+    state.set_flash_running(nid)
+    assert state.node_by_id(nid).status is NodeStatus.RUNNING
 
     fake = flash_service.run_flash(state.active_composition, 200, 80)
-    state.set_flash_result(fake)
-    assert node.status is NodeStatus.FRESH
-    assert node.result is fake
+    state.set_flash_result(nid, fake)
+    assert state.node_by_id(nid).status is NodeStatus.FRESH
+    assert state.node_by_id(nid).result is fake
 
-    state.clear_flash()
-    assert node.status is NodeStatus.EMPTY
-    assert len(events) == 3  # running, result, clear
+    state.reset_flash(nid)
+    assert state.node_by_id(nid).status is NodeStatus.EMPTY
+    assert len(events) == 3  # running, result, reset
 
 
 def test_flash_error(state):
-    state.set_flash_error("boom")
-    assert state.flash_node.status is NodeStatus.STALE
-    assert state.flash_node.error == "boom"
-    assert state.flash_node.result is None
-
-
-def test_composition_change_invalidates_flash(state):
-    node = state.flash_node
-    state.set_flash_result(flash_service.run_flash(state.active_composition, 200, 80))
-    assert node.status is NodeStatus.FRESH
-    # любая правка состава помечает посчитанный флэш STALE
-    state.normalize_composition()
+    nid = state.new_flash_run(200, 80)
+    state.set_flash_error(nid, "boom")
+    node = state.node_by_id(nid)
     assert node.status is NodeStatus.STALE
+    assert node.error == "boom"
+    assert node.result is None
+
+
+def test_composition_change_invalidates_all_flashes(state):
+    a = state.new_flash_run(50, 20)
+    b = state.new_flash_run(200, 80)
+    state.set_flash_result(a, flash_service.run_flash(state.active_composition, 50, 20))
+    state.set_flash_result(b, flash_service.run_flash(state.active_composition, 200, 80))
+    assert state.node_by_id(a).status is NodeStatus.FRESH
+    # любая правка состава помечает ВСЕ посчитанные флэши STALE
+    state.normalize_composition()
+    assert state.node_by_id(a).status is NodeStatus.STALE
+    assert state.node_by_id(b).status is NodeStatus.STALE
 
 
 def test_set_flash_params(state):
-    state.set_flash_params(123.0, 45.0)
-    assert state.flash_node.params["P"] == 123.0
-    assert state.flash_node.params["T"] == 45.0
+    nid = state.new_flash_run()
+    state.set_flash_params(nid, 123.0, 45.0)
+    assert state.node_by_id(nid).params["P"] == 123.0
+    assert state.node_by_id(nid).params["T"] == 45.0
+
+
+def test_close_node_updates_tabs(state):
+    a = state.new_flash_run(50, 20)
+    b = state.new_flash_run(200, 80)
+    assert state.active_variant.active_node_id == b
+    state.close_node(b)
+    assert b not in state.active_variant.open_node_ids
+    assert state.active_variant.active_node_id == a  # активной стала соседняя

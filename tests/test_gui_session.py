@@ -42,17 +42,19 @@ def test_session_save_load_new_fields(tmp_path):
         active_model_id="KRSNL_PVTSIM",
         window_width=1000,
         window_height=700,
-        composition_window_open=True,
-        flash={"P": 50.0, "T": 20.0, "result": {"is_two_phase": True}},
+        open_tabs=["composition", "flash_1"],
+        active_tab="flash_1",
+        flashes=[{"P": 50.0, "T": 20.0, "result": {"is_two_phase": True}}],
     )
     save_session(original, path)
     loaded = load_session(path)
 
     assert loaded.active_model_id == "KRSNL_PVTSIM"
     assert loaded.window_width == 1000
-    assert loaded.composition_window_open is True
-    assert loaded.flash["P"] == 50.0
-    assert loaded.flash["result"]["is_two_phase"] is True
+    assert loaded.open_tabs == ["composition", "flash_1"]
+    assert loaded.active_tab == "flash_1"
+    assert loaded.flashes[0]["P"] == 50.0
+    assert loaded.flashes[0]["result"]["is_two_phase"] is True
 
 
 def test_save_session_stamps_saved_at(tmp_path):
@@ -67,8 +69,8 @@ def test_save_session_stamps_saved_at(tmp_path):
 def test_session_missing_file_defaults(tmp_path):
     loaded = load_session(str(tmp_path / "нет.json"))
     assert loaded.active_model_id is None
-    assert loaded.composition_window_open is False
-    assert loaded.flash is None
+    assert loaded.open_tabs is None
+    assert loaded.flashes is None
 
 
 def test_session_load_ignores_unknown_keys(tmp_path):
