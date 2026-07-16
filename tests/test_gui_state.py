@@ -87,3 +87,50 @@ def test_open_unknown_model_raises(repo):
     state.refresh_model_list()
     with pytest.raises(KeyError):
         state.open_model("НЕТ")
+
+
+# --- навигация между экранами (Projects / New fluid / Workspace) ------------
+
+def test_starts_on_projects_screen(repo):
+    state = AppState(repo)
+    assert state.current_screen == "projects"
+
+
+def test_enter_model_switches_to_workspace(repo):
+    state = AppState(repo)
+    state.refresh_model_list()
+    events: list = []
+    state.subscribe(lambda: events.append(state.current_screen))
+    state.enter_model("KRSNL_PVTSIM")
+    assert state.current_screen == "workspace"
+    assert state.active_model_id == "KRSNL_PVTSIM"
+    assert state.models["KRSNL_PVTSIM"].loaded is True
+    assert events[-1] == "workspace"
+
+
+def test_show_projects_and_new_fluid(repo):
+    state = AppState(repo)
+    state.refresh_model_list()
+    state.enter_model("KRSNL_PVTSIM")
+    state.show_projects()
+    assert state.current_screen == "projects"
+    # активная модель не сбрасывается — «Continue last» и workspace живы
+    assert state.active_model_id == "KRSNL_PVTSIM"
+    state.show_new_fluid()
+    assert state.current_screen == "new_fluid"
+
+
+def test_enter_unknown_model_keeps_screen(repo):
+    state = AppState(repo)
+    state.refresh_model_list()
+    with pytest.raises(KeyError):
+        state.enter_model("НЕТ")
+    assert state.current_screen == "projects"
+
+
+def test_model_summary_attached(repo):
+    state = AppState(repo)
+    state.refresh_model_list()
+    s = state.models["KRSNL_PVTSIM"].summary
+    assert s is not None
+    assert s.results_brief and s.results_brief[0]["module"] == "Flash"

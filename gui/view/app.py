@@ -23,6 +23,7 @@ from gui.app_state import AppState, NodeKind, NodeStatus
 from gui.services import composition_service as comp_svc
 from gui.services import experiment_service as exp_svc
 from gui.services import flash_service
+from gui.services import project_service as proj_svc
 from gui.session import SessionState, save_session
 from gui.view.theme import build_light_theme
 
@@ -35,7 +36,12 @@ _WORKSPACE_PANEL = "workspace_panel"
 _MODEL_TREE = "model_tree"
 _WORKSPACE = "workspace_content"
 _STATUS_BAR = "status_bar"
-_RESTORE_MODAL = "restore_session_modal"
+# статичные контейнеры-экраны (создаются один раз, переключаются show=)
+_PROJECTS_SCREEN = "projects_screen"
+_PROJECTS_CONTENT = "projects_content"
+_NEW_FLUID_SCREEN = "new_fluid_screen"
+_NEW_FLUID_CONTENT = "new_fluid_content"
+_WORKSPACE_SCREEN = "workspace_screen"
 
 _STATUS_H = 28    # высота строки статуса
 _TREE_W = 320     # ширина левой панели
@@ -95,8 +101,7 @@ class PVTcalcApp:
         dpg.show_viewport()
         dpg.set_primary_window(_PRIMARY, True)
 
-        self._state.refresh_model_list()
-        self._maybe_prompt_restore()
+        self._state.refresh_model_list()  # notify -> рендер экрана Projects
 
         dpg.start_dearpygui()
 
@@ -108,6 +113,8 @@ class PVTcalcApp:
     def _build_menu(self) -> None:
         with dpg.viewport_menu_bar():
             with dpg.menu(label="Project"):
+                dpg.add_menu_item(label="Projects home",
+                                  callback=self._on_back_to_projects)
                 dpg.add_menu_item(label="Refresh models",
                                   callback=lambda: self._state.refresh_model_list())
             with dpg.menu(label="Edit"):
@@ -134,6 +141,8 @@ class PVTcalcApp:
                 or dpg.is_key_down(dpg.mvKey_RShift))
 
     def _on_key_delete(self, sender, app_data) -> None:
+        if self._state.current_screen != "workspace":
+            return
         # только когда курсор над панелью дерева (не мешаем вводу в поля)
         if not (dpg.is_item_hovered(_TREE_PANEL) or dpg.is_item_hovered(_MODEL_TREE)):
             return
@@ -144,10 +153,14 @@ class PVTcalcApp:
             self._set_status(f"{node.kind.name.capitalize()} node deleted (Del).")
 
     def _on_key_z(self, sender, app_data) -> None:
+        if self._state.current_screen != "workspace":
+            return
         if self._ctrl_down():
             self._do_redo() if self._shift_down() else self._do_undo()
 
     def _on_key_y(self, sender, app_data) -> None:
+        if self._state.current_screen != "workspace":
+            return
         if self._ctrl_down():
             self._do_redo()
 
@@ -166,52 +179,205 @@ class PVTcalcApp:
             self._set_status("Nothing to redo.")
 
     def _build_layout(self) -> None:
+        """
+        Три экрана-контейнера (Projects / New fluid / Workspace), созданные
+        один раз и переключаемые `show=` (см. `_render`); глобальная строка
+        статуса внизу. Внутри экранов — прежний паттерн перерисовки
+        (delete children + пересоздание с захватом id).
+        """
         with dpg.window(tag=_PRIMARY, no_title_bar=True, no_move=True,
                         no_resize=True, no_collapse=True):
-            # таблица-сплиттер: перетаскиваемая граница между деревом и
-            # рабочей областью (ширина левой панели меняется мышью)
-            with dpg.table(header_row=False, resizable=True, borders_innerV=True,
-                           policy=dpg.mvTable_SizingStretchProp, height=-_STATUS_H):
-                dpg.add_table_column(init_width_or_weight=0.24)  # дерево
-                dpg.add_table_column(init_width_or_weight=0.76)  # рабочая область
-                with dpg.table_row():
-                    with dpg.child_window(tag=_TREE_PANEL, width=-1,
-                                          height=-1, border=True):
-                        dpg.add_text("Project (models.json)")
-                        dpg.add_separator()
-                        dpg.add_group(tag=_MODEL_TREE)
-                    with dpg.child_window(tag=_WORKSPACE_PANEL, width=-1,
-                                          height=-1, border=True):
-                        dpg.add_group(tag=_WORKSPACE)
+            # --- экран Projects (стартовый) ---
+            with dpg.child_window(tag=_PROJECTS_SCREEN, height=-_STATUS_H,
+                                  border=False, show=True):
+                dpg.add_group(tag=_PROJECTS_CONTENT)
+
+            # --- экран создания нового флюида ---
+            with dpg.child_window(tag=_NEW_FLUID_SCREEN, height=-_STATUS_H,
+                                  border=False, show=False):
+                dpg.add_group(tag=_NEW_FLUID_CONTENT)
+
+            # --- экран рабочего пространства (дерево + вкладки) ---
+            with dpg.group(tag=_WORKSPACE_SCREEN, show=False):
+                # таблица-сплиттер: перетаскиваемая граница между деревом и
+                # рабочей областью (ширина левой панели меняется мышью)
+                with dpg.table(header_row=False, resizable=True,
+                               borders_innerV=True,
+                               policy=dpg.mvTable_SizingStretchProp,
+                               height=-_STATUS_H):
+                    dpg.add_table_column(init_width_or_weight=0.24)  # дерево
+                    dpg.add_table_column(init_width_or_weight=0.76)  # раб. область
+                    with dpg.table_row():
+                        with dpg.child_window(tag=_TREE_PANEL, width=-1,
+                                              height=-1, border=True):
+                            dpg.add_button(label="< Projects",
+                                           callback=self._on_back_to_projects)
+                            dpg.add_separator()
+                            dpg.add_group(tag=_MODEL_TREE)
+                        with dpg.child_window(tag=_WORKSPACE_PANEL, width=-1,
+                                              height=-1, border=True):
+                            dpg.add_group(tag=_WORKSPACE)
+
             dpg.add_separator()
             dpg.add_text("Ready.", tag=_STATUS_BAR)
 
     # --- полная перерисовка ---------------------------------------------
 
     def _render(self) -> None:
-        self._render_tree()
-        self._render_workspace()
+        """Диспетчер по текущему экрану: показывает нужный контейнер и
+        перерисовывает только его содержимое."""
+        screen = self._state.current_screen
+        if dpg.does_item_exist(_PROJECTS_SCREEN):
+            dpg.configure_item(_PROJECTS_SCREEN, show=(screen == "projects"))
+            dpg.configure_item(_NEW_FLUID_SCREEN, show=(screen == "new_fluid"))
+            dpg.configure_item(_WORKSPACE_SCREEN, show=(screen == "workspace"))
+        if screen == "projects":
+            self._render_projects()
+        elif screen == "workspace":
+            self._render_tree()
+            self._render_workspace()
+        # new_fluid рендерится один раз при входе (не по notify) — форма
+        # держит ввод локально и не должна терять фокус (см. Этап 3)
+
+    # ==================================================================
+    #  Экран Projects (стартовый)
+    # ==================================================================
+
+    def _render_projects(self) -> None:
+        if not dpg.does_item_exist(_PROJECTS_CONTENT):
+            return
+        dpg.delete_item(_PROJECTS_CONTENT, children_only=True)
+        parent = _PROJECTS_CONTENT
+
+        dpg.add_spacer(height=6, parent=parent)
+        dpg.add_text("Projects", parent=parent)
+        dpg.add_separator(parent=parent)
+
+        # строка «продолжить последнюю сессию»
+        last = self._session.active_model_id
+        if last and last in self._state.models:
+            saved = self._format_saved_at(self._session.saved_at)
+            with dpg.group(horizontal=True, parent=parent):
+                dpg.add_text(f"Continue last: {last}"
+                             + (f"  (saved {saved})" if saved else ""))
+                dpg.add_button(label="Open", user_data=last,
+                               callback=self._on_open_model)
+            dpg.add_separator(parent=parent)
+
+        # таблица моделей
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True,
+                       borders_outerV=True, resizable=True, scrollY=True,
+                       height=380, freeze_rows=1):
+            for label in ("Model", "Field", "EOS", "Components", "T res, K",
+                          "Calculated", "Created", ""):
+                dpg.add_table_column(label=label)
+            workspaces = self._session.workspaces or {}
+            for model in self._state.models.values():
+                s = model.summary
+                with dpg.table_row():
+                    dpg.add_text(model.title)
+                    dpg.add_text(model.field_name or "-")
+                    dpg.add_text(model.eos or "-")
+                    dpg.add_text(str(model.n_components))
+                    dpg.add_text(self._g(s.t_res) if s and s.t_res else "-")
+                    dpg.add_text(self._calc_summary_text(model, workspaces))
+                    dpg.add_text((s.created_at or "-")[:10] if s else "-")
+                    dpg.add_button(label="Open", user_data=model.model_id,
+                                   callback=self._on_open_model)
+
+        dpg.add_spacer(height=8, parent=parent)
+        dpg.add_text("New composition", parent=parent)
+        with dpg.group(horizontal=True, parent=parent):
+            dpg.add_button(label="Create manually",
+                           callback=self._on_new_fluid_manual)
+            dpg.add_button(label="Import Excel", callback=self._on_import_excel)
+            e300 = dpg.add_button(label="Import E300 (soon)", enabled=False)
+            with dpg.tooltip(e300):
+                dpg.add_text("Not available yet - E300 parser is planned.")
+
+    def _calc_summary_text(self, model, workspaces: dict) -> str:
+        """Текст колонки Calculated: persisted + сессионные расчёты."""
+        if model.summary is None:
+            return "-"
+        info = proj_svc.calc_summary(model.summary,
+                                     workspaces.get(model.model_id))
+        parts: list[str] = []
+        if info["flashes"]:
+            parts.append(f"{info['flashes']} flash")
+        for kind, n in info["exp_kinds"].items():
+            parts.append(f"{n} {kind}")
+        if info["persisted"]:
+            parts.append(f"{info['persisted']} stored")
+        return ", ".join(parts) if parts else "-"
+
+    # --- навигация ---------------------------------------------------------
+
+    def _on_open_model(self, sender, app_data, user_data) -> None:
+        mid = user_data
+        if self._active_job is not None:
+            self._set_status("Calculation in progress - wait or cancel first.")
+            return
+        try:
+            self._state.enter_model(mid)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось открыть модель %s", mid)
+            self._set_status(f"Failed to open '{mid}': {exc}")
+            return
+        self._expanded_models.add(mid)
+        self._restore_workspace(mid)
+        self._state._notify()
+        self._set_status(f"Model '{mid}' opened.")
+
+    def _on_back_to_projects(self, sender=None, app_data=None, user_data=None) -> None:
+        if self._active_job is not None:
+            self._set_status("Calculation in progress - wait or cancel first.")
+            return
+        self._state.show_projects()
+
+    def _on_new_fluid_manual(self, sender=None, app_data=None, user_data=None) -> None:
+        self._state.show_new_fluid()
+        self._render_new_fluid()
+
+    def _on_import_excel(self, sender=None, app_data=None, user_data=None) -> None:
+        # Этап 4: файловый диалог + параметры листа
+        self._set_status("Excel import - coming in the next step.")
+
+    def _render_new_fluid(self) -> None:
+        """Плейсхолдер экрана нового флюида (форма — Этап 3)."""
+        if not dpg.does_item_exist(_NEW_FLUID_CONTENT):
+            return
+        dpg.delete_item(_NEW_FLUID_CONTENT, children_only=True)
+        dpg.add_spacer(height=6, parent=_NEW_FLUID_CONTENT)
+        dpg.add_text("New fluid", parent=_NEW_FLUID_CONTENT)
+        dpg.add_separator(parent=_NEW_FLUID_CONTENT)
+        dpg.add_text("The creation form is coming next.", parent=_NEW_FLUID_CONTENT)
+        dpg.add_button(label="< Back to Projects", parent=_NEW_FLUID_CONTENT,
+                       callback=self._on_back_to_projects)
 
     # ==================================================================
     #  Дерево (левая панель)
     # ==================================================================
 
     def _render_tree(self) -> None:
+        """Дерево показывает ТОЛЬКО активную модель (выбор — на Projects)."""
         if not dpg.does_item_exist(_MODEL_TREE):
             return
         dpg.delete_item(_MODEL_TREE, children_only=True)
 
-        for model in self._state.models.values():
-            expanded = model.model_id in self._expanded_models
-            is_active_model = model.model_id == self._state.active_model_id
-            arrow = "v " if expanded else "> "
-            dpg.add_selectable(
-                label=f"{arrow}{model.title}  [{model.n_components}c, {model.eos}]",
-                parent=_MODEL_TREE, default_value=is_active_model,
-                user_data=model.model_id, callback=self._on_model_row,
-            )
-            if expanded and model.loaded:
-                self._render_model_children(model)
+        model = self._state.active_model
+        if model is None:
+            dpg.add_text("No model selected.", parent=_MODEL_TREE)
+            return
+        expanded = model.model_id in self._expanded_models
+        arrow = "v " if expanded else "> "
+        dpg.add_selectable(
+            label=f"{arrow}{model.title}  [{model.n_components}c, {model.eos}]",
+            parent=_MODEL_TREE, default_value=True,
+            user_data=model.model_id, callback=self._on_model_row,
+        )
+        if expanded and model.loaded:
+            self._render_model_children(model)
 
     def _render_model_children(self, model) -> None:
         variant = model.variants.get("base")
@@ -291,16 +457,13 @@ class PVTcalcApp:
     # --- обработчики дерева ----------------------------------------------
 
     def _on_model_row(self, sender, app_data, user_data) -> None:
+        # модель уже активна (единственная в дереве) — только разворот
         mid = user_data
         if mid in self._expanded_models:
             self._expanded_models.discard(mid)
         else:
             self._expanded_models.add(mid)
-        try:
-            self._state.set_active_model(mid)  # ensure loaded + notify
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Не удалось выбрать модель %s", mid)
-            self._set_status(f"Failed to load '{mid}': {exc}")
+        self._render_tree()
 
     def _on_cat_toggle(self, sender, app_data, user_data) -> None:
         cat_key = user_data
@@ -1198,41 +1361,9 @@ class PVTcalcApp:
     #  Сессия
     # ==================================================================
 
-    def _maybe_prompt_restore(self) -> None:
-        """Если есть восстановимая сессия — спросить, продолжать ли."""
-        mid = self._session.active_model_id
-        if not mid or mid not in self._state.models:
-            return
-        date_str = self._format_saved_at(self._session.saved_at)
-        w, h = self._session.window_width, self._session.window_height
-        with dpg.window(label="Restore session", modal=True, no_collapse=True,
-                        no_resize=True, no_move=True, tag=_RESTORE_MODAL,
-                        width=460, height=170,
-                        pos=(max(0, w // 2 - 230), max(0, h // 2 - 85))):
-            dpg.add_text(f"A previous session was saved on {date_str}."
-                         if date_str else "A previous session was found.")
-            dpg.add_text(f"Model: {mid}")
-            dpg.add_spacer(height=10)
-            dpg.add_text("Continue where you left off?")
-            dpg.add_spacer(height=8)
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Continue", width=130,
-                               callback=self._on_restore_continue)
-                dpg.add_button(label="Start fresh", width=130,
-                               callback=self._on_restore_decline)
-
-    def _on_restore_continue(self, sender=None, app_data=None) -> None:
-        if dpg.does_item_exist(_RESTORE_MODAL):
-            dpg.delete_item(_RESTORE_MODAL)
-        self._restore_session()
-
-    def _on_restore_decline(self, sender=None, app_data=None) -> None:
-        if dpg.does_item_exist(_RESTORE_MODAL):
-            dpg.delete_item(_RESTORE_MODAL)
-        self._set_status("Started fresh (previous session kept on disk).")
-
     @staticmethod
     def _format_saved_at(iso: str | None) -> str:
+        """ISO-строку `saved_at` -> 'YYYY-MM-DD HH:MM' (для строки Continue last)."""
         if not iso:
             return ""
         try:
@@ -1240,20 +1371,6 @@ class PVTcalcApp:
             return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M")
         except (ValueError, TypeError):
             return ""
-
-    def _restore_session(self) -> None:
-        """Восстанавливает последнюю модель и её workspace (через модалку)."""
-        mid = self._session.active_model_id
-        if not mid or mid not in self._state.models:
-            return
-        try:
-            self._state.set_active_model(mid)
-        except Exception:  # noqa: BLE001
-            logger.warning("Не удалось восстановить модель сессии %s", mid)
-            return
-        self._restore_workspace(mid)
-        self._state._notify()
-        self._set_status(f"Session restored: model '{mid}'.")
 
     def _restore_workspace(self, model_id: str) -> None:
         """

@@ -112,6 +112,8 @@ class Model:
     n_components: int = 0
     loaded: bool = False
     variants: dict[str, Variant] = field(default_factory=dict)
+    # полная сводка из репозитория (created_at/t_res/results_brief) — для Projects
+    summary: Optional[ModelSummary] = None
 
 
 class AppState:
@@ -126,6 +128,8 @@ class AppState:
         self.models: dict[str, Model] = {}
         self.active_model_id: Optional[str] = None
         self.active_variant_id: Optional[str] = None
+        # текущий экран: "projects" (стартовый) | "new_fluid" | "workspace"
+        self.current_screen: str = "projects"
         self._listeners: list = []
 
     # --- наблюдатель -----------------------------------------------------
@@ -220,6 +224,7 @@ class AppState:
                 field_name=s.field_name,
                 eos=s.eos,
                 n_components=s.n_components,
+                summary=s,
             )
             if prev is not None and prev.loaded:
                 model.loaded = True
@@ -263,6 +268,26 @@ class AppState:
 
     # обратная совместимость со старым именем
     open_model = set_active_model
+
+    # --- навигация между экранами ----------------------------------------
+
+    def show_projects(self) -> None:
+        """Переход на стартовый экран Projects."""
+        self.current_screen = "projects"
+        self._notify()
+
+    def show_new_fluid(self) -> None:
+        """Переход на экран создания нового флюида."""
+        self.current_screen = "new_fluid"
+        self._notify()
+
+    def enter_model(self, model_id: str) -> None:
+        """Открывает модель в рабочем пространстве (Projects → workspace)."""
+        self._ensure_loaded(model_id)
+        self.active_model_id = model_id
+        self.active_variant_id = "base"
+        self.current_screen = "workspace"
+        self._notify()
 
     # --- вкладки (открытые узлы) ----------------------------------------
 
