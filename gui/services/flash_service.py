@@ -61,9 +61,12 @@ def snapshot_flash_result(result: FlashResult) -> dict:
     числа: доли фаз + `properties`, без объекта состава). См. `restore`.
     """
     def phase(p: PhaseState) -> dict:
+        comp = p.composition if isinstance(p.composition, dict) else None
         return {
             "mole_fraction": _as_float(p.mole_fraction),
             "properties": {k: _as_float(v) for k, v in p.properties.items()},
+            "composition": ({k: _as_float(v) for k, v in comp.items()}
+                            if comp else None),
         }
 
     return {
@@ -79,7 +82,8 @@ def restore_flash_result(snap: dict) -> FlashResult:
     """Восстанавливает `FlashResult` из слепка (состав фаз не хранится → None)."""
     def phase(d: dict) -> PhaseState:
         return PhaseState(mole_fraction=d.get("mole_fraction"),
-                          composition=None, properties=d.get("properties", {}))
+                          composition=d.get("composition"),
+                          properties=d.get("properties", {}))
 
     return FlashResult(
         pressure=snap.get("pressure"),

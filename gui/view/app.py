@@ -367,7 +367,7 @@ class PVTcalcApp:
 
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, height=340):
+                       resizable=True, scrollY=True, height=-1, freeze_rows=1):
             dpg.add_table_column(label="Component")
             dpg.add_table_column(label="zi, frac.")
             for _key, title in _COMPOSITION_COLUMNS:
@@ -491,9 +491,18 @@ class PVTcalcApp:
         kind = "Two-phase" if result.is_two_phase else "Single-phase"
         dpg.add_text(f"{kind}    P = {result.pressure:.3f} bar    "
                      f"T = {result.temperature:.2f} K", parent=parent)
+        # незакрываемые под-вкладки результата: Main + Composition
+        with dpg.tab_bar(parent=parent):
+            with dpg.tab(label="Main") as t_main:
+                self._render_flash_main(result, t_main)
+            with dpg.tab(label="Composition & K") as t_comp:
+                self._render_flash_composition(result, t_comp)
+
+    def _render_flash_main(self, result, parent) -> None:
+        """Основные свойства фаз (доли, M, объём, плотность, Z, вязкость)."""
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, height=-1):
+                       resizable=True, scrollY=True, height=-1, freeze_rows=1):
             dpg.add_table_column(label="Property")
             dpg.add_table_column(label="Vapor")
             dpg.add_table_column(label="Liquid")
@@ -506,6 +515,33 @@ class PVTcalcApp:
                     dpg.add_text(label)
                     dpg.add_text(self._fmt(result.vapor.properties.get(key)))
                     dpg.add_text(self._fmt(result.liquid.properties.get(key)))
+
+    def _render_flash_composition(self, result, parent) -> None:
+        """Состав каждой фазы (yi/xi) и константы равновесия K = yi/xi."""
+        yi = result.vapor.composition if isinstance(result.vapor.composition, dict) else None
+        xi = result.liquid.composition if isinstance(result.liquid.composition, dict) else None
+        if not yi and not xi:
+            dpg.add_text("Phase compositions are not available for this result.",
+                         parent=parent)
+            return
+
+        names = list((xi or yi).keys())
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, height=-1, freeze_rows=1):
+            dpg.add_table_column(label="Component")
+            dpg.add_table_column(label="Vapor yi")
+            dpg.add_table_column(label="Liquid xi")
+            dpg.add_table_column(label="K = yi/xi")
+            for name in names:
+                y = yi.get(name) if yi else None
+                x = xi.get(name) if xi else None
+                k = (y / x) if (y is not None and x not in (None, 0.0)) else None
+                with dpg.table_row():
+                    dpg.add_text(name)
+                    dpg.add_text(self._fmt(y))
+                    dpg.add_text(self._fmt(x))
+                    dpg.add_text(self._fmt(k))
 
     def _flash_pt(self, nid: str) -> tuple[float, float]:
         """Текущие значения полей P/T вкладки флэша по её id узла."""
