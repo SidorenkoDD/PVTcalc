@@ -4,3 +4,6 @@ dist/
 build/
 *.egg-info/
 .pytest_cache/
+
+# Рантайм-состояние сессии GUI
+gui_session.json

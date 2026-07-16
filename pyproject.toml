@@ -20,13 +20,16 @@ notebook = [
     "ipykernel",
     "jupyterlab",
 ]
+gui = [
+    "dearpygui>=2.0",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["calc_core*"]
+include = ["calc_core*", "gui*"]
 
 [tool.setuptools.package-data]
 "calc_core.Utils" = ["DB.json"]
