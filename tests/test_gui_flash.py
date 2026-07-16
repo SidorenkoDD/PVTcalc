@@ -161,3 +161,18 @@ def test_delete_composition_is_blocked(state):
     state.open_node("composition")
     state.delete_node("composition")
     assert "composition" in state.active_variant.nodes  # состав не удаляется
+
+
+def test_open_compare_orders_by_creation(state):
+    a = state.new_flash_run(50, 20)
+    b = state.new_flash_run(200, 80)
+    nid = state.open_compare([b, a])  # выбор в обратном порядке
+    node = state.node_by_id(nid)
+    assert node.kind is NodeKind.COMPARE
+    assert node.params["members"] == [a, b]  # порядок создания, не выбора
+    assert nid in state.active_variant.open_node_ids
+
+
+def test_open_compare_needs_two(state):
+    a = state.new_flash_run(50, 20)
+    assert state.open_compare([a]) is None  # одного мало

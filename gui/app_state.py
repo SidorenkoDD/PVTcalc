@@ -45,6 +45,7 @@ class NodeKind(Enum):
 
     COMPOSITION = auto()   # корневой узел: состав + свойства
     FLASH = auto()         # флэш в точке P,T
+    COMPARE = auto()       # сравнение нескольких расчётов (params["members"])
     # SATURATION / CCE / DLE / PHASE_ENVELOPE / ... — добавляются позже
 
 
@@ -422,6 +423,29 @@ class AppState:
         )
         self.open_node(node_id)
         return node_id
+
+    def open_compare(self, member_ids: list[str]) -> Optional[str]:
+        """
+        Открывает вкладку сравнения выбранных узлов (единственный узел
+        `compare`, его список участников обновляется). Нужно ≥2 существующих
+        узла. Не откатывается undo (это представление, не правка данных).
+        """
+        variant = self.active_variant
+        if variant is None:
+            return None
+        # упорядочиваем по порядку создания узлов (не по порядку выбора)
+        wanted = set(member_ids)
+        members = [nid for nid in variant.nodes if nid in wanted]
+        if len(members) < 2:
+            return None
+        nid = "compare"
+        if nid not in variant.nodes:
+            variant.nodes[nid] = GraphNode(nid, NodeKind.COMPARE, "Compare",
+                                           NodeStatus.FRESH, params={"members": members})
+        else:
+            variant.nodes[nid].params["members"] = members
+        self.open_node(nid)
+        return nid
 
     def duplicate_flash(self, node_id: str) -> Optional[str]:
         """Создаёт новый флэш-узел с теми же P/T (не запуская расчёт)."""

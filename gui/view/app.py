@@ -61,6 +61,8 @@ class PVTcalcApp:
         # состояние разворота дерева (во View, чтобы переживать перерисовку)
         self._expanded_models: set[str] = set()
         self._expanded_cats: set[str] = set()
+        # выбор узлов для сравнения (Ctrl+клик в дереве)
+        self._compare_selection: set[str] = set()
         # активная фоновая задача флэша (расчёт в отдельном потоке)
         self._active_job: dict | None = None
         # id таб-бара и вкладок рабочей области (захватываем при отрисовке,
@@ -232,8 +234,9 @@ class PVTcalcApp:
         )
         if cat_exp:
             for run in runs:
+                mark = "[*] " if run.node_id in self._compare_selection else ""
                 sel = dpg.add_selectable(
-                    label="      " + self._flash_tree_label(run),
+                    label="      " + mark + self._flash_tree_label(run),
                     parent=_MODEL_TREE, default_value=(active_nid == run.node_id),
                     user_data=(model.model_id, run.node_id),
                     callback=self._on_tree_open_node,
@@ -241,6 +244,11 @@ class PVTcalcApp:
                 self._attach_flash_context_menu(sel, run.node_id)
             dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
                                user_data=model.model_id, callback=self._on_new_flash)
+            n_sel = sum(1 for m in self._compare_selection if m in variant.nodes)
+            if n_sel >= 2:
+                dpg.add_selectable(label=f"      = Compare ({n_sel})",
+                                   parent=_MODEL_TREE, user_data=model.model_id,
+                                   callback=self._on_open_compare)
 
         # будущие категории (заготовки под расчёты)
         dpg.add_text("    Saturation (soon)", parent=_MODEL_TREE)
@@ -272,7 +280,31 @@ class PVTcalcApp:
         mid, nid = user_data
         if mid != self._state.active_model_id:
             self._state.set_active_model(mid)
+        node = self._state.node_by_id(nid)
+        # Ctrl+клик по флэшу — переключить участие в сравнении
+        if self._ctrl_down() and node is not None and node.kind is NodeKind.FLASH:
+            self._toggle_compare(nid)
+            return
         self._state.open_node(nid)
+
+    def _toggle_compare(self, node_id: str) -> None:
+        if node_id in self._compare_selection:
+            self._compare_selection.discard(node_id)
+        else:
+            self._compare_selection.add(node_id)
+        self._render_tree()
+        self._set_status(f"Compare selection: {len(self._compare_selection)} run(s).")
+
+    def _on_toggle_compare(self, sender, app_data, user_data) -> None:
+        self._toggle_compare(user_data)
+
+    def _on_open_compare(self, sender, app_data, user_data) -> None:
+        mid = user_data
+        if mid != self._state.active_model_id:
+            self._state.set_active_model(mid)
+        members = [m for m in self._compare_selection
+                   if m in self._state.active_variant.nodes]
+        self._state.open_compare(members)
 
     def _on_new_flash(self, sender, app_data, user_data) -> None:
         mid = user_data
@@ -288,6 +320,8 @@ class PVTcalcApp:
             dpg.add_separator()
             dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
                                user_data=node_id, callback=self._on_flash_rename)
+            dpg.add_button(label="Add / remove from compare", width=200,
+                           user_data=node_id, callback=self._on_toggle_compare)
             dpg.add_button(label="Duplicate", width=200, user_data=node_id,
                            callback=self._on_flash_duplicate)
             dpg.add_button(label="Delete", width=200, user_data=node_id,
@@ -351,6 +385,8 @@ class PVTcalcApp:
                         self._render_composition_tab(page, n)
                     elif n.kind is NodeKind.FLASH:
                         self._render_flash_tab(page, n)
+                    elif n.kind is NodeKind.COMPARE:
+                        self._render_compare_tab(page, n)
 
         # синхронизировать активную вкладку
         active = variant.active_node_id
@@ -370,6 +406,8 @@ class PVTcalcApp:
     def _tab_label(self, node) -> str:
         if node.kind is NodeKind.COMPOSITION:
             return "Composition"
+        if node.kind is NodeKind.COMPARE:
+            return f"Compare ({len(node.params.get('members', []))})"
         if node.kind is NodeKind.FLASH:
             label = node.params.get("label")
             if label:
@@ -381,6 +419,8 @@ class PVTcalcApp:
     def _node_crumb(self, node) -> str:
         if node.kind is NodeKind.COMPOSITION:
             return "Composition"
+        if node.kind is NodeKind.COMPARE:
+            return f"Compare ({len(node.params.get('members', []))} runs)"
         if node.kind is NodeKind.FLASH:
             return "Flash  >  " + self._flash_tree_label(node)
         return node.title
@@ -634,6 +674,90 @@ class PVTcalcApp:
                     dpg.add_text(self._fmt(y))
                     dpg.add_text(self._fmt(x))
                     dpg.add_text(self._fmt(k))
+
+    # ==================================================================
+    #  Вкладка Compare (таблица сравнения + плитка панелей)
+    # ==================================================================
+
+    def _render_compare_tab(self, parent, node) -> None:
+        members = [self._state.node_by_id(m) for m in node.params.get("members", [])]
+        members = [m for m in members if m is not None and m.result is not None]
+        if len(members) < 2:
+            dpg.add_text("Select at least 2 computed flash runs to compare "
+                         "(Ctrl+click runs in the tree, or use the right-click menu).",
+                         parent=parent)
+            return
+        headers = [self._compare_col_label(m) for m in members]
+        with dpg.tab_bar(parent=parent):
+            with dpg.tab(label="Vapor") as t:
+                self._compare_phase_table(members, headers, "vapor", t)
+            with dpg.tab(label="Liquid") as t:
+                self._compare_phase_table(members, headers, "liquid", t)
+            with dpg.tab(label="K-values") as t:
+                self._compare_k_table(members, headers, t)
+            with dpg.tab(label="Panels") as t:
+                self._compare_panels(members, headers, t)
+
+    def _compare_col_label(self, node) -> str:
+        label = node.params.get("label")
+        if label:
+            return label
+        return f"{self._g(node.params.get('P'))}/{self._g(node.params.get('T'))}"
+
+    def _compare_phase_table(self, members, headers, phase, parent) -> None:
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, scrollX=True, height=-1,
+                       freeze_rows=1, freeze_columns=1):
+            dpg.add_table_column(label="Property")
+            for h in headers:
+                dpg.add_table_column(label=h)
+            with dpg.table_row():
+                dpg.add_text("Phase mole fraction")
+                for m in members:
+                    dpg.add_text(self._fmt(getattr(m.result, phase).mole_fraction))
+            for key, label in flash_service.PHASE_PROPERTY_ROWS:
+                with dpg.table_row():
+                    dpg.add_text(label)
+                    for m in members:
+                        dpg.add_text(self._fmt(getattr(m.result, phase).properties.get(key)))
+
+    def _compare_k_table(self, members, headers, parent) -> None:
+        # набор компонентов — из первого участника с известным составом жидкости
+        names: list = []
+        for m in members:
+            xi = m.result.liquid.composition
+            if isinstance(xi, dict):
+                names = list(xi.keys())
+                break
+        if not names:
+            dpg.add_text("Phase compositions are not available for these results.",
+                         parent=parent)
+            return
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, scrollX=True, height=-1,
+                       freeze_rows=1, freeze_columns=1):
+            dpg.add_table_column(label="Component (K=yi/xi)")
+            for h in headers:
+                dpg.add_table_column(label=h)
+            for name in names:
+                with dpg.table_row():
+                    dpg.add_text(name)
+                    for m in members:
+                        yi = m.result.vapor.composition
+                        xi = m.result.liquid.composition
+                        y = yi.get(name) if isinstance(yi, dict) else None
+                        x = xi.get(name) if isinstance(xi, dict) else None
+                        k = (y / x) if (y is not None and x not in (None, 0.0)) else None
+                        dpg.add_text(self._fmt(k))
+
+    def _compare_panels(self, members, headers, parent) -> None:
+        with dpg.group(horizontal=True, parent=parent):
+            for m, h in zip(members, headers):
+                with dpg.child_window(width=380, height=-1, border=True) as cw:
+                    dpg.add_text(h)
+                    self._render_flash_result(m.result, cw)
 
     def _flash_pt(self, nid: str) -> tuple[float, float]:
         """Текущие значения полей P/T вкладки флэша по её id узла."""
