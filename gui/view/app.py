@@ -38,6 +38,7 @@ _WORKSPACE = "workspace_content"
 _STATUS_BAR = "status_bar"
 _COMP_WINDOW = "composition_window"   # отдельное окно редактора состава
 _COMP_CONTENT = "composition_content"
+_RESTORE_MODAL = "restore_session_modal"
 
 _STATUS_H = 28   # высота строки статуса внизу главного окна
 _TREE_W = 320    # ширина закреплённой левой панели
@@ -91,7 +92,7 @@ class PVTcalcApp:
 
         # Начальное наполнение
         self._state.refresh_model_list()
-        self._restore_session()
+        self._maybe_prompt_restore()
 
         dpg.start_dearpygui()
 
@@ -535,6 +536,56 @@ class PVTcalcApp:
             dpg.set_value(_STATUS_BAR, text)
 
     # --- сессия ----------------------------------------------------------
+
+    def _maybe_prompt_restore(self) -> None:
+        """
+        Если есть восстановимая сессия — показать модальный вопрос
+        «продолжить прошлую сессию?»; иначе тихо стартовать с чистого листа.
+        """
+        mid = self._session.active_model_id
+        if not mid or mid not in self._state.models:
+            return
+
+        date_str = self._format_saved_at(self._session.saved_at)
+        w, h = self._session.window_width, self._session.window_height
+        with dpg.window(label="Restore session", modal=True, no_collapse=True,
+                        no_resize=True, no_move=True, tag=_RESTORE_MODAL,
+                        width=460, height=170,
+                        pos=(max(0, w // 2 - 230), max(0, h // 2 - 85))):
+            if date_str:
+                dpg.add_text(f"A previous session was saved on {date_str}.")
+            else:
+                dpg.add_text("A previous session was found.")
+            dpg.add_text(f"Model: {mid}")
+            dpg.add_spacer(height=10)
+            dpg.add_text("Continue where you left off?")
+            dpg.add_spacer(height=8)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Continue", width=130,
+                               callback=self._on_restore_continue)
+                dpg.add_button(label="Start fresh", width=130,
+                               callback=self._on_restore_decline)
+
+    def _on_restore_continue(self, sender=None, app_data=None) -> None:
+        if dpg.does_item_exist(_RESTORE_MODAL):
+            dpg.delete_item(_RESTORE_MODAL)
+        self._restore_session()
+
+    def _on_restore_decline(self, sender=None, app_data=None) -> None:
+        if dpg.does_item_exist(_RESTORE_MODAL):
+            dpg.delete_item(_RESTORE_MODAL)
+        self._set_status("Started fresh (previous session kept on disk).")
+
+    @staticmethod
+    def _format_saved_at(iso: str | None) -> str:
+        """ISO-строку `saved_at` -> человекочитаемое 'YYYY-MM-DD HH:MM' (или '')."""
+        if not iso:
+            return ""
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return ""
 
     def _restore_session(self) -> None:
         """Восстанавливает прошлую сессию: модель, параметры/результат флэша,

@@ -55,6 +55,15 @@ def test_session_save_load_new_fields(tmp_path):
     assert loaded.flash["result"]["is_two_phase"] is True
 
 
+def test_save_session_stamps_saved_at(tmp_path):
+    path = str(tmp_path / "sess.json")
+    s = SessionState(active_model_id="X")
+    assert s.saved_at is None
+    save_session(s, path)
+    assert s.saved_at is not None  # проставлено при сохранении
+    assert load_session(path).saved_at == s.saved_at
+
+
 def test_session_missing_file_defaults(tmp_path):
     loaded = load_session(str(tmp_path / "нет.json"))
     assert loaded.active_model_id is None

@@ -11,6 +11,7 @@
 import json
 import logging
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,8 @@ class SessionState:
     # состояние узла флэша: {"P": float, "T": float, "result": snapshot|None}
     # snapshot — сериализуемый слепок FlashResult (см. flash_service)
     flash: Optional[dict] = None
+    # ISO-время последнего сохранения (проставляется в save_session)
+    saved_at: Optional[str] = None
 
 
 def load_session(path: str = DEFAULT_SESSION_PATH) -> SessionState:
@@ -48,7 +51,8 @@ def load_session(path: str = DEFAULT_SESSION_PATH) -> SessionState:
 
 
 def save_session(state: SessionState, path: str = DEFAULT_SESSION_PATH) -> None:
-    """Пишет сессию в JSON."""
+    """Пишет сессию в JSON, проставляя время сохранения (`saved_at`)."""
+    state.saved_at = datetime.now().isoformat(timespec="seconds")
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:
