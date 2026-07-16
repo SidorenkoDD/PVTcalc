@@ -16,12 +16,14 @@
 """
 
 import logging
+import threading
 import time
 
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import AppState, NodeStatus
 from gui.services import composition_service as comp_svc
+from gui.services import flash_service
 from gui.session import SessionState, save_session
 from gui.view.theme import build_light_theme
 
@@ -64,6 +66,8 @@ class PVTcalcApp:
         # для распознавания двойного клика по модели в дереве
         self._last_click_model: str | None = None
         self._last_click_time: float = 0.0
+        # активная фоновая задача флэша (расчёт в отдельном потоке)
+        self._active_job: dict | None = None
         state.subscribe(self._render)
 
     # --- жизненный цикл --------------------------------------------------
@@ -168,7 +172,144 @@ class PVTcalcApp:
         dpg.add_separator(parent=_WORKSPACE)
 
         dpg.add_text("Experiments", parent=_WORKSPACE)
-        dpg.add_text("Flash (P, T) - coming in the next phase.", parent=_WORKSPACE)
+        self._render_flash_panel()
+
+    # --- панель флэша (центральная область) -----------------------------
+
+    def _render_flash_panel(self) -> None:
+        node = self._state.flash_node
+        if node is None:
+            return
+        params = node.params
+        running = node.status is NodeStatus.RUNNING
+
+        with dpg.group(horizontal=True, parent=_WORKSPACE):
+            dpg.add_text("Flash:")
+            dpg.add_input_float(tag="flash_p", label="P, bar", width=150, step=0,
+                                default_value=float(params.get("P", 100.0)),
+                                callback=self._on_flash_param)
+            dpg.add_input_float(tag="flash_t", label="T, C", width=150, step=0,
+                                default_value=float(params.get("T", 100.0)),
+                                callback=self._on_flash_param)
+            if running:
+                dpg.add_loading_indicator(style=1, radius=2.0)
+                dpg.add_button(label="Cancel", callback=self._on_flash_cancel)
+            else:
+                dpg.add_button(label="Run flash", callback=self._on_flash_run)
+
+        if running:
+            dpg.add_text("Running flash...", parent=_WORKSPACE)
+
+        if node.status is NodeStatus.STALE and node.error:
+            err = dpg.add_text(f"Flash error: {node.error}", parent=_WORKSPACE)
+            dpg.bind_item_theme(err, self._theme_stale())
+        elif node.status is NodeStatus.STALE and node.result is not None:
+            stale = dpg.add_text("Result is stale (composition changed) - re-run.",
+                                 parent=_WORKSPACE)
+            dpg.bind_item_theme(stale, self._theme_stale())
+
+        if node.result is not None:
+            self._render_flash_result(node.result)
+
+    def _render_flash_result(self, result) -> None:
+        dpg.add_separator(parent=_WORKSPACE)
+        kind = "Two-phase" if result.is_two_phase else "Single-phase"
+        dpg.add_text(f"{kind}    P = {result.pressure:.3f} bar    "
+                     f"T = {result.temperature:.2f} K", parent=_WORKSPACE)
+
+        with dpg.table(parent=_WORKSPACE, header_row=True,
+                       borders_innerH=True, borders_outerH=True,
+                       borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, height=-1):
+            dpg.add_table_column(label="Property")
+            dpg.add_table_column(label="Vapor")
+            dpg.add_table_column(label="Liquid")
+
+            with dpg.table_row():
+                dpg.add_text("Phase mole fraction")
+                dpg.add_text(self._fmt(result.vapor.mole_fraction))
+                dpg.add_text(self._fmt(result.liquid.mole_fraction))
+
+            for key, label in flash_service.PHASE_PROPERTY_ROWS:
+                with dpg.table_row():
+                    dpg.add_text(label)
+                    dpg.add_text(self._fmt(result.vapor.properties.get(key)))
+                    dpg.add_text(self._fmt(result.liquid.properties.get(key)))
+
+    @staticmethod
+    def _fmt(value) -> str:
+        if value is None:
+            return "-"
+        if isinstance(value, (int, float)):
+            return f"{value:.5g}"
+        return str(value)
+
+    # --- фоновая задача флэша (поток + опрос по кадрам) ------------------
+
+    def _on_flash_param(self, sender, app_data, user_data) -> None:
+        # синхронизируем введённые P/T в параметры узла (без перерисовки)
+        p = dpg.get_value("flash_p")
+        t = dpg.get_value("flash_t")
+        self._state.set_flash_params(p, t)
+
+    def _on_flash_run(self, sender, app_data, user_data) -> None:
+        if self._active_job is not None:
+            return
+        composition = self._state.active_composition
+        node = self._state.flash_node
+        if composition is None or node is None:
+            return
+        p = dpg.get_value("flash_p")
+        t = dpg.get_value("flash_t")
+        self._state.set_flash_params(p, t)
+
+        holder = {"result": None, "error": None, "done": threading.Event()}
+        self._active_job = {"holder": holder, "cancelled": False}
+        self._state.set_flash_running()  # notify -> перерисовка с индикатором
+
+        def worker() -> None:
+            try:
+                holder["result"] = flash_service.run_flash(composition, p, t)
+            except Exception as exc:  # noqa: BLE001 — донести ошибку в UI
+                holder["error"] = str(exc)
+                logger.exception("Флэш-расчёт не удался")
+            finally:
+                holder["done"].set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._set_status(f"Flash running at P={p:.3f} bar, T={t:.2f} C...")
+        self._arm_flash_poll()
+
+    def _arm_flash_poll(self) -> None:
+        # DPG-safe: результат применяется в главном потоке в frame-callback
+        dpg.set_frame_callback(dpg.get_frame_count() + 1, self._poll_flash_job)
+
+    def _poll_flash_job(self, sender=None, app_data=None) -> None:
+        job = self._active_job
+        if job is None:
+            return
+        if not job["holder"]["done"].is_set():
+            self._arm_flash_poll()
+            return
+
+        self._active_job = None
+        if job["cancelled"]:
+            self._state.clear_flash()
+            self._set_status("Flash cancelled.")
+            return
+        if job["holder"]["error"]:
+            self._state.set_flash_error(job["holder"]["error"])
+            self._set_status("Flash failed.")
+        else:
+            self._state.set_flash_result(job["holder"]["result"])
+            self._set_status("Flash done.")
+
+    def _on_flash_cancel(self, sender, app_data, user_data) -> None:
+        # Движок не прерываемый — отменяем на уровне UI: результат отбрасывается,
+        # когда поток завершится (см. `_poll_flash_job`).
+        if self._active_job is not None:
+            self._active_job["cancelled"] = True
+            self._set_status("Cancelling flash (result will be discarded)...")
 
     # --- отдельное окно редактора состава -------------------------------
 

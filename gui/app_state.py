@@ -165,6 +165,14 @@ class AppState:
                     "correlations": comp_svc.default_correlations(),
                 },
             )
+            base.nodes["flash"] = GraphNode(
+                node_id="flash",
+                kind=NodeKind.FLASH,
+                title="Flash",
+                status=NodeStatus.EMPTY,
+                params={"P": 100.0, "T": round(composition.T - 273.15, 2)},
+                upstream=["composition"],
+            )
             model.variants["base"] = base
             model.loaded = True
             logger.info("Модель '%s' загружена (%d компонентов)",
@@ -198,6 +206,7 @@ class AppState:
             return
         comp_svc.set_eos(composition, eos_value)
         node.params["eos"] = eos_value
+        self._invalidate_flash()
         self._notify()
 
     def set_correlation(self, property_name: str, method: str) -> None:
@@ -227,6 +236,7 @@ class AppState:
                 "correlations", comp_svc.default_correlations()))
             node.status = NodeStatus.FRESH
             node.error = None
+            self._invalidate_flash()
         except Exception as exc:  # noqa: BLE001 — донести ошибку до UI
             node.status = NodeStatus.STALE
             node.error = str(exc)
@@ -238,12 +248,14 @@ class AppState:
         composition = self.active_composition
         if composition is not None:
             comp_svc.edit_zi(composition, component, value)
+            self._invalidate_flash()
 
     def normalize_composition(self) -> None:
         """Нормировка мольных долей + перерисовка (значения в полях меняются)."""
         composition = self.active_composition
         if composition is not None:
             comp_svc.normalize(composition)
+            self._invalidate_flash()
             self._notify()
 
     def edit_component_property(self, component: str, property_name: str,
@@ -252,12 +264,74 @@ class AppState:
         composition = self.active_composition
         if composition is not None:
             comp_svc.edit_property(composition, component, property_name, value)
+            self._invalidate_flash()
 
     def edit_bip(self, comp1: str, comp2: str, value: float) -> None:
         """Immediate-правка BIP пары компонент (без перерисовки)."""
         composition = self.active_composition
         if composition is not None:
             comp_svc.edit_bip(composition, comp1, comp2, value)
+            self._invalidate_flash()
+
+    # --- команды узла «Флэш» --------------------------------------------
+    #
+    # Расчёт выполняется во View в отдельном потоке (движок не прерываемый),
+    # эти методы лишь переводят статус узла и хранят результат/ошибку.
+
+    @property
+    def flash_node(self) -> Optional[GraphNode]:
+        """Узел «Флэш» активного варианта (или None)."""
+        variant = self.active_variant
+        if variant is None:
+            return None
+        return variant.nodes.get("flash")
+
+    def _invalidate_flash(self) -> None:
+        """Помечает посчитанный флэш `STALE` при изменении состава (реактивность)."""
+        node = self.flash_node
+        if node is not None and node.status is NodeStatus.FRESH:
+            node.status = NodeStatus.STALE
+
+    def set_flash_params(self, p: float, t: float) -> None:
+        """Сохраняет введённые P (бар)/T (°C) в параметрах узла (без перерисовки)."""
+        node = self.flash_node
+        if node is not None:
+            node.params["P"] = float(p)
+            node.params["T"] = float(t)
+
+    def set_flash_running(self) -> None:
+        """Переводит узел в `RUNNING` и перерисовывает (показать прогресс)."""
+        node = self.flash_node
+        if node is not None:
+            node.status = NodeStatus.RUNNING
+            node.error = None
+            self._notify()
+
+    def set_flash_result(self, result: object) -> None:
+        """Сохраняет результат флэша, узел → `FRESH`, перерисовка."""
+        node = self.flash_node
+        if node is not None:
+            node.result = result
+            node.status = NodeStatus.FRESH
+            node.error = None
+            self._notify()
+
+    def set_flash_error(self, message: str) -> None:
+        """Сохраняет ошибку флэша, узел → `STALE`, перерисовка."""
+        node = self.flash_node
+        if node is not None:
+            node.result = None
+            node.status = NodeStatus.STALE
+            node.error = message
+            self._notify()
+
+    def clear_flash(self) -> None:
+        """Сбрасывает узел флэша в `EMPTY` (например, при отмене), перерисовка."""
+        node = self.flash_node
+        if node is not None:
+            node.status = NodeStatus.EMPTY
+            node.error = None
+            self._notify()
 
     # --- удобные геттеры активного выбора -------------------------------
 
