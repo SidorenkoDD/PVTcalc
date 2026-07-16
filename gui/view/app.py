@@ -91,7 +91,7 @@ class PVTcalcApp:
 
         # Начальное наполнение
         self._state.refresh_model_list()
-        self._restore_session_selection()
+        self._restore_session()
 
         dpg.start_dearpygui()
 
@@ -536,13 +536,40 @@ class PVTcalcApp:
 
     # --- сессия ----------------------------------------------------------
 
-    def _restore_session_selection(self) -> None:
+    def _restore_session(self) -> None:
+        """Восстанавливает прошлую сессию: модель, параметры/результат флэша,
+        открытое окно редактора состава."""
         mid = self._session.active_model_id
-        if mid and mid in self._state.models:
-            try:
-                self._state.open_model(mid)
-            except Exception:  # noqa: BLE001
-                logger.warning("Не удалось восстановить модель сессии %s", mid)
+        if not mid or mid not in self._state.models:
+            return
+        try:
+            self._state.open_model(mid)
+        except Exception:  # noqa: BLE001
+            logger.warning("Не удалось восстановить модель сессии %s", mid)
+            return
+
+        # параметры + результат флэша
+        flash = self._session.flash
+        node = self._state.flash_node
+        if flash and node is not None:
+            if flash.get("P") is not None:
+                node.params["P"] = flash["P"]
+            if flash.get("T") is not None:
+                node.params["T"] = flash["T"]
+            snap = flash.get("result")
+            if snap:
+                try:
+                    node.result = flash_service.restore_flash_result(snap)
+                    node.status = NodeStatus.FRESH
+                except Exception:  # noqa: BLE001 — битый слепок не должен ронять старт
+                    logger.warning("Не удалось восстановить результат флэша из сессии")
+
+        # окно редактора состава
+        if self._session.composition_window_open:
+            self._open_composition_window(mid)
+
+        self._state._notify()  # перерисовать с восстановленным состоянием
+        self._set_status(f"Session restored: model '{mid}'.")
 
     def _persist_session(self) -> None:
         self._session.active_model_id = self._state.active_model_id
@@ -551,4 +578,20 @@ class PVTcalcApp:
             self._session.window_height = dpg.get_viewport_height()
         except Exception:  # noqa: BLE001 — viewport уже уничтожен
             pass
+
+        self._session.composition_window_open = (
+            dpg.does_item_exist(_COMP_WINDOW) and dpg.is_item_shown(_COMP_WINDOW)
+        )
+
+        node = self._state.flash_node
+        if node is not None:
+            flash: dict = {"P": node.params.get("P"), "T": node.params.get("T"),
+                           "result": None}
+            if node.result is not None and node.status is NodeStatus.FRESH:
+                try:
+                    flash["result"] = flash_service.snapshot_flash_result(node.result)
+                except Exception:  # noqa: BLE001 — не мешать сохранению остального
+                    logger.warning("Не удалось сериализовать результат флэша")
+            self._session.flash = flash
+
         save_session(self._session)

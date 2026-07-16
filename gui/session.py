@@ -21,11 +21,16 @@ DEFAULT_SESSION_PATH = "gui_session.json"
 
 @dataclass
 class SessionState:
-    """Фреймворк-независимый снимок сессии."""
+    """Фреймворк-независимый снимок сессии («продолжить с того же места»)."""
 
     active_model_id: Optional[str] = None
     window_width: int = 1280
     window_height: int = 800
+    # было ли открыто отдельное окно редактора состава
+    composition_window_open: bool = False
+    # состояние узла флэша: {"P": float, "T": float, "result": snapshot|None}
+    # snapshot — сериализуемый слепок FlashResult (см. flash_service)
+    flash: Optional[dict] = None
 
 
 def load_session(path: str = DEFAULT_SESSION_PATH) -> SessionState:
