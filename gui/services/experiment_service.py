@@ -20,7 +20,8 @@ from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
 
 logger = logging.getLogger(__name__)
 
-# Метаданные типов экспериментов: подпись, нужные поля ввода, колонки-кривые.
+# Метаданные типов экспериментов: подпись, нужные поля ввода, наборы колонок
+# для таблицы «Main» и для графиков (существующие в результате отбираются).
 EXPERIMENT_TYPES: dict[str, dict] = {
     "cce": {
         "label": "CCE",
@@ -28,6 +29,10 @@ EXPERIMENT_TYPES: dict[str, dict] = {
         "needs_p_res": False,
         "needs_stage_temps": False,
         "plot_y": ["v/v_sat", "Compressibility"],
+        "main_columns": ["pressure", "v/v_sat", "v/v_res", "Compressibility",
+                         "vapor_mole_frac", "liquid_mole_frac", "liquid_density"],
+        "charts": ["v/v_sat", "v/v_res", "Compressibility", "liquid_density",
+                   "vapor_density", "liquid_z"],
     },
     "dle": {
         "label": "DLE",
@@ -35,6 +40,10 @@ EXPERIMENT_TYPES: dict[str, dict] = {
         "needs_p_res": True,
         "needs_stage_temps": False,
         "plot_y": ["Bo", "Rs"],
+        "main_columns": ["pressure", "Bo", "Rs", "vapor_mole_frac",
+                         "liquid_mole_frac", "liquid_density", "vapor_density"],
+        "charts": ["Bo", "Rs", "liquid_density", "vapor_density",
+                   "liquid_z", "vapor_z"],
     },
     "separator": {
         "label": "Separator",
@@ -42,10 +51,15 @@ EXPERIMENT_TYPES: dict[str, dict] = {
         "needs_p_res": True,
         "needs_stage_temps": True,
         "plot_y": ["Bo", "Rs"],
+        "main_columns": ["pressure", "Bo", "Rs", "vapor_mole_frac",
+                         "liquid_mole_frac", "liquid_density"],
+        "charts": ["Bo", "Rs", "liquid_density", "vapor_density"],
     },
 }
 
 _X_COLUMN = "pressure"
+# колонки, которые не имеет смысла строить как кривую
+_NON_PLOT = {"pressure", "temperature", "is_two_phase"}
 
 
 def default_pressures(composition: Composition) -> list[float]:
@@ -95,14 +109,46 @@ def run_experiment(composition: Composition, kind: str, params: dict) -> dict:
         df = model.experiments.separator(pressures, stage_temps,
                                          float(params["P_res"]), t_c)
 
-    return _dataframe_to_table(df, EXPERIMENT_TYPES[kind]["plot_y"])
+    return _dataframe_to_result(df, kind)
 
 
-def _dataframe_to_table(df: pd.DataFrame, plot_y: list[str]) -> dict:
-    """DataFrame → словарь таблицы (числовые колонки, NaN→None, x и кривые впереди)."""
+def _f(v):
+    """float или None (NaN/нечисло → None) для JSON."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f  # NaN
+
+
+def _comp_dict(d):
+    """Словарь состава фазы {компонент: доля} → JSON-совместимый (или None)."""
+    if not isinstance(d, dict):
+        return None
+    return {str(k): _f(v) for k, v in d.items()}
+
+
+def _dataframe_to_result(df: pd.DataFrame, kind: str) -> dict:
+    """
+    DataFrame эксперимента → богатый словарь результата:
+    числовая таблица (все скалярные колонки), наборы для «Main»/графиков,
+    и посоставный разбор по ступеням (`stages`).
+    """
+    meta = EXPERIMENT_TYPES[kind]
+
+    # посоставный разбор по ступеням (до отбрасывания dict-колонок)
+    stages: list[dict] = []
+    for _, r in df.iterrows():
+        stages.append({
+            "pressure": _f(r.get("pressure")),
+            "temperature": _f(r.get("temperature")),
+            "vapor": _comp_dict(r.get("vapor_composition")),
+            "liquid": _comp_dict(r.get("liquid_composition")),
+        })
+
     num_df = df.select_dtypes(include=["number", "bool"])
     ordered = ([_X_COLUMN] if _X_COLUMN in num_df.columns else [])
-    ordered += [c for c in plot_y if c in num_df.columns]
+    ordered += [c for c in meta["plot_y"] if c in num_df.columns]
     ordered += [c for c in num_df.columns if c not in ordered]
 
     rows: list[list] = []
@@ -112,17 +158,22 @@ def _dataframe_to_table(df: pd.DataFrame, plot_y: list[str]) -> dict:
             v = r[c]
             if pd.isna(v):
                 row.append(None)
-            elif isinstance(v, (bool,)) or str(type(v)).find("bool") >= 0:
+            elif isinstance(v, bool) or str(type(v)).find("bool") >= 0:
                 row.append(bool(v))
             else:
                 row.append(float(v))
         rows.append(row)
 
     return {
+        "kind": kind,
+        "x": _X_COLUMN,
         "columns": ordered,
         "rows": rows,
-        "x": _X_COLUMN,
-        "plot_y": [c for c in plot_y if c in ordered],
+        "main_columns": [c for c in meta["main_columns"] if c in ordered],
+        "charts": [c for c in meta["charts"] if c in ordered],
+        "plot_all": [c for c in ordered if c not in _NON_PLOT],
+        "plot_y": [c for c in meta["plot_y"] if c in ordered],
+        "stages": stages,
     }
 
 

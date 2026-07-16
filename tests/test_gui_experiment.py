@@ -39,14 +39,27 @@ def test_experiment_types_metadata():
     assert exp_svc.EXPERIMENT_TYPES["separator"]["needs_stage_temps"] is True
 
 
-def test_run_dle_returns_json_table(repo):
+def test_run_dle_returns_rich_json_result(repo):
     result = exp_svc.run_experiment(repo.load_composition("KRSNL_PVTSIM"),
                                     "dle", _DLE_PARAMS)
     assert result["x"] == "pressure"
     assert "Bo" in result["columns"] and "Rs" in result["columns"]
     assert result["plot_y"] == ["Bo", "Rs"]
+    assert result["main_columns"][0] == "pressure"
+    assert set(["Bo", "Rs"]).issubset(result["charts"])  # больше одной кривой
+    assert "pressure" not in result["plot_all"]  # x не строим как кривую
     assert len(result["rows"]) > 0
-    json.dumps(result)  # JSON-совместимо (NaN → None)
+    json.dumps(result)  # JSON-совместимо (NaN → None), включая stages
+
+
+def test_run_dle_has_per_stage_compositions(repo):
+    result = exp_svc.run_experiment(repo.load_composition("KRSNL_PVTSIM"),
+                                    "dle", _DLE_PARAMS)
+    stages = result["stages"]
+    assert len(stages) == len(result["rows"])
+    first = stages[0]
+    assert isinstance(first["liquid"], dict) and "C1" in first["liquid"]
+    assert isinstance(first["vapor"], dict)
 
 
 def test_series_for_plot_sorted_no_none(repo):

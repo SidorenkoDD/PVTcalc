@@ -74,6 +74,7 @@ class PVTcalcApp:
         self._bip_ids: dict[tuple[int, int], int] = {}
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
         self._exp_input_ids: dict[str, dict] = {}
+        self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
         state.subscribe(self._render)
 
     # --- жизненный цикл --------------------------------------------------
@@ -252,26 +253,35 @@ class PVTcalcApp:
                                    parent=_MODEL_TREE, user_data=model.model_id,
                                    callback=self._on_open_compare)
 
-        # Experiments (CCE / DLE / Separator) — категория с историей запусков
-        ecat_key = f"{model.model_id}:exp"
+        # Experiments — вложенность по типам: Experiments → DLE/CCE/Separator → запуски
+        mid = model.model_id
+        ecat_key = f"{mid}:exp"
         ecat_exp = ecat_key in self._expanded_cats
         exp_runs = variant.experiment_runs()
         dpg.add_selectable(
             label=f"  {'v' if ecat_exp else '>'} Experiments ({len(exp_runs)})",
             parent=_MODEL_TREE, user_data=ecat_key, callback=self._on_cat_toggle)
         if ecat_exp:
-            for run in exp_runs:
-                sel = dpg.add_selectable(
-                    label="      " + self._exp_tree_label(run),
-                    parent=_MODEL_TREE, default_value=(active_nid == run.node_id),
-                    user_data=(model.model_id, run.node_id),
-                    callback=self._on_tree_open_node)
-                self._attach_exp_context_menu(sel, run.node_id)
             for kind in ("cce", "dle", "separator"):
                 lbl = exp_svc.EXPERIMENT_TYPES[kind]["label"]
-                dpg.add_selectable(label=f"      + New {lbl}", parent=_MODEL_TREE,
-                                   user_data=(model.model_id, kind),
-                                   callback=self._on_new_experiment)
+                kruns = [r for r in exp_runs if r.params.get("kind") == kind]
+                kkey = f"{mid}:exp:{kind}"
+                kexp = kkey in self._expanded_cats
+                dpg.add_selectable(
+                    label=f"    {'v' if kexp else '>'} {lbl} ({len(kruns)})",
+                    parent=_MODEL_TREE, user_data=kkey, callback=self._on_cat_toggle)
+                if kexp:
+                    for run in kruns:
+                        sel = dpg.add_selectable(
+                            label="        " + self._exp_run_leaf_label(run),
+                            parent=_MODEL_TREE,
+                            default_value=(active_nid == run.node_id),
+                            user_data=(mid, run.node_id),
+                            callback=self._on_tree_open_node)
+                        self._attach_exp_context_menu(sel, run.node_id)
+                    dpg.add_selectable(label=f"        + New {lbl}",
+                                       parent=_MODEL_TREE, user_data=(mid, kind),
+                                       callback=self._on_new_experiment)
 
         dpg.add_text("    Saturation (soon)", parent=_MODEL_TREE)
 
@@ -363,16 +373,30 @@ class PVTcalcApp:
 
     # --- эксперименты: дерево ---------------------------------------------
 
+    def _exp_status_suffix(self, node) -> str:
+        if node.status is NodeStatus.RUNNING:
+            return " - running"
+        if node.result is not None:
+            return "" if node.status is NodeStatus.FRESH else " (stale)"
+        return " - (not run)"
+
     def _exp_tree_label(self, node) -> str:
+        """Подпись эксперимента с типом (для хлебных крошек)."""
         kind = node.params.get("kind", "")
         base = exp_svc.EXPERIMENT_TYPES.get(kind, {}).get("label", kind.upper())
-        if node.status is NodeStatus.RUNNING:
-            core = f"{base} - running"
-        elif node.result is not None:
-            core = base + ("" if node.status is NodeStatus.FRESH else " (stale)")
-        else:
-            core = f"{base} - (not run)"
+        core = base + self._exp_status_suffix(node)
         label = node.params.get("label")
+        return f"{label}  ({core})" if label else core
+
+    def _exp_run_leaf_label(self, node) -> str:
+        """Подпись листа под своей категорией — без повтора типа, с параметрами."""
+        p = node.params
+        seq = node.node_id.split("_")[-1]
+        desc = f"T={self._g(p.get('T_c'))}C"
+        if p.get("kind") in ("dle", "separator"):
+            desc += f", Pres={self._g(p.get('P_res'))}"
+        core = f"#{seq}  {desc}{self._exp_status_suffix(node)}"
+        label = p.get("label")
         return f"{label}  ({core})" if label else core
 
     def _on_new_experiment(self, sender, app_data, user_data) -> None:
@@ -392,6 +416,7 @@ class PVTcalcApp:
         }
         self._state.new_experiment(kind, defaults)
         self._expanded_cats.add(f"{mid}:exp")
+        self._expanded_cats.add(f"{mid}:exp:{kind}")
         self._set_status(f"New {kind.upper()} tab - set stages and Run.")
 
     def _attach_exp_context_menu(self, item_id, node_id: str) -> None:
@@ -423,6 +448,7 @@ class PVTcalcApp:
         dpg.delete_item(_WORKSPACE, children_only=True)
         self._flash_input_ids = {}
         self._exp_input_ids = {}
+        self._exp_chart_holder = {}
 
         model = self._state.active_model
         variant = self._state.active_variant
@@ -962,39 +988,104 @@ class PVTcalcApp:
         if node.result is not None:
             dpg.add_separator(parent=parent)
             with dpg.tab_bar(parent=parent):
-                with dpg.tab(label="Table") as t:
-                    self._render_experiment_table(node.result, t)
+                with dpg.tab(label="Main") as t:
+                    self._render_exp_table(node.result, t,
+                                           node.result.get("main_columns", []))
+                with dpg.tab(label="All data") as t:
+                    self._render_exp_table(node.result, t, node.result["columns"])
+                with dpg.tab(label="Composition by stage") as t:
+                    self._render_exp_composition(node.result, t)
                 with dpg.tab(label="Chart") as t:
-                    self._render_experiment_chart(node.result, t)
+                    self._render_exp_chart(node.result, t, nid)
 
-    def _render_experiment_table(self, result, parent) -> None:
-        columns = result["columns"]
+    def _render_exp_table(self, result, parent, cols) -> None:
+        allcols = result["columns"]
+        idxs = [(c, allcols.index(c)) for c in cols if c in allcols]
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, scrollX=True, height=-1,
                        freeze_rows=1, freeze_columns=1):
-            for c in columns:
+            for c, _ in idxs:
                 dpg.add_table_column(label=c)
             for row in result["rows"]:
                 with dpg.table_row():
-                    for v in row:
-                        dpg.add_text(self._fmt(v))
+                    for _, i in idxs:
+                        dpg.add_text(self._fmt(row[i]))
 
-    def _render_experiment_chart(self, result, parent) -> None:
-        plotted = False
-        for col in result.get("plot_y", []):
-            xs, ys = exp_svc.series_for_plot(result, col)
-            if not xs:
-                continue
-            plotted = True
-            with dpg.plot(label=f"{col} vs pressure", height=240, width=-1,
-                          parent=parent):
-                dpg.add_plot_legend()
-                dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
-                yax = dpg.add_plot_axis(dpg.mvYAxis, label=col)
-                dpg.add_line_series(xs, ys, label=col, parent=yax)
-        if not plotted:
-            dpg.add_text("No plottable columns in this result.", parent=parent)
+    def _render_exp_composition(self, result, parent) -> None:
+        stages = result.get("stages", [])
+        if not stages:
+            dpg.add_text("Per-stage compositions are not available.", parent=parent)
+            return
+        with dpg.tab_bar(parent=parent):
+            for phase in ("liquid", "vapor"):
+                with dpg.tab(label=phase.capitalize()) as t:
+                    self._render_exp_composition_phase(stages, phase, t)
+
+    def _render_exp_composition_phase(self, stages, phase, parent) -> None:
+        names: list = []
+        for st in stages:
+            if isinstance(st.get(phase), dict):
+                names = list(st[phase].keys())
+                break
+        if not names:
+            dpg.add_text(f"No {phase} composition.", parent=parent)
+            return
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, scrollX=True, height=-1,
+                       freeze_rows=1, freeze_columns=1):
+            dpg.add_table_column(label="Component")
+            for st in stages:
+                dpg.add_table_column(label=f"{self._g(st.get('pressure'))} bar")
+            for name in names:
+                with dpg.table_row():
+                    dpg.add_text(name)
+                    for st in stages:
+                        d = st.get(phase)
+                        dpg.add_text(self._fmt(d.get(name) if isinstance(d, dict)
+                                               else None))
+
+    def _render_exp_chart(self, result, parent, nid) -> None:
+        node = self._state.node_by_id(nid)
+        charts = list(result.get("charts", []))
+        for c in (node.params.get("extra_charts", []) if node else []):
+            if c not in charts:
+                charts.append(c)
+        with dpg.group(horizontal=True, parent=parent):
+            dpg.add_combo(items=result.get("plot_all", []), width=240,
+                          label="Add chart for column", user_data=nid,
+                          callback=self._on_exp_add_chart)
+        holder = dpg.add_group(parent=parent)
+        self._exp_chart_holder[nid] = holder
+        if not charts:
+            dpg.add_text("No plottable columns.", parent=holder)
+        for col in charts:
+            self._add_one_chart(result, col, holder)
+
+    def _add_one_chart(self, result, col, parent) -> None:
+        xs, ys = exp_svc.series_for_plot(result, col)
+        if not xs:
+            return
+        with dpg.plot(label=f"{col} vs pressure", height=220, width=-1, parent=parent):
+            dpg.add_plot_legend()
+            dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
+            yax = dpg.add_plot_axis(dpg.mvYAxis, label=col)
+            dpg.add_line_series(xs, ys, label=col, parent=yax)
+
+    def _on_exp_add_chart(self, sender, app_data, user_data) -> None:
+        nid = user_data
+        col = app_data
+        node = self._state.node_by_id(nid)
+        if not col or node is None or node.result is None:
+            return
+        extra = node.params.setdefault("extra_charts", [])
+        if col not in extra and col not in node.result.get("charts", []):
+            extra.append(col)
+        holder = self._exp_chart_holder.get(nid)
+        if holder is not None and dpg.does_item_exist(holder):
+            self._add_one_chart(node.result, col, holder)
+        self._set_status(f"Added chart: {col}")
 
     def _on_experiment_run(self, sender, app_data, user_data) -> None:
         if self._active_job is not None:
