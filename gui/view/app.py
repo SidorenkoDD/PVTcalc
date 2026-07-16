@@ -82,6 +82,7 @@ class PVTcalcApp:
                             height=self._session.window_height)
         self._build_menu()
         self._build_layout()
+        self._build_shortcuts()
 
         dpg.setup_dearpygui()
         dpg.show_viewport()
@@ -102,6 +103,59 @@ class PVTcalcApp:
             with dpg.menu(label="Project"):
                 dpg.add_menu_item(label="Refresh models",
                                   callback=lambda: self._state.refresh_model_list())
+            with dpg.menu(label="Edit"):
+                dpg.add_menu_item(label="Undo   (Ctrl+Z)",
+                                  callback=lambda: self._do_undo())
+                dpg.add_menu_item(label="Redo   (Ctrl+Y)",
+                                  callback=lambda: self._do_redo())
+
+    def _build_shortcuts(self) -> None:
+        """Глобальные горячие клавиши: Del (в дереве), Ctrl+Z / Ctrl+Y."""
+        with dpg.handler_registry():
+            dpg.add_key_press_handler(dpg.mvKey_Delete, callback=self._on_key_delete)
+            dpg.add_key_press_handler(dpg.mvKey_Z, callback=self._on_key_z)
+            dpg.add_key_press_handler(dpg.mvKey_Y, callback=self._on_key_y)
+
+    @staticmethod
+    def _ctrl_down() -> bool:
+        return (dpg.is_key_down(dpg.mvKey_LControl)
+                or dpg.is_key_down(dpg.mvKey_RControl))
+
+    @staticmethod
+    def _shift_down() -> bool:
+        return (dpg.is_key_down(dpg.mvKey_LShift)
+                or dpg.is_key_down(dpg.mvKey_RShift))
+
+    def _on_key_delete(self, sender, app_data) -> None:
+        # только когда курсор над панелью дерева (не мешаем вводу в поля)
+        if not (dpg.is_item_hovered(_TREE_PANEL) or dpg.is_item_hovered(_MODEL_TREE)):
+            return
+        node = self._state.active_node
+        if node is not None and node.kind is NodeKind.FLASH:
+            self._state.delete_node(node.node_id)
+            self._set_status("Flash run deleted (Del).")
+
+    def _on_key_z(self, sender, app_data) -> None:
+        if self._ctrl_down():
+            self._do_redo() if self._shift_down() else self._do_undo()
+
+    def _on_key_y(self, sender, app_data) -> None:
+        if self._ctrl_down():
+            self._do_redo()
+
+    def _do_undo(self) -> None:
+        if self._state.can_undo():
+            self._state.undo()
+            self._set_status("Undo.")
+        else:
+            self._set_status("Nothing to undo.")
+
+    def _do_redo(self) -> None:
+        if self._state.can_redo():
+            self._state.redo()
+            self._set_status("Redo.")
+        else:
+            self._set_status("Nothing to redo.")
 
     def _build_layout(self) -> None:
         with dpg.window(tag=_PRIMARY, no_title_bar=True, no_move=True,
@@ -764,6 +818,7 @@ class PVTcalcApp:
         self._expanded_models.add(mid)
         self._expanded_cats.add(f"{mid}:flash")
 
+        self._state.clear_history()  # восстановление сессии не откатываем
         self._state._notify()
         self._set_status(f"Session restored: model '{mid}'.")
 
