@@ -4,6 +4,20 @@
 
 ---
 
+## СТАТУС-2 на 2026-07-16 (вечер): страница Projects + создание составов
+
+Реализовано поверх MVP (план: `~/.claude/plans/dazzling-cooking-deer.md`; коммиты `4c18dc0` → `70f8c76` → `a4f7a90` → `c817a07`):
+
+- **Три экрана** (статичные контейнеры, переключение `show=` в `_render`-диспетчере по `AppState.current_screen`): **Projects** (стартовый) / **New fluid** / **Workspace**.
+- **Projects**: строка «Continue last: \<model\> (saved \<дата\>)», таблица моделей (Model/Field/EOS/Components/T res/Calculated/Created + Open), блок New composition: **Create manually / Import Excel / Import E300 (soon, disabled)**. Модалка «Restore session» удалена.
+- **Workspace**: дерево показывает **только активную модель**, сверху кнопка «< Projects». Хоткеи (Del/Ctrl+Z/Y) работают только на этом экране; навигация блокируется при активной фоновой задаче.
+- **Сессия v2**: `workspaces: {model_id: {open_tabs, active_tab, flashes, experiments}}` — каждая модель помнит свои вкладки/расчёты; восстановление **лениво при входе** в модель (`_restore_workspace`, guard от повторов); `_persist_session` мержит workspaces всех загруженных моделей (чужие записи не теряются). Миграция v1→v2 прозрачная при загрузке.
+- **Создание флюида** (`gui/view/new_fluid_form.py` + `gui/services/project_service.py`): форма с каталогом всех **52 компонентов БД** по группам (Inorganic/C1-C6/C7+), у C7+ редактируемые M/gamma/Tb (дефолты БД); live-сумма zi + Normalize; EOS/T_res/корреляции C7+; валидация; `create_model` → `Composition` → `evaluate_composition_data` → `ModelJSONDB.export_and_save`. Форма рендерится один раз при входе (не по notify — не теряет фокус ввода).
+- **Импорт Excel**: файловый диалог → параметры (header/sheet; без заголовка загрузчик читает первый лист) → `CompositionExcelLoader` → предзаполненная форма; нераспознанные компоненты — оранжевым баннером, не теряются молча.
+- **Правка движка (обратно совместимая)**: `ModelJSONDB.export/export_and_save(t_res=...)` пишет ключ `"T_res"`; `Composition.from_db` читает его, если есть (иначе default_T) — пластовая температура новых моделей переживает перезапуск.
+- **Защита models.json**: перед сохранением — guard «файл непуст, а load дал пусто → прервать» + бэкап `models.json.bak`.
+- Тесты: **89 зелёных** (`test_gui_project_service.py` — каталог/создание roundtrip с T_res/защита базы/импорт Excel; навигация экранов; миграция сессии).
+
 ## СТАТУС на 2026-07-16 (пауза, продолжим позже)
 
 **MVP реализован и работает.** GUI живёт в top-level пакете `gui/`, запуск — `python -m gui` (нужен `dearpygui`, опциональная группа `[gui]` в `pyproject.toml`; поставить: `pip install -e ".[gui]"`). Всё на ветке **`gui/phase-0-1-dearpygui`**.
