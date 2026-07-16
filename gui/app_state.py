@@ -132,6 +132,11 @@ class AppState:
         self.current_screen: str = "projects"
         self._listeners: list = []
 
+    @property
+    def db_path(self) -> str:
+        """Путь к файлу моделей (models.json) — для сервисов создания/импорта."""
+        return str(self._repo.db_path)
+
     # --- наблюдатель -----------------------------------------------------
 
     def subscribe(self, callback) -> None:

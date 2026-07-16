@@ -25,6 +25,7 @@ from gui.services import experiment_service as exp_svc
 from gui.services import flash_service
 from gui.services import project_service as proj_svc
 from gui.session import SessionState, save_session
+from gui.view.new_fluid_form import NewFluidForm
 from gui.view.theme import build_light_theme
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,13 @@ class PVTcalcApp:
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
         # модели, чей workspace уже восстановлен из сессии в этом запуске
         self._restored_models: set[str] = set()
+        # форма создания нового флюида (экран new_fluid)
+        self._new_fluid_form = NewFluidForm(
+            get_db_path=lambda: self._state.db_path,
+            on_created=self._on_fluid_created,
+            on_cancel=self._on_back_to_projects,
+            set_status=self._set_status,
+        )
         state.subscribe(self._render)
 
     # --- жизненный цикл --------------------------------------------------
@@ -336,24 +344,20 @@ class PVTcalcApp:
         self._state.show_projects()
 
     def _on_new_fluid_manual(self, sender=None, app_data=None, user_data=None) -> None:
+        self._new_fluid_form.clear_prefill()
         self._state.show_new_fluid()
-        self._render_new_fluid()
+        self._new_fluid_form.render(_NEW_FLUID_CONTENT)
+
+    def _on_fluid_created(self, model_id: str) -> None:
+        """Колбэк формы: новая модель сохранена — открыть её в workspace."""
+        self._state.refresh_model_list()
+        self._restored_models.add(model_id)  # свежая модель, восстанавливать нечего
+        self._expanded_models.add(model_id)
+        self._state.enter_model(model_id)
 
     def _on_import_excel(self, sender=None, app_data=None, user_data=None) -> None:
         # Этап 4: файловый диалог + параметры листа
         self._set_status("Excel import - coming in the next step.")
-
-    def _render_new_fluid(self) -> None:
-        """Плейсхолдер экрана нового флюида (форма — Этап 3)."""
-        if not dpg.does_item_exist(_NEW_FLUID_CONTENT):
-            return
-        dpg.delete_item(_NEW_FLUID_CONTENT, children_only=True)
-        dpg.add_spacer(height=6, parent=_NEW_FLUID_CONTENT)
-        dpg.add_text("New fluid", parent=_NEW_FLUID_CONTENT)
-        dpg.add_separator(parent=_NEW_FLUID_CONTENT)
-        dpg.add_text("The creation form is coming next.", parent=_NEW_FLUID_CONTENT)
-        dpg.add_button(label="< Back to Projects", parent=_NEW_FLUID_CONTENT,
-                       callback=self._on_back_to_projects)
 
     # ==================================================================
     #  Дерево (левая панель)
