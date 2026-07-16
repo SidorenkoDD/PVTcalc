@@ -44,7 +44,11 @@ def run_flash(composition: Composition, p_bar: float, t_celsius: float) -> Flash
     """
     conditions = Conditions(p_bar, t_celsius)
     logger.info("Флэш: P=%s бар, T=%s °C", p_bar, t_celsius)
-    return Flash(composition, conditions).calculate()
+    # ВАЖНО: Flash мутирует состав (перезаписывает T и пересчитывает a/b/c/d,
+    # BIP). Чтобы не «увести» общий объект (открытый редактор состава, другие
+    # флэши), считаем на независимой глубокой копии.
+    work = composition.new_composition(composition.composition, deep_copy=True)
+    return Flash(work, conditions).calculate()
 
 
 def _as_float(value):

@@ -106,15 +106,21 @@ class PVTcalcApp:
     def _build_layout(self) -> None:
         with dpg.window(tag=_PRIMARY, no_title_bar=True, no_move=True,
                         no_resize=True, no_collapse=True):
-            with dpg.group(horizontal=True):
-                with dpg.child_window(tag=_TREE_PANEL, width=_TREE_W,
-                                      height=-_STATUS_H, border=True):
-                    dpg.add_text("Project (models.json)")
-                    dpg.add_separator()
-                    dpg.add_group(tag=_MODEL_TREE)
-                with dpg.child_window(tag=_WORKSPACE_PANEL, width=-1,
-                                      height=-_STATUS_H, border=True):
-                    dpg.add_group(tag=_WORKSPACE)
+            # таблица-сплиттер: перетаскиваемая граница между деревом и
+            # рабочей областью (ширина левой панели меняется мышью)
+            with dpg.table(header_row=False, resizable=True, borders_innerV=True,
+                           policy=dpg.mvTable_SizingStretchProp, height=-_STATUS_H):
+                dpg.add_table_column(init_width_or_weight=0.24)  # дерево
+                dpg.add_table_column(init_width_or_weight=0.76)  # рабочая область
+                with dpg.table_row():
+                    with dpg.child_window(tag=_TREE_PANEL, width=-1,
+                                          height=-1, border=True):
+                        dpg.add_text("Project (models.json)")
+                        dpg.add_separator()
+                        dpg.add_group(tag=_MODEL_TREE)
+                    with dpg.child_window(tag=_WORKSPACE_PANEL, width=-1,
+                                          height=-1, border=True):
+                        dpg.add_group(tag=_WORKSPACE)
             dpg.add_separator()
             dpg.add_text("Ready.", tag=_STATUS_BAR)
 
@@ -172,12 +178,13 @@ class PVTcalcApp:
         )
         if cat_exp:
             for run in runs:
-                dpg.add_selectable(
+                sel = dpg.add_selectable(
                     label="      " + self._flash_tree_label(run),
                     parent=_MODEL_TREE, default_value=(active_nid == run.node_id),
                     user_data=(model.model_id, run.node_id),
                     callback=self._on_tree_open_node,
                 )
+                self._attach_flash_context_menu(sel, run.node_id)
             dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
                                user_data=model.model_id, callback=self._on_new_flash)
 
@@ -219,6 +226,31 @@ class PVTcalcApp:
             self._state.set_active_model(mid)
         self._state.new_flash_run()
         self._set_status("New flash tab opened - set P/T and Run.")
+
+    def _attach_flash_context_menu(self, item_id, node_id: str) -> None:
+        """Правый клик по листу флэша: переименовать / дублировать / удалить."""
+        with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
+            dpg.add_text("Flash run")
+            dpg.add_separator()
+            dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
+                               user_data=node_id, callback=self._on_flash_rename)
+            dpg.add_button(label="Duplicate", width=200, user_data=node_id,
+                           callback=self._on_flash_duplicate)
+            dpg.add_button(label="Delete", width=200, user_data=node_id,
+                           callback=self._on_flash_delete)
+
+    def _on_flash_rename(self, sender, app_data, user_data) -> None:
+        self._state.rename_node(user_data, app_data)
+        self._set_status(f"Flash renamed to '{app_data}'." if app_data.strip()
+                         else "Flash label cleared.")
+
+    def _on_flash_duplicate(self, sender, app_data, user_data) -> None:
+        self._state.duplicate_flash(user_data)
+        self._set_status("Flash run duplicated.")
+
+    def _on_flash_delete(self, sender, app_data, user_data) -> None:
+        self._state.delete_node(user_data)
+        self._set_status("Flash run deleted.")
 
     # ==================================================================
     #  Рабочая область (вкладки)
@@ -285,6 +317,9 @@ class PVTcalcApp:
         if node.kind is NodeKind.COMPOSITION:
             return "Composition"
         if node.kind is NodeKind.FLASH:
+            label = node.params.get("label")
+            if label:
+                return label
             p, t = node.params.get("P"), node.params.get("T")
             return f"Flash {self._g(p)}/{self._g(t)}"
         return node.title
@@ -299,12 +334,15 @@ class PVTcalcApp:
     def _flash_tree_label(self, node) -> str:
         p, t = node.params.get("P"), node.params.get("T")
         if node.status is NodeStatus.RUNNING:
-            return f"{self._g(p)}/{self._g(t)} - running"
-        if node.result is not None:
+            core = f"{self._g(p)}/{self._g(t)} - running"
+        elif node.result is not None:
             phase = "2-phase" if node.result.is_two_phase else "1-phase"
             suffix = "" if node.status is NodeStatus.FRESH else " (stale)"
-            return f"{self._g(p)} bar / {self._g(t)} C - {phase}{suffix}"
-        return f"{self._g(p)} bar / {self._g(t)} C - (not run)"
+            core = f"{self._g(p)} bar / {self._g(t)} C - {phase}{suffix}"
+        else:
+            core = f"{self._g(p)} bar / {self._g(t)} C - (not run)"
+        label = node.params.get("label")
+        return f"{label}  ({core})" if label else core
 
     # ==================================================================
     #  Вкладка Composition

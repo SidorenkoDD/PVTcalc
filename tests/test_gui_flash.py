@@ -128,3 +128,36 @@ def test_close_node_updates_tabs(state):
     state.close_node(b)
     assert b not in state.active_variant.open_node_ids
     assert state.active_variant.active_node_id == a  # активной стала соседняя
+
+
+def test_duplicate_flash(state):
+    a = state.new_flash_run(50, 20)
+    b = state.duplicate_flash(a)
+    assert b != a
+    node = state.node_by_id(b)
+    assert node.params["P"] == 50 and node.params["T"] == 20
+    assert node.status is NodeStatus.EMPTY  # копия не запущена
+    assert b in state.active_variant.open_node_ids
+
+
+def test_rename_node_sets_and_clears_label(state):
+    a = state.new_flash_run(50, 20)
+    state.rename_node(a, "  bubble @ res  ")
+    assert state.node_by_id(a).params["label"] == "bubble @ res"
+    state.rename_node(a, "   ")  # пусто -> сброс
+    assert "label" not in state.node_by_id(a).params
+
+
+def test_delete_node_removes_from_history_and_tabs(state):
+    a = state.new_flash_run(50, 20)
+    b = state.new_flash_run(200, 80)
+    state.delete_node(a)
+    assert a not in state.active_variant.nodes
+    assert a not in state.active_variant.open_node_ids
+    assert b in state.active_variant.nodes
+
+
+def test_delete_composition_is_blocked(state):
+    state.open_node("composition")
+    state.delete_node("composition")
+    assert "composition" in state.active_variant.nodes  # состав не удаляется

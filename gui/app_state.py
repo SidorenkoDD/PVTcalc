@@ -344,6 +344,43 @@ class AppState:
         self.open_node(node_id)
         return node_id
 
+    def duplicate_flash(self, node_id: str) -> Optional[str]:
+        """Создаёт новый флэш-узел с теми же P/T (не запуская расчёт)."""
+        node = self.node_by_id(node_id)
+        if node is None or node.kind is not NodeKind.FLASH:
+            return None
+        return self.new_flash_run(node.params.get("P"), node.params.get("T"))
+
+    def rename_node(self, node_id: str, name: str) -> None:
+        """Задаёт (или сбрасывает пустым) пользовательскую подпись узла."""
+        node = self.node_by_id(node_id)
+        if node is None:
+            return
+        name = (name or "").strip()
+        if name:
+            node.params["label"] = name
+        else:
+            node.params.pop("label", None)
+        self._notify()
+
+    def delete_node(self, node_id: str) -> None:
+        """Удаляет узел (кроме Composition) целиком — из истории и из вкладок."""
+        variant = self.active_variant
+        if variant is None:
+            return
+        node = variant.nodes.get(node_id)
+        if node is None or node.kind is NodeKind.COMPOSITION:
+            return
+        if node_id in variant.open_node_ids:
+            idx = variant.open_node_ids.index(node_id)
+            variant.open_node_ids.remove(node_id)
+            if variant.active_node_id == node_id:
+                variant.active_node_id = (
+                    variant.open_node_ids[min(idx, len(variant.open_node_ids) - 1)]
+                    if variant.open_node_ids else None)
+        variant.nodes.pop(node_id, None)
+        self._notify()
+
     def _invalidate_flash(self) -> None:
         """Помечает все посчитанные флэши `STALE` при изменении состава."""
         variant = self.active_variant
