@@ -728,8 +728,10 @@ class Composition:
                 elif "BRS" in eos_str: obj._eos_name = EOSType.BRSEOS
                 else: obj._eos_name = EOSType.PREOS
 
-                # 4. Пластовая температура (в Export2.py не сохраняется, задаем явно)
-                obj._T_res = self._default_T
+                # 4. Пластовая температура: новые записи могут хранить её в
+                #    ключе "T_res" (см. Export.py, параметр t_res); старые
+                #    записи ключа не имеют — используем default_T, как раньше.
+                obj._T_res = float(rec.get("T_res", self._default_T))
 
                 return obj
 

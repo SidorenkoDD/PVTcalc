@@ -34,6 +34,10 @@ class ModelSummary:
     field_name: Optional[str]
     eos: Optional[str]
     n_components: int
+    created_at: Optional[str] = None
+    t_res: Optional[float] = None
+    # лёгкий срез results из models.json (без data): [{"module", "timestamp"}]
+    results_brief: tuple = ()
 
 
 class ModelRepository:
@@ -71,6 +75,11 @@ class ModelRepository:
 
         summaries: list[ModelSummary] = []
         for model_id, rec in raw.items():
+            results_brief = tuple(
+                {"module": r.get("module"), "timestamp": r.get("timestamp")}
+                for r in rec.get("results", []) if isinstance(r, dict)
+            )
+            t_res = rec.get("T_res")
             summaries.append(
                 ModelSummary(
                     model_id=model_id,
@@ -78,6 +87,9 @@ class ModelRepository:
                     field_name=rec.get("Field"),
                     eos=str(rec.get("eos")) if rec.get("eos") is not None else None,
                     n_components=len(rec.get("composition", {})),
+                    created_at=rec.get("created_at"),
+                    t_res=float(t_res) if t_res is not None else None,
+                    results_brief=results_brief,
                 )
             )
         return summaries

@@ -22,35 +22,68 @@ DEFAULT_SESSION_PATH = "gui_session.json"
 
 @dataclass
 class SessionState:
-    """Фреймворк-независимый снимок сессии («продолжить с того же места»)."""
+    """
+    Фреймворк-независимый снимок сессии («продолжить с того же места»).
 
+    v2: рабочие пространства хранятся **per-model** в `workspaces`
+    (`{model_id: {"open_tabs", "active_tab", "flashes", "experiments"}}`) —
+    каждая модель помнит свои вкладки и расчёты; восстановление происходит
+    при входе в модель со страницы Projects. `active_model_id` — последняя
+    активная модель (для строки «Continue last»).
+
+    Поля `open_tabs`/`active_tab`/`flashes`/`experiments` — legacy v1
+    (workspace одной активной модели); при загрузке мигрируются в
+    `workspaces[active_model_id]` (см. `load_session`).
+    """
+
+    version: int = 2
     active_model_id: Optional[str] = None
     window_width: int = 1280
     window_height: int = 800
-    # открытые вкладки активного варианта (id узлов) и активная из них
+    # v2: {model_id: workspace-dict}
+    workspaces: Optional[dict] = None
+    # --- legacy v1 (не использовать напрямую; мигрируются при load) ---
     open_tabs: Optional[list] = None
     active_tab: Optional[str] = None
-    # история флэшей активного варианта: [{"P","T","result": snapshot|None}]
-    # snapshot — сериализуемый слепок FlashResult (см. flash_service)
     flashes: Optional[list] = None
-    # эксперименты активного варианта: [{"kind","params","result": table|None}]
     experiments: Optional[list] = None
     # ISO-время последнего сохранения (проставляется в save_session)
     saved_at: Optional[str] = None
 
 
 def load_session(path: str = DEFAULT_SESSION_PATH) -> SessionState:
-    """Читает сессию; при отсутствии/повреждении файла — значения по умолчанию."""
+    """
+    Читает сессию; при отсутствии/повреждении файла — значения по умолчанию.
+    Прозрачно мигрирует v1 → v2 (workspace одной модели → `workspaces`).
+    """
     p = Path(path)
     if not p.exists():
         return SessionState()
     try:
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return SessionState(**{k: data[k] for k in data if k in SessionState.__annotations__})
+        state = SessionState(**{k: data[k] for k in data
+                                if k in SessionState.__annotations__})
     except (json.JSONDecodeError, TypeError) as exc:
         logger.warning("Сессия %s повреждена (%s), беру значения по умолчанию", p, exc)
         return SessionState()
+
+    # миграция v1 → v2: одиночный workspace заворачивается в workspaces
+    if state.workspaces is None and state.active_model_id and (
+            state.flashes or state.experiments or state.open_tabs):
+        state.workspaces = {state.active_model_id: {
+            "open_tabs": state.open_tabs or [],
+            "active_tab": state.active_tab,
+            "flashes": state.flashes or [],
+            "experiments": state.experiments or [],
+        }}
+        logger.info("Сессия мигрирована v1 -> v2 (модель %s)", state.active_model_id)
+    state.open_tabs = None
+    state.active_tab = None
+    state.flashes = None
+    state.experiments = None
+    state.version = 2
+    return state
 
 
 def save_session(state: SessionState, path: str = DEFAULT_SESSION_PATH) -> None:

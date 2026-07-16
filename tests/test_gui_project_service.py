@@ -1,0 +1,137 @@
+"""
+Тесты сервиса страницы Projects: каталог компонентов, создание модели
+(roundtrip через Composition.from_db, включая новое поле T_res), защита от
+затирания базы, импорт Excel. Без DearPyGui — идут в CI.
+"""
+
+import json
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from calc_core.Composition.Composition import Composition
+from gui.services import project_service as svc
+from gui.services.model_repository import ModelRepository
+
+MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+
+_ZI = {"N2": 0.01, "CO2": 0.02, "C1": 0.60, "C2": 0.08, "C3": 0.05,
+       "C6": 0.04, "C7": 0.20}
+
+
+# --- каталог компонентов -----------------------------------------------------
+
+def test_component_catalog_full_and_grouped():
+    cat = svc.component_catalog()
+    names = [c["name"] for c in cat]
+    assert len(names) == 52  # 5 неорганических + C1..C6 (8) + C7..C45 (39)
+    assert names[0] == "He"                       # неорганика первой
+    groups = {c["name"]: c["group"] for c in cat}
+    assert groups["N2"] == svc.GROUP_INORGANIC
+    assert groups["C3"] == svc.GROUP_C1_C6
+    assert groups["C7"] == svc.GROUP_C7_PLUS
+    c7 = next(c for c in cat if c["name"] == "C7")
+    assert c7["molar_mass"] and c7["gamma"] and c7["Tb"]  # дефолты для формы
+
+
+# --- имена/валидация ---------------------------------------------------------
+
+def test_suggest_model_id_slug_and_unique(tmp_path):
+    db = tmp_path / "m.json"
+    db.write_text('{"MY_FLUID": {}}', encoding="utf-8")
+    assert svc.suggest_model_id("My fluid!", str(db)) == "MY_FLUID_2"
+    assert svc.suggest_model_id("2 phases", str(db)).startswith("MODEL")
+    assert svc.suggest_model_id("нефть", str(db)).startswith("MODEL")
+
+
+def test_validate_new_model_errors(tmp_path):
+    db = tmp_path / "m.json"
+    db.write_text('{"X": {}}', encoding="utf-8")
+    errors = svc.validate_new_model("X", "", {}, str(db))
+    joined = " ".join(errors)
+    assert "already exists" in joined
+    assert "name is empty" in joined
+    assert "at least one component" in joined
+    assert svc.validate_new_model("OK_ID", "Name", {"C1": 1.0}, str(db)) == []
+    assert "Unknown components" in " ".join(
+        svc.validate_new_model("OK2", "Name", {"C1+": 1.0}, str(db)))
+
+
+# --- создание модели ---------------------------------------------------------
+
+def test_create_model_roundtrip(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "NEW_FLUID", "New fluid", "TestField", "PREOS",
+                     t_res=380.0, zi=dict(_ZI))
+    # roundtrip через штатный from_db
+    proxy = Composition.from_db(db)
+    assert proxy.list_models() == ["NEW_FLUID"]
+    comp = proxy.NEW_FLUID
+    assert comp.T == pytest.approx(380.0)          # T_res сохранился (новое поле)
+    assert comp.eos_name.value == "PREOS"
+    assert comp.composition["C1"] == pytest.approx(0.60, abs=1e-6)
+    # свойства посчитаны (C7 через корреляции)
+    assert comp.composition_data["critical_temperature"]["C7"] > 0
+    # сводка репозитория видит новое поле
+    s = ModelRepository(db_path=db).list_models()[0]
+    assert s.t_res == pytest.approx(380.0)
+    assert s.title == "New fluid" and s.field_name == "TestField"
+
+
+def test_create_model_drops_zero_zi_and_applies_overrides(tmp_path):
+    db = str(tmp_path / "models.json")
+    zi = dict(_ZI)
+    zi["H2S"] = 0.0                                 # нулевая доля отбрасывается
+    svc.create_model(db, "F2", "F2", None, "PREOS", 373.15, zi,
+                     c7_overrides={"C7": {"molar_mass": 99.0}})
+    comp = Composition.from_db(db).F2
+    assert "H2S" not in comp.composition
+    assert comp.composition_data["molar_mass"]["C7"] == pytest.approx(99.0)
+
+
+def test_create_model_appends_not_overwrites(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "A", "A", None, "PREOS", 373.15, dict(_ZI))
+    svc.create_model(db, "B", "B", None, "PREOS", 373.15, dict(_ZI))
+    data = json.loads(Path(db).read_text(encoding="utf-8"))
+    assert set(data.keys()) == {"A", "B"}
+    assert Path(db + ".bak").exists()               # бэкап перед второй записью
+
+
+def test_create_model_refuses_on_corrupt_db(tmp_path):
+    db = tmp_path / "models.json"
+    db.write_text("{corrupted", encoding="utf-8")   # непустой, но битый JSON
+    with pytest.raises(RuntimeError):
+        svc.create_model(str(db), "X", "X", None, "PREOS", 373.15, dict(_ZI))
+    assert db.read_text(encoding="utf-8") == "{corrupted"  # база не тронута
+
+
+# --- импорт Excel ------------------------------------------------------------
+
+def _write_xlsx(path, rows, header):
+    df = pd.DataFrame(rows, columns=["component", "zi"] if header else None)
+    df.to_excel(path, index=False, header=header)
+
+
+def test_import_excel_with_header(tmp_path):
+    x = tmp_path / "comp.xlsx"
+    _write_xlsx(x, [["C1", 0.7], ["C7", 0.2], ["Хитрый+", 0.1]], header=True)
+    res = svc.import_excel(str(x), header=True, sheet="Sheet1")
+    assert res["recognized"] == {"C1": 0.7, "C7": 0.2}
+    assert "Хитрый+" in res["unrecognized"]         # не потеряли молча
+
+
+def test_import_excel_no_header(tmp_path):
+    x = tmp_path / "comp.xlsx"
+    _write_xlsx(x, [["C1", 0.9], ["CO2", 0.1]], header=False)
+    res = svc.import_excel(str(x), header=False, sheet="ignored")
+    assert res["recognized"] == {"C1": 0.9, "CO2": 0.1}
+    assert res["unrecognized"] == {}
+
+
+def test_import_excel_bad_values_raise(tmp_path):
+    x = tmp_path / "bad.xlsx"
+    _write_xlsx(x, [["C1", "not-a-number"]], header=True)
+    with pytest.raises(Exception):
+        svc.import_excel(str(x), header=True, sheet="Sheet1")

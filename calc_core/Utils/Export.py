@@ -44,12 +44,18 @@ class ModelJSONDB:
                composition_data: Dict[str, Any],
                eos: Any,
                results: Optional[Any] = None, # Сделали Optional, так как может быть None
-               field: str = None):
-        """Кладёт модель в оперативную память 'базы'."""
-        
+               field: str = None,
+               t_res: Optional[float] = None):
+        """Кладёт модель в оперативную память 'базы'.
+
+        `t_res` — пластовая температура, K (опционально). Если задана —
+        пишется в запись ключом `"T_res"`; старые записи без ключа остаются
+        валидными (`Composition.from_db` для них использует default_T).
+        """
+
         # ЗАЩИТА: Если results == None, используем пустой список, чтобы не было ошибки в цикле
         safe_results = results if results is not None else []
-        
+
         res_serialized = [
             {
                 "id": r.id,
@@ -61,17 +67,20 @@ class ModelJSONDB:
             for r in safe_results
         ]
 
-        # Если model_id уже существует, он будет обновлен (перезаписан). 
+        # Если model_id уже существует, он будет обновлен (перезаписан).
         # Если нет — будет создан новый.
-        self._db[model_id] = {
+        record = {
             "Model_name": name,
             "Field": field,
             "composition": composition,
             "composition_data": composition_data,
-            "eos": eos, 
+            "eos": eos,
             "created_at": datetime.now().isoformat(),
             "results": res_serialized
         }
+        if t_res is not None:
+            record["T_res"] = float(t_res)
+        self._db[model_id] = record
 
     def save(self):
         """Записывает все накопленные модели в файл."""
@@ -99,8 +108,10 @@ class ModelJSONDB:
 
     # --- ДОПОЛНИТЕЛЬНО: Удобный метод "всё в одном" ---
     def export_and_save(self, model_id: str, name: str, composition: Dict[str, Any],
-                        composition_data: Dict[str, Any], eos: Any, 
-                        results: Optional[Any] = None, field: str = None):
+                        composition_data: Dict[str, Any], eos: Any,
+                        results: Optional[Any] = None, field: str = None,
+                        t_res: Optional[float] = None):
         """Добавляет модель в память и сразу сохраняет на диск."""
-        self.export(model_id, name, composition, composition_data, eos, results, field)
+        self.export(model_id, name, composition, composition_data, eos, results,
+                    field, t_res)
         self.save()

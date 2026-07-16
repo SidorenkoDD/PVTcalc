@@ -36,25 +36,42 @@ def test_flash_snapshot_roundtrip(repo):
         float(result.liquid.properties["density"]))
 
 
-def test_session_save_load_new_fields(tmp_path):
+def test_session_v2_workspaces_roundtrip(tmp_path):
     path = str(tmp_path / "sess.json")
-    original = SessionState(
-        active_model_id="KRSNL_PVTSIM",
-        window_width=1000,
-        window_height=700,
-        open_tabs=["composition", "flash_1"],
-        active_tab="flash_1",
-        flashes=[{"P": 50.0, "T": 20.0, "result": {"is_two_phase": True}}],
-    )
+    ws = {"open_tabs": ["composition", "flash_1"], "active_tab": "flash_1",
+          "flashes": [{"P": 50.0, "T": 20.0, "result": {"is_two_phase": True}}],
+          "experiments": []}
+    original = SessionState(active_model_id="KRSNL_PVTSIM", window_width=1000,
+                            workspaces={"KRSNL_PVTSIM": ws, "OTHER": {"flashes": []}})
     save_session(original, path)
     loaded = load_session(path)
 
+    assert loaded.version == 2
     assert loaded.active_model_id == "KRSNL_PVTSIM"
-    assert loaded.window_width == 1000
-    assert loaded.open_tabs == ["composition", "flash_1"]
-    assert loaded.active_tab == "flash_1"
-    assert loaded.flashes[0]["P"] == 50.0
-    assert loaded.flashes[0]["result"]["is_two_phase"] is True
+    assert loaded.workspaces["KRSNL_PVTSIM"]["active_tab"] == "flash_1"
+    assert loaded.workspaces["KRSNL_PVTSIM"]["flashes"][0]["P"] == 50.0
+    assert "OTHER" in loaded.workspaces  # чужие workspaces не теряются
+
+
+def test_session_migration_v1_to_v2(tmp_path):
+    # файл старого формата: workspace одной модели в плоских полях
+    path = tmp_path / "sess.json"
+    path.write_text(
+        '{"active_model_id": "KRSNL_PVTSIM", "open_tabs": ["composition"],'
+        ' "active_tab": "composition",'
+        ' "flashes": [{"P": 50.0, "T": 20.0, "result": null}],'
+        ' "experiments": [{"kind": "dle", "params": {}, "result": null}]}',
+        encoding="utf-8")
+    loaded = load_session(str(path))
+
+    assert loaded.version == 2
+    ws = loaded.workspaces["KRSNL_PVTSIM"]
+    assert ws["open_tabs"] == ["composition"]
+    assert ws["flashes"][0]["P"] == 50.0
+    assert ws["experiments"][0]["kind"] == "dle"
+    # legacy-поля обнулены после миграции
+    assert loaded.flashes is None and loaded.open_tabs is None
+    assert loaded.experiments is None and loaded.active_tab is None
 
 
 def test_save_session_stamps_saved_at(tmp_path):

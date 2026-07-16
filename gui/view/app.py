@@ -75,6 +75,8 @@ class PVTcalcApp:
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
         self._exp_input_ids: dict[str, dict] = {}
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
+        # модели, чей workspace уже восстановлен из сессии в этом запуске
+        self._restored_models: set[str] = set()
         state.subscribe(self._render)
 
     # --- жизненный цикл --------------------------------------------------
@@ -1240,7 +1242,7 @@ class PVTcalcApp:
             return ""
 
     def _restore_session(self) -> None:
-        """Восстанавливает модель, вкладки и историю флэшей из сессии."""
+        """Восстанавливает последнюю модель и её workspace (через модалку)."""
         mid = self._session.active_model_id
         if not mid or mid not in self._state.models:
             return
@@ -1249,13 +1251,26 @@ class PVTcalcApp:
         except Exception:  # noqa: BLE001
             logger.warning("Не удалось восстановить модель сессии %s", mid)
             return
+        self._restore_workspace(mid)
+        self._state._notify()
+        self._set_status(f"Session restored: model '{mid}'.")
 
+    def _restore_workspace(self, model_id: str) -> None:
+        """
+        Лениво восстанавливает workspace модели из `session.workspaces[mid]`
+        (флэши/эксперименты/вкладки). Повторный вызов для той же модели —
+        no-op (guard `_restored_models`). Модель должна быть активной.
+        """
+        if model_id in self._restored_models:
+            return
+        self._restored_models.add(model_id)
+        ws = (self._session.workspaces or {}).get(model_id) or {}
         variant = self._state.active_variant
-        if variant is None:
+        if variant is None or not ws:
             return
 
         # воссоздать флэш-узлы в исходном порядке (id flash_1, flash_2, … совпадут)
-        for f in (self._session.flashes or []):
+        for f in ws.get("flashes", []):
             nid = self._state.new_flash_run(f.get("P"), f.get("T"))
             snap = f.get("result")
             if nid and snap:
@@ -1266,7 +1281,7 @@ class PVTcalcApp:
                     logger.warning("Не удалось восстановить результат флэша")
 
         # воссоздать эксперименты (id exp_1, exp_2, … совпадут с сохранёнными)
-        for e in (self._session.experiments or []):
+        for e in ws.get("experiments", []):
             params = e.get("params", {})
             nid = self._state.new_experiment(
                 e.get("kind"), {k: v for k, v in params.items() if k != "kind"})
@@ -1274,21 +1289,47 @@ class PVTcalcApp:
                 self._state.set_node_result(nid, e["result"])
 
         # восстановить открытые вкладки / активную
-        if self._session.open_tabs is not None:
-            variant.open_node_ids = [n for n in self._session.open_tabs
-                                     if n in variant.nodes]
-        if self._session.active_tab and self._session.active_tab in variant.nodes:
-            variant.active_node_id = self._session.active_tab
+        open_tabs = ws.get("open_tabs")
+        if open_tabs is not None:
+            variant.open_node_ids = [n for n in open_tabs if n in variant.nodes]
+        active_tab = ws.get("active_tab")
+        if active_tab and active_tab in variant.nodes:
+            variant.active_node_id = active_tab
         elif variant.open_node_ids:
             variant.active_node_id = variant.open_node_ids[-1]
 
         # развернуть модель и категорию флэшей в дереве
-        self._expanded_models.add(mid)
-        self._expanded_cats.add(f"{mid}:flash")
+        self._expanded_models.add(model_id)
+        self._expanded_cats.add(f"{model_id}:flash")
 
-        self._state.clear_history()  # восстановление сессии не откатываем
-        self._state._notify()
-        self._set_status(f"Session restored: model '{mid}'.")
+        self._state.clear_history()  # восстановление не откатываем
+
+    @staticmethod
+    def _workspace_snapshot(variant) -> dict:
+        """Сериализуемый снимок workspace варианта для сессии v2."""
+        flashes: list = []
+        for run in variant.flash_runs():
+            item = {"P": run.params.get("P"), "T": run.params.get("T"),
+                    "result": None}
+            if run.result is not None and run.status is NodeStatus.FRESH:
+                try:
+                    item["result"] = flash_service.snapshot_flash_result(run.result)
+                except Exception:  # noqa: BLE001
+                    logger.warning("Не удалось сериализовать результат флэша")
+            flashes.append(item)
+        experiments: list = []
+        for run in variant.experiment_runs():
+            experiments.append({
+                "kind": run.params.get("kind"),
+                "params": dict(run.params),
+                "result": run.result if run.status is NodeStatus.FRESH else None,
+            })
+        return {
+            "open_tabs": list(variant.open_node_ids),
+            "active_tab": variant.active_node_id,
+            "flashes": flashes,
+            "experiments": experiments,
+        }
 
     def _persist_session(self) -> None:
         self._session.active_model_id = self._state.active_model_id
@@ -1298,29 +1339,12 @@ class PVTcalcApp:
         except Exception:  # noqa: BLE001
             pass
 
-        variant = self._state.active_variant
-        if variant is not None:
-            self._session.open_tabs = list(variant.open_node_ids)
-            self._session.active_tab = variant.active_node_id
-            flashes: list = []
-            for run in variant.flash_runs():
-                item = {"P": run.params.get("P"), "T": run.params.get("T"),
-                        "result": None}
-                if run.result is not None and run.status is NodeStatus.FRESH:
-                    try:
-                        item["result"] = flash_service.snapshot_flash_result(run.result)
-                    except Exception:  # noqa: BLE001
-                        logger.warning("Не удалось сериализовать результат флэша")
-                flashes.append(item)
-            self._session.flashes = flashes
-
-            experiments: list = []
-            for run in variant.experiment_runs():
-                experiments.append({
-                    "kind": run.params.get("kind"),
-                    "params": dict(run.params),
-                    "result": run.result if run.status is NodeStatus.FRESH else None,
-                })
-            self._session.experiments = experiments
+        # merge: обновляем workspaces загруженных моделей, не трогая остальные
+        if self._session.workspaces is None:
+            self._session.workspaces = {}
+        for mid, model in self._state.models.items():
+            variant = model.variants.get("base") if model.loaded else None
+            if variant is not None:
+                self._session.workspaces[mid] = self._workspace_snapshot(variant)
 
         save_session(self._session)

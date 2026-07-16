@@ -107,14 +107,14 @@ def test_undo_covers_new_experiment(state):
 
 def test_session_experiments_roundtrip(tmp_path):
     path = str(tmp_path / "s.json")
-    s = SessionState(
-        active_model_id="KRSNL_PVTSIM",
-        experiments=[{"kind": "dle",
-                      "params": {"kind": "dle", "pressures": [400, 200], "T_c": 90.0},
-                      "result": {"columns": ["pressure", "Bo"], "rows": [[400, 1.4]],
-                                 "x": "pressure", "plot_y": ["Bo"]}}],
-    )
+    exp = {"kind": "dle",
+           "params": {"kind": "dle", "pressures": [400, 200], "T_c": 90.0},
+           "result": {"columns": ["pressure", "Bo"], "rows": [[400, 1.4]],
+                      "x": "pressure", "plot_y": ["Bo"]}}
+    s = SessionState(active_model_id="KRSNL_PVTSIM",
+                     workspaces={"KRSNL_PVTSIM": {"experiments": [exp]}})
     save_session(s, path)
     loaded = load_session(path)
-    assert loaded.experiments[0]["kind"] == "dle"
-    assert loaded.experiments[0]["result"]["plot_y"] == ["Bo"]
+    ws = loaded.workspaces["KRSNL_PVTSIM"]
+    assert ws["experiments"][0]["kind"] == "dle"
+    assert ws["experiments"][0]["result"]["plot_y"] == ["Bo"]
