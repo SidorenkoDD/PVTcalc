@@ -136,9 +136,10 @@ class PVTcalcApp:
         if not (dpg.is_item_hovered(_TREE_PANEL) or dpg.is_item_hovered(_MODEL_TREE)):
             return
         node = self._state.active_node
-        if node is not None and node.kind is NodeKind.FLASH:
+        # удаляем любой узел-расчёт (Composition не удаляется — см. delete_node)
+        if node is not None and node.kind is not NodeKind.COMPOSITION:
             self._state.delete_node(node.node_id)
-            self._set_status("Flash run deleted (Del).")
+            self._set_status(f"{node.kind.name.capitalize()} node deleted (Del).")
 
     def _on_key_z(self, sender, app_data) -> None:
         if self._ctrl_down():
