@@ -1063,15 +1063,33 @@ class PVTcalcApp:
         for col in charts:
             self._add_one_chart(result, col, holder)
 
+    @staticmethod
+    def _exp_x_range(result) -> tuple[float, float] | None:
+        """Диапазон оси X (давления) по данным эксперимента, с малым отступом."""
+        cols = result.get("columns", [])
+        x = result.get("x")
+        if x not in cols:
+            return None
+        xi = cols.index(x)
+        xv = [row[xi] for row in result["rows"] if row[xi] is not None]
+        if not xv:
+            return None
+        lo, hi = min(xv), max(xv)
+        margin = (hi - lo) * 0.02 if hi > lo else 1.0
+        return lo - margin, hi + margin
+
     def _add_one_chart(self, result, col, parent) -> None:
         xs, ys = exp_svc.series_for_plot(result, col)
         if not xs:
             return
+        xr = self._exp_x_range(result)
         with dpg.plot(label=f"{col} vs pressure", height=220, width=-1, parent=parent):
             dpg.add_plot_legend()
-            dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
+            xax = dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
             yax = dpg.add_plot_axis(dpg.mvYAxis, label=col)
             dpg.add_line_series(xs, ys, label=col, parent=yax)
+            if xr is not None:
+                dpg.set_axis_limits(xax, xr[0], xr[1])
 
     def _on_exp_add_chart(self, sender, app_data, user_data) -> None:
         nid = user_data
