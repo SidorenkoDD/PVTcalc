@@ -45,8 +45,9 @@ class NodeKind(Enum):
 
     COMPOSITION = auto()   # корневой узел: состав + свойства
     FLASH = auto()         # флэш в точке P,T
+    EXPERIMENT = auto()    # PVT-эксперимент (CCE/DLE/Separator), params["kind"]
     COMPARE = auto()       # сравнение нескольких расчётов (params["members"])
-    # SATURATION / CCE / DLE / PHASE_ENVELOPE / ... — добавляются позже
+    # SATURATION / PHASE_ENVELOPE / ... — добавляются позже
 
 
 @dataclass
@@ -84,6 +85,7 @@ class Variant:
     composition: Optional[Composition] = None
     nodes: dict[str, GraphNode] = field(default_factory=dict)
     flash_seq: int = 0                                  # счётчик id флэш-узлов
+    exp_seq: int = 0                                    # счётчик id узлов экспериментов
     open_node_ids: list[str] = field(default_factory=list)   # вкладки
     active_node_id: Optional[str] = None                # активная вкладка
     # стеки undo/redo (снимки состояния варианта), у каждой модели свои
@@ -93,6 +95,10 @@ class Variant:
     def flash_runs(self) -> list[GraphNode]:
         """Все флэш-узлы варианта в порядке добавления (история расчётов)."""
         return [n for n in self.nodes.values() if n.kind is NodeKind.FLASH]
+
+    def experiment_runs(self) -> list[GraphNode]:
+        """Все узлы-эксперименты варианта в порядке добавления."""
+        return [n for n in self.nodes.values() if n.kind is NodeKind.EXPERIMENT]
 
 
 @dataclass
@@ -424,6 +430,30 @@ class AppState:
         self.open_node(node_id)
         return node_id
 
+    def new_experiment(self, kind: str, defaults: dict) -> Optional[str]:
+        """
+        Заводит новый узел-эксперимент (`kind` = cce/dle/separator) с
+        параметрами по умолчанию и открывает его вкладку. Возвращает id узла.
+        """
+        variant = self.active_variant
+        if variant is None or self.active_composition is None:
+            return None
+        self._push_undo()
+        variant.exp_seq += 1
+        node_id = f"exp_{variant.exp_seq}"
+        params = {"kind": kind}
+        params.update(defaults)
+        variant.nodes[node_id] = GraphNode(
+            node_id=node_id,
+            kind=NodeKind.EXPERIMENT,
+            title=kind.upper(),
+            status=NodeStatus.EMPTY,
+            params=params,
+            upstream=["composition"],
+        )
+        self.open_node(node_id)
+        return node_id
+
     def open_compare(self, member_ids: list[str]) -> Optional[str]:
         """
         Открывает вкладку сравнения выбранных узлов (единственный узел
@@ -487,11 +517,11 @@ class AppState:
         self._notify()
 
     def _invalidate_flash(self) -> None:
-        """Помечает все посчитанные флэши `STALE` при изменении состава."""
+        """Помечает посчитанные флэши и эксперименты `STALE` при изменении состава."""
         variant = self.active_variant
         if variant is None:
             return
-        for node in variant.flash_runs():
+        for node in variant.flash_runs() + variant.experiment_runs():
             if node.status is NodeStatus.FRESH:
                 node.status = NodeStatus.STALE
 
@@ -502,16 +532,18 @@ class AppState:
             node.params["P"] = float(p)
             node.params["T"] = float(t)
 
-    def set_flash_running(self, node_id: str) -> None:
-        """Переводит узел флэша в `RUNNING` и перерисовывает."""
+    # --- обобщённые переходы статуса узла-расчёта (флэш/эксперимент) -----
+
+    def set_node_running(self, node_id: str) -> None:
+        """Переводит узел-расчёт в `RUNNING` и перерисовывает."""
         node = self.node_by_id(node_id)
         if node is not None:
             node.status = NodeStatus.RUNNING
             node.error = None
             self._notify()
 
-    def set_flash_result(self, node_id: str, result: object) -> None:
-        """Сохраняет результат флэша, узел → `FRESH`, перерисовка."""
+    def set_node_result(self, node_id: str, result: object) -> None:
+        """Сохраняет результат, узел → `FRESH`, перерисовка."""
         node = self.node_by_id(node_id)
         if node is not None:
             node.result = result
@@ -519,8 +551,8 @@ class AppState:
             node.error = None
             self._notify()
 
-    def set_flash_error(self, node_id: str, message: str) -> None:
-        """Сохраняет ошибку флэша, узел → `STALE`, перерисовка."""
+    def set_node_error(self, node_id: str, message: str) -> None:
+        """Сохраняет ошибку, узел → `STALE`, перерисовка."""
         node = self.node_by_id(node_id)
         if node is not None:
             node.result = None
@@ -528,13 +560,19 @@ class AppState:
             node.error = message
             self._notify()
 
-    def reset_flash(self, node_id: str) -> None:
-        """Сбрасывает узел флэша в `EMPTY` (например, при отмене), перерисовка."""
+    def reset_node(self, node_id: str) -> None:
+        """Сбрасывает узел в `EMPTY` (например, при отмене), перерисовка."""
         node = self.node_by_id(node_id)
         if node is not None:
             node.status = NodeStatus.EMPTY
             node.error = None
             self._notify()
+
+    # обратная совместимость (флэш-именованные вызовы)
+    set_flash_running = set_node_running
+    set_flash_result = set_node_result
+    set_flash_error = set_node_error
+    reset_flash = reset_node
 
     # --- удобные геттеры активного выбора -------------------------------
 

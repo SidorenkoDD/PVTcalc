@@ -33,6 +33,8 @@ class SessionState:
     # история флэшей активного варианта: [{"P","T","result": snapshot|None}]
     # snapshot — сериализуемый слепок FlashResult (см. flash_service)
     flashes: Optional[list] = None
+    # эксперименты активного варианта: [{"kind","params","result": table|None}]
+    experiments: Optional[list] = None
     # ISO-время последнего сохранения (проставляется в save_session)
     saved_at: Optional[str] = None
 

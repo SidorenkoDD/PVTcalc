@@ -21,6 +21,7 @@ import dearpygui.dearpygui as dpg
 
 from gui.app_state import AppState, NodeKind, NodeStatus
 from gui.services import composition_service as comp_svc
+from gui.services import experiment_service as exp_svc
 from gui.services import flash_service
 from gui.session import SessionState, save_session
 from gui.view.theme import build_light_theme
@@ -72,6 +73,7 @@ class PVTcalcApp:
         # id полей ввода (захватываем при отрисовке, без фиксированных алиасов)
         self._bip_ids: dict[tuple[int, int], int] = {}
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
+        self._exp_input_ids: dict[str, dict] = {}
         state.subscribe(self._render)
 
     # --- жизненный цикл --------------------------------------------------
@@ -250,9 +252,28 @@ class PVTcalcApp:
                                    parent=_MODEL_TREE, user_data=model.model_id,
                                    callback=self._on_open_compare)
 
-        # будущие категории (заготовки под расчёты)
+        # Experiments (CCE / DLE / Separator) — категория с историей запусков
+        ecat_key = f"{model.model_id}:exp"
+        ecat_exp = ecat_key in self._expanded_cats
+        exp_runs = variant.experiment_runs()
+        dpg.add_selectable(
+            label=f"  {'v' if ecat_exp else '>'} Experiments ({len(exp_runs)})",
+            parent=_MODEL_TREE, user_data=ecat_key, callback=self._on_cat_toggle)
+        if ecat_exp:
+            for run in exp_runs:
+                sel = dpg.add_selectable(
+                    label="      " + self._exp_tree_label(run),
+                    parent=_MODEL_TREE, default_value=(active_nid == run.node_id),
+                    user_data=(model.model_id, run.node_id),
+                    callback=self._on_tree_open_node)
+                self._attach_exp_context_menu(sel, run.node_id)
+            for kind in ("cce", "dle", "separator"):
+                lbl = exp_svc.EXPERIMENT_TYPES[kind]["label"]
+                dpg.add_selectable(label=f"      + New {lbl}", parent=_MODEL_TREE,
+                                   user_data=(model.model_id, kind),
+                                   callback=self._on_new_experiment)
+
         dpg.add_text("    Saturation (soon)", parent=_MODEL_TREE)
-        dpg.add_text("    Experiments (soon)", parent=_MODEL_TREE)
 
     # --- обработчики дерева ----------------------------------------------
 
@@ -340,6 +361,58 @@ class PVTcalcApp:
         self._state.delete_node(user_data)
         self._set_status("Flash run deleted.")
 
+    # --- эксперименты: дерево ---------------------------------------------
+
+    def _exp_tree_label(self, node) -> str:
+        kind = node.params.get("kind", "")
+        base = exp_svc.EXPERIMENT_TYPES.get(kind, {}).get("label", kind.upper())
+        if node.status is NodeStatus.RUNNING:
+            core = f"{base} - running"
+        elif node.result is not None:
+            core = base + ("" if node.status is NodeStatus.FRESH else " (stale)")
+        else:
+            core = f"{base} - (not run)"
+        label = node.params.get("label")
+        return f"{label}  ({core})" if label else core
+
+    def _on_new_experiment(self, sender, app_data, user_data) -> None:
+        mid, kind = user_data
+        if mid != self._state.active_model_id:
+            self._state.set_active_model(mid)
+        composition = self._state.active_composition
+        if composition is None:
+            return
+        pressures = exp_svc.default_pressures(composition)
+        t_c = round(composition.T - 273.15, 2)
+        defaults = {
+            "pressures": pressures,
+            "T_c": t_c,
+            "P_res": max(pressures),
+            "stage_temps_c": [15.0] * len(pressures),
+        }
+        self._state.new_experiment(kind, defaults)
+        self._expanded_cats.add(f"{mid}:exp")
+        self._set_status(f"New {kind.upper()} tab - set stages and Run.")
+
+    def _attach_exp_context_menu(self, item_id, node_id: str) -> None:
+        with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
+            dpg.add_text("Experiment")
+            dpg.add_separator()
+            dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
+                               user_data=node_id, callback=self._on_flash_rename)
+            dpg.add_button(label="Duplicate", width=200, user_data=node_id,
+                           callback=self._on_exp_duplicate)
+            dpg.add_button(label="Delete", width=200, user_data=node_id,
+                           callback=self._on_flash_delete)
+
+    def _on_exp_duplicate(self, sender, app_data, user_data) -> None:
+        node = self._state.node_by_id(user_data)
+        if node is not None:
+            defaults = {k: v for k, v in node.params.items()
+                        if k not in ("kind", "label")}
+            self._state.new_experiment(node.params["kind"], defaults)
+            self._set_status("Experiment duplicated.")
+
     # ==================================================================
     #  Рабочая область (вкладки)
     # ==================================================================
@@ -349,6 +422,7 @@ class PVTcalcApp:
             return
         dpg.delete_item(_WORKSPACE, children_only=True)
         self._flash_input_ids = {}
+        self._exp_input_ids = {}
 
         model = self._state.active_model
         variant = self._state.active_variant
@@ -385,6 +459,8 @@ class PVTcalcApp:
                         self._render_composition_tab(page, n)
                     elif n.kind is NodeKind.FLASH:
                         self._render_flash_tab(page, n)
+                    elif n.kind is NodeKind.EXPERIMENT:
+                        self._render_experiment_tab(page, n)
                     elif n.kind is NodeKind.COMPARE:
                         self._render_compare_tab(page, n)
 
@@ -408,6 +484,11 @@ class PVTcalcApp:
             return "Composition"
         if node.kind is NodeKind.COMPARE:
             return f"Compare ({len(node.params.get('members', []))})"
+        if node.kind is NodeKind.EXPERIMENT:
+            label = node.params.get("label")
+            base = exp_svc.EXPERIMENT_TYPES.get(node.params.get("kind"), {}).get(
+                "label", "Exp")
+            return label or f"{base} {node.node_id.split('_')[-1]}"
         if node.kind is NodeKind.FLASH:
             label = node.params.get("label")
             if label:
@@ -421,6 +502,8 @@ class PVTcalcApp:
             return "Composition"
         if node.kind is NodeKind.COMPARE:
             return f"Compare ({len(node.params.get('members', []))} runs)"
+        if node.kind is NodeKind.EXPERIMENT:
+            return "Experiments  >  " + self._exp_tree_label(node)
         if node.kind is NodeKind.FLASH:
             return "Flash  >  " + self._flash_tree_label(node)
         return node.title
@@ -828,6 +911,149 @@ class PVTcalcApp:
             self._set_status("Cancelling flash (result will be discarded)...")
 
     # ==================================================================
+    #  Вкладка Experiment (CCE / DLE / Separator)
+    # ==================================================================
+
+    def _render_experiment_tab(self, parent, node) -> None:
+        nid = node.node_id
+        p = node.params
+        kind = p.get("kind", "cce")
+        meta = exp_svc.EXPERIMENT_TYPES.get(kind, {})
+        running = node.status is NodeStatus.RUNNING
+
+        dpg.add_text(f"{meta.get('title', kind.upper())}", parent=parent)
+        ids: dict = {}
+        ids["pressures"] = dpg.add_input_text(
+            label="Pressure stages, bar (comma-separated)", width=460, parent=parent,
+            default_value=", ".join(self._g(x) for x in p.get("pressures", [])))
+        with dpg.group(horizontal=True, parent=parent):
+            ids["T_c"] = dpg.add_input_float(label="T, C", width=140, step=0,
+                                             default_value=float(p.get("T_c", 100.0)))
+            if meta.get("needs_p_res"):
+                ids["P_res"] = dpg.add_input_float(
+                    label="P res, bar", width=140, step=0,
+                    default_value=float(p.get("P_res", 400.0)))
+        if meta.get("needs_stage_temps"):
+            ids["stage_temps"] = dpg.add_input_text(
+                label="Stage T, C (comma-separated, same count)", width=460,
+                parent=parent,
+                default_value=", ".join(self._g(x) for x in p.get("stage_temps_c", [])))
+        self._exp_input_ids[nid] = ids
+
+        with dpg.group(horizontal=True, parent=parent):
+            if running:
+                dpg.add_loading_indicator(style=1, radius=2.0)
+                dpg.add_button(label="Cancel", user_data=nid,
+                               callback=self._on_flash_cancel)
+            else:
+                dpg.add_button(label="Run experiment", user_data=nid,
+                               callback=self._on_experiment_run)
+        if running:
+            dpg.add_text("Running experiment (this may take a few seconds)...",
+                         parent=parent)
+        if node.status is NodeStatus.STALE and node.error:
+            err = dpg.add_text(f"Error: {node.error}", parent=parent)
+            dpg.bind_item_theme(err, self._theme_stale())
+        elif node.status is NodeStatus.STALE and node.result is not None:
+            st = dpg.add_text("Result is stale (composition changed) - re-run.",
+                              parent=parent)
+            dpg.bind_item_theme(st, self._theme_stale())
+
+        if node.result is not None:
+            dpg.add_separator(parent=parent)
+            with dpg.tab_bar(parent=parent):
+                with dpg.tab(label="Table") as t:
+                    self._render_experiment_table(node.result, t)
+                with dpg.tab(label="Chart") as t:
+                    self._render_experiment_chart(node.result, t)
+
+    def _render_experiment_table(self, result, parent) -> None:
+        columns = result["columns"]
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, scrollX=True, height=-1,
+                       freeze_rows=1, freeze_columns=1):
+            for c in columns:
+                dpg.add_table_column(label=c)
+            for row in result["rows"]:
+                with dpg.table_row():
+                    for v in row:
+                        dpg.add_text(self._fmt(v))
+
+    def _render_experiment_chart(self, result, parent) -> None:
+        plotted = False
+        for col in result.get("plot_y", []):
+            xs, ys = exp_svc.series_for_plot(result, col)
+            if not xs:
+                continue
+            plotted = True
+            with dpg.plot(label=f"{col} vs pressure", height=240, width=-1,
+                          parent=parent):
+                dpg.add_plot_legend()
+                dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
+                yax = dpg.add_plot_axis(dpg.mvYAxis, label=col)
+                dpg.add_line_series(xs, ys, label=col, parent=yax)
+        if not plotted:
+            dpg.add_text("No plottable columns in this result.", parent=parent)
+
+    def _on_experiment_run(self, sender, app_data, user_data) -> None:
+        if self._active_job is not None:
+            self._set_status("Another calculation is already running.")
+            return
+        nid = user_data
+        node = self._state.node_by_id(nid)
+        composition = self._state.active_composition
+        if node is None or composition is None:
+            return
+        ids = self._exp_input_ids.get(nid, {})
+        try:
+            pressures = self._parse_floats(dpg.get_value(ids["pressures"]))
+            if len(pressures) < 2:
+                raise ValueError("need at least 2 pressure stages")
+            params = dict(node.params)
+            params["pressures"] = pressures
+            params["T_c"] = float(dpg.get_value(ids["T_c"]))
+            if "P_res" in ids:
+                params["P_res"] = float(dpg.get_value(ids["P_res"]))
+            if "stage_temps" in ids:
+                temps = self._parse_floats(dpg.get_value(ids["stage_temps"]))
+                if len(temps) != len(pressures):
+                    raise ValueError("stage T count must match pressure count")
+                params["stage_temps_c"] = temps
+        except (ValueError, KeyError) as exc:
+            self._state.set_node_error(nid, f"Invalid input: {exc}")
+            return
+        node.params.update(params)
+        kind = node.params["kind"]
+
+        holder = {"result": None, "error": None, "done": threading.Event()}
+        self._active_job = {"holder": holder, "cancelled": False, "node_id": nid}
+        self._state.set_node_running(nid)
+
+        def worker() -> None:
+            try:
+                holder["result"] = exp_svc.run_experiment(composition, kind, params)
+            except Exception as exc:  # noqa: BLE001
+                holder["error"] = str(exc)
+                logger.exception("Эксперимент %s не удался", kind)
+            finally:
+                holder["done"].set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._set_status(f"{kind.upper()} running...")
+        self._arm_flash_poll()
+
+    @staticmethod
+    def _parse_floats(text: str) -> list[float]:
+        """Парсит числа из строки (разделители — запятая/пробел/перенос строки)."""
+        out: list[float] = []
+        for chunk in text.replace("\n", ",").replace(" ", ",").split(","):
+            chunk = chunk.strip()
+            if chunk:
+                out.append(float(chunk))
+        return out
+
+    # ==================================================================
     #  Вспомогательное
     # ==================================================================
 
@@ -929,6 +1155,14 @@ class PVTcalcApp:
                 except Exception:  # noqa: BLE001
                     logger.warning("Не удалось восстановить результат флэша")
 
+        # воссоздать эксперименты (id exp_1, exp_2, … совпадут с сохранёнными)
+        for e in (self._session.experiments or []):
+            params = e.get("params", {})
+            nid = self._state.new_experiment(
+                e.get("kind"), {k: v for k, v in params.items() if k != "kind"})
+            if nid and e.get("result"):
+                self._state.set_node_result(nid, e["result"])
+
         # восстановить открытые вкладки / активную
         if self._session.open_tabs is not None:
             variant.open_node_ids = [n for n in self._session.open_tabs
@@ -969,5 +1203,14 @@ class PVTcalcApp:
                         logger.warning("Не удалось сериализовать результат флэша")
                 flashes.append(item)
             self._session.flashes = flashes
+
+            experiments: list = []
+            for run in variant.experiment_runs():
+                experiments.append({
+                    "kind": run.params.get("kind"),
+                    "params": dict(run.params),
+                    "result": run.result if run.status is NodeStatus.FRESH else None,
+                })
+            self._session.experiments = experiments
 
         save_session(self._session)
