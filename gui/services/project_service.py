@@ -182,7 +182,55 @@ def create_model(db_path: str, model_id: str, name: str, field: str,
     return model_id
 
 
+# --- удаление модели ---------------------------------------------------------
+
+def delete_model(db_path: str, model_id: str) -> bool:
+    """
+    Удаляет модель из models.json (с бэкапом `.bak`). Возвращает True, если
+    модель была и удалена. Битый JSON пробрасывает исключение (не затираем).
+    """
+    p = Path(db_path)
+    if not p.exists():
+        return False
+    with open(p, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if model_id not in data:
+        return False
+    shutil.copyfile(p, str(p) + ".bak")
+    del data[model_id]
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    logger.info("Модель '%s' удалена из %s", model_id, db_path)
+    return True
+
+
 # --- импорт Excel ------------------------------------------------------------
+
+def excel_sheet_names(path: str) -> list[str]:
+    """Имена листов Excel-файла (для выпадающего списка в предпросмотре)."""
+    import pandas as pd
+    return list(pd.ExcelFile(path).sheet_names)
+
+
+def excel_preview(path: str, sheet: str, header: bool, max_rows: int = 25) -> dict:
+    """
+    Первые строки листа для предпросмотра (как их прочитает загрузчик).
+
+    Returns
+    -------
+    dict
+        `{"columns": [str, ...], "rows": [[str, ...], ...], "truncated": bool}`.
+    """
+    import pandas as pd
+    hdr = 0 if header else None
+    df = pd.read_excel(path, sheet_name=sheet, header=hdr, nrows=max_rows + 1)
+    truncated = len(df) > max_rows
+    df = df.head(max_rows)
+    columns = [str(c) for c in df.columns]
+    rows = [["" if pd.isna(v) else str(v) for v in rec]
+            for rec in df.itertuples(index=False, name=None)]
+    return {"columns": columns, "rows": rows, "truncated": truncated}
+
 
 def import_excel(path: str, header: bool, sheet: str) -> dict:
     """

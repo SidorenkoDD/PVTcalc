@@ -135,3 +135,53 @@ def test_import_excel_bad_values_raise(tmp_path):
     _write_xlsx(x, [["C1", "not-a-number"]], header=True)
     with pytest.raises(Exception):
         svc.import_excel(str(x), header=True, sheet="Sheet1")
+
+
+def _write_multi_sheet(path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "compo"
+    ws1.append(["component", "zi"])
+    ws1.append(["C1", 0.7])
+    ws1.append(["C7", 0.3])
+    ws2 = wb.create_sheet("other")
+    ws2.append(["a", "b"])
+    ws2.append(["x", 1])
+    wb.save(path)
+
+
+def test_excel_sheet_names_and_preview(tmp_path):
+    x = tmp_path / "multi.xlsx"
+    _write_multi_sheet(x)
+    assert svc.excel_sheet_names(str(x)) == ["compo", "other"]
+
+    prev = svc.excel_preview(str(x), "compo", header=True)
+    assert prev["columns"] == ["component", "zi"]
+    assert prev["rows"][0] == ["C1", "0.7"]
+    assert prev["truncated"] is False
+    # выбор листа реально применяется
+    assert svc.excel_preview(str(x), "other", header=True)["columns"] == ["a", "b"]
+
+
+def test_excel_preview_truncates(tmp_path):
+    x = tmp_path / "big.xlsx"
+    pd.DataFrame([["C1", i] for i in range(40)],
+                 columns=["c", "v"]).to_excel(x, index=False)
+    prev = svc.excel_preview(str(x), "Sheet1", header=True, max_rows=10)
+    assert len(prev["rows"]) == 10
+    assert prev["truncated"] is True
+
+
+# --- удаление модели ---------------------------------------------------------
+
+def test_delete_model(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "A", "A", None, "PREOS", 373.15, dict(_ZI))
+    svc.create_model(db, "B", "B", None, "PREOS", 373.15, dict(_ZI))
+    assert svc.delete_model(db, "A") is True
+    assert list(json.loads(Path(db).read_text(encoding="utf-8"))) == ["B"]
+    assert Path(db + ".bak").exists()
+    # повторное удаление / отсутствующая модель / нет файла
+    assert svc.delete_model(db, "A") is False
+    assert svc.delete_model(str(tmp_path / "нет.json"), "A") is False

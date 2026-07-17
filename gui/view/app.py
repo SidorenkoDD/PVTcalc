@@ -16,6 +16,7 @@
 
 import logging
 import threading
+import time
 from pathlib import Path
 
 import dearpygui.dearpygui as dpg
@@ -85,9 +86,17 @@ class PVTcalcApp:
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
         # модели, чей workspace уже восстановлен из сессии в этом запуске
         self._restored_models: set[str] = set()
-        # импорт Excel: выбранный файл и id окна параметров
+        # экран Projects: выбранная модель + распознавание двойного клика
+        self._selected_project: str | None = None
+        self._proj_row_ids: dict[str, int] = {}
+        self._last_proj_click: str | None = None
+        self._last_proj_click_time: float = 0.0
+        # импорт Excel: путь, id окна предпросмотра и его виджетов
         self._excel_path: str | None = None
-        self._excel_opts: dict = {}
+        self._excel_win: int | None = None
+        self._excel_sheet_id: int | None = None
+        self._excel_header_id: int | None = None
+        self._excel_preview_group: int | None = None
         # форма создания нового флюида (экран new_fluid)
         self._new_fluid_form = NewFluidForm(
             get_db_path=lambda: self._state.db_path,
@@ -141,6 +150,11 @@ class PVTcalcApp:
             dpg.add_key_press_handler(dpg.mvKey_Delete, callback=self._on_key_delete)
             dpg.add_key_press_handler(dpg.mvKey_Z, callback=self._on_key_z)
             dpg.add_key_press_handler(dpg.mvKey_Y, callback=self._on_key_y)
+            dpg.add_key_press_handler(dpg.mvKey_Return, callback=self._on_key_enter)
+            npad = getattr(dpg, "mvKey_NumPadEnter", None) or getattr(
+                dpg, "mvKey_KeyPadEnter", None)
+            if npad is not None:
+                dpg.add_key_press_handler(npad, callback=self._on_key_enter)
 
     @staticmethod
     def _ctrl_down() -> bool:
@@ -175,6 +189,14 @@ class PVTcalcApp:
             return
         if self._ctrl_down():
             self._do_redo()
+
+    def _on_key_enter(self, sender, app_data) -> None:
+        # Enter на странице Projects открывает выбранную модель
+        if self._state.current_screen != "projects":
+            return
+        mid = self._selected_project
+        if mid and mid in self._state.models:
+            self._open_project(mid)
 
     def _do_undo(self) -> None:
         if self._state.can_undo():
@@ -276,27 +298,34 @@ class PVTcalcApp:
                                callback=self._on_open_model)
             dpg.add_separator(parent=parent)
 
-        # таблица моделей
+        dpg.add_text("Double-click (or Enter) to open a model, right-click for "
+                     "more actions.", parent=parent)
+
+        # таблица моделей — строки выбираемые (клик = выбор, двойной = открыть)
+        self._proj_row_ids = {}
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True,
                        borders_outerV=True, resizable=True, scrollY=True,
                        height=380, freeze_rows=1):
             for label in ("Model", "Field", "EOS", "Components", "T res, K",
-                          "Calculated", "Created", ""):
+                          "Calculated", "Created"):
                 dpg.add_table_column(label=label)
             workspaces = self._session.workspaces or {}
             for model in self._state.models.values():
                 s = model.summary
                 with dpg.table_row():
-                    dpg.add_text(model.title)
+                    sel = dpg.add_selectable(
+                        label=model.title, span_columns=True,
+                        default_value=(model.model_id == self._selected_project),
+                        user_data=model.model_id, callback=self._on_project_click)
+                    self._proj_row_ids[model.model_id] = sel
+                    self._attach_project_context_menu(sel, model.model_id)
                     dpg.add_text(model.field_name or "-")
                     dpg.add_text(model.eos or "-")
                     dpg.add_text(str(model.n_components))
                     dpg.add_text(self._g(s.t_res) if s and s.t_res else "-")
                     dpg.add_text(self._calc_summary_text(model, workspaces))
                     dpg.add_text((s.created_at or "-")[:10] if s else "-")
-                    dpg.add_button(label="Open", user_data=model.model_id,
-                                   callback=self._on_open_model)
 
         dpg.add_spacer(height=8, parent=parent)
         dpg.add_text("New composition", parent=parent)
@@ -326,7 +355,27 @@ class PVTcalcApp:
     # --- навигация ---------------------------------------------------------
 
     def _on_open_model(self, sender, app_data, user_data) -> None:
+        self._open_project(user_data)
+
+    def _on_project_click(self, sender, app_data, user_data) -> None:
+        """Клик по строке: выбор + подсветка; двойной клик — открыть модель."""
         mid = user_data
+        now = time.monotonic()
+        is_double = (self._last_proj_click == mid
+                     and now - self._last_proj_click_time < 0.4)
+        self._last_proj_click = mid
+        self._last_proj_click_time = now
+        self._selected_project = mid
+        # подсветка без перерисовки (иначе двойной клик не долетит до строки)
+        for m, sid in self._proj_row_ids.items():
+            if dpg.does_item_exist(sid):
+                dpg.set_value(sid, m == mid)
+        if is_double:
+            self._open_project(mid)
+        else:
+            self._set_status(f"Selected '{mid}' (double-click or Enter to open).")
+
+    def _open_project(self, mid: str) -> None:
         if self._active_job is not None:
             self._set_status("Calculation in progress - wait or cancel first.")
             return
@@ -340,6 +389,84 @@ class PVTcalcApp:
         self._restore_workspace(mid)
         self._state._notify()
         self._set_status(f"Model '{mid}' opened.")
+
+    # --- контекстное меню модели (просмотр состава / удаление) -------------
+
+    def _attach_project_context_menu(self, item_id, model_id: str) -> None:
+        with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
+            dpg.add_text(model_id)
+            dpg.add_separator()
+            dpg.add_menu_item(label="Open", user_data=model_id,
+                              callback=self._on_open_model)
+            dpg.add_menu_item(label="View composition (read-only)",
+                              user_data=model_id, callback=self._on_view_composition)
+            dpg.add_menu_item(label="Delete model...", user_data=model_id,
+                              callback=self._on_delete_model_confirm)
+
+    def _on_view_composition(self, sender, app_data, user_data) -> None:
+        mid = user_data
+        try:
+            comp = self._state.peek_composition(mid)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось прочитать состав %s", mid)
+            self._set_status(f"Failed to read composition of '{mid}': {exc}")
+            return
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label=f"Composition (read-only) - {mid}", modal=True,
+                        width=720, height=560,
+                        pos=(max(0, w // 2 - 360), max(0, h // 2 - 280))) as win:
+            data = comp.composition_data
+            with dpg.table(header_row=True, borders_innerH=True, borders_outerH=True,
+                           borders_innerV=True, borders_outerV=True,
+                           scrollY=True, height=-40, freeze_rows=1):
+                dpg.add_table_column(label="Component")
+                dpg.add_table_column(label="zi, frac.")
+                for _k, title in _COMPOSITION_COLUMNS:
+                    dpg.add_table_column(label=title)
+                for name, zi in comp.composition.items():
+                    with dpg.table_row():
+                        dpg.add_text(name)
+                        dpg.add_text(f"{zi:.5f}")
+                        for key, _title in _COMPOSITION_COLUMNS:
+                            dpg.add_text(self._fmt(data.get(key, {}).get(name)))
+            dpg.add_button(label="Close", callback=lambda: dpg.delete_item(win))
+
+    def _on_delete_model_confirm(self, sender, app_data, user_data) -> None:
+        mid = user_data
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label="Delete model", modal=True, no_resize=True,
+                        width=420, height=140,
+                        pos=(max(0, w // 2 - 210), max(0, h // 2 - 70))) as win:
+            dpg.add_text(f"Delete model '{mid}' from the database?")
+            dpg.add_text("This cannot be undone.")
+            dpg.add_spacer(height=8)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Delete", width=120, user_data=(mid, win),
+                               callback=self._on_delete_model_do)
+                dpg.add_button(label="Cancel", width=120,
+                               callback=lambda: dpg.delete_item(win))
+
+    def _on_delete_model_do(self, sender, app_data, user_data) -> None:
+        mid, win = user_data
+        dpg.delete_item(win)
+        try:
+            ok = proj_svc.delete_model(self._state.db_path, mid)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось удалить модель %s", mid)
+            self._set_status(f"Delete failed: {exc}")
+            return
+        if not ok:
+            self._set_status(f"Model '{mid}' not found.")
+            return
+        # почистить след модели в сессии/выборе
+        if self._session.workspaces:
+            self._session.workspaces.pop(mid, None)
+        if self._session.active_model_id == mid:
+            self._session.active_model_id = None
+        if self._selected_project == mid:
+            self._selected_project = None
+        self._state.refresh_model_list()  # notify -> перерисовка Projects
+        self._set_status(f"Model '{mid}' deleted.")
 
     def _on_back_to_projects(self, sender=None, app_data=None, user_data=None) -> None:
         if self._active_job is not None:
@@ -380,45 +507,79 @@ class PVTcalcApp:
         if not path:
             return
         self._excel_path = path
-        # мини-окно параметров чтения (header/sheet)
+        try:
+            sheets = proj_svc.excel_sheet_names(path)
+        except Exception as exc:  # noqa: BLE001 — не Excel/битый файл
+            logger.exception("Не удалось прочитать Excel %s", path)
+            self._set_status(f"Cannot read Excel file: {exc}")
+            return
+        if not sheets:
+            self._set_status("Excel file has no sheets.")
+            return
+
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
-        with dpg.window(label="Excel import options", modal=True, no_resize=True,
-                        width=470, height=200,
-                        pos=(max(0, w // 2 - 235), max(0, h // 2 - 100))) as win:
-            self._excel_opts = {"win": win}
+        with dpg.window(label="Import composition from Excel", modal=True,
+                        width=760, height=560,
+                        pos=(max(0, w // 2 - 380), max(0, h // 2 - 280))) as win:
+            self._excel_win = win
             dpg.add_text(Path(path).name)
-            self._excel_opts["header"] = dpg.add_checkbox(
-                label="First row is a header", default_value=True,
-                callback=self._on_excel_header_toggle)
-            self._excel_opts["sheet"] = dpg.add_input_text(
-                label="Sheet name", default_value="Sheet1", width=180)
-            dpg.add_text("Note: sheet name is used only when the header is on\n"
-                         "(without a header the first sheet is read).")
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Import", width=120,
-                               callback=self._on_excel_confirm)
+                self._excel_sheet_id = dpg.add_combo(
+                    items=sheets, default_value=sheets[0], width=220,
+                    label="Sheet", callback=lambda: self._render_excel_preview())
+                self._excel_header_id = dpg.add_checkbox(
+                    label="First row is a header", default_value=True,
+                    callback=lambda: self._render_excel_preview())
+            dpg.add_text("Expected: two columns - component name | mole fraction.")
+            self._excel_preview_group = dpg.add_group()
+            dpg.add_separator()
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Load as composition", width=180,
+                               callback=self._on_excel_load)
                 dpg.add_button(label="Cancel", width=120,
                                callback=lambda: dpg.delete_item(win))
+        self._render_excel_preview()
 
-    def _on_excel_header_toggle(self, sender, app_data) -> None:
-        # причуда CompositionExcelLoader: без заголовка sheet игнорируется
-        if dpg.does_item_exist(self._excel_opts.get("sheet", 0)):
-            dpg.configure_item(self._excel_opts["sheet"], enabled=bool(app_data))
+    def _render_excel_preview(self, *args) -> None:
+        grp = self._excel_preview_group
+        if grp is None or not dpg.does_item_exist(grp):
+            return
+        dpg.delete_item(grp, children_only=True)
+        sheet = dpg.get_value(self._excel_sheet_id)
+        header = bool(dpg.get_value(self._excel_header_id))
+        try:
+            prev = proj_svc.excel_preview(self._excel_path, sheet, header)
+        except Exception as exc:  # noqa: BLE001
+            msg = dpg.add_text(f"Cannot preview this sheet: {exc}", parent=grp)
+            dpg.bind_item_theme(msg, self._theme_stale())
+            return
+        dpg.add_text(f"Preview ({sheet})"
+                     + (" - first rows shown" if prev["truncated"] else ""),
+                     parent=grp)
+        with dpg.table(parent=grp, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       scrollY=True, scrollX=True, height=300, freeze_rows=1):
+            for c in prev["columns"]:
+                dpg.add_table_column(label=c)
+            for row in prev["rows"]:
+                with dpg.table_row():
+                    for v in row:
+                        dpg.add_text(v)
 
-    def _on_excel_confirm(self, sender=None, app_data=None, user_data=None) -> None:
-        opts = self._excel_opts
-        header = bool(dpg.get_value(opts["header"]))
-        sheet = dpg.get_value(opts["sheet"])
-        dpg.delete_item(opts["win"])
+    def _on_excel_load(self, sender=None, app_data=None, user_data=None) -> None:
+        sheet = dpg.get_value(self._excel_sheet_id)
+        header = bool(dpg.get_value(self._excel_header_id))
         try:
             res = proj_svc.import_excel(self._excel_path, header, sheet)
-        except Exception as exc:  # noqa: BLE001 — кривой файл/лист/типы
+        except Exception as exc:  # noqa: BLE001 — нечисловые значения/типы
             logger.exception("Импорт Excel не удался")
             self._set_status(f"Excel import failed: {exc}")
             return
         if not res["recognized"]:
             self._set_status("Excel import: no recognized components found.")
             return
+        if self._excel_win and dpg.does_item_exist(self._excel_win):
+            dpg.delete_item(self._excel_win)
         self._new_fluid_form.set_prefill(
             res["recognized"], name=Path(self._excel_path).stem,
             unrecognized=res["unrecognized"])

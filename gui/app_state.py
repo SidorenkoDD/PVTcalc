@@ -264,6 +264,13 @@ class AppState:
                         model_id, model.n_components)
         return model
 
+    def peek_composition(self, model_id: str):
+        """
+        Загружает состав модели «на посмотреть» (read-only), НЕ помещая его в
+        `models` и не меняя активную модель — для предпросмотра на Projects.
+        """
+        return self._repo.load_composition(model_id)
+
     def set_active_model(self, model_id: str) -> None:
         """Делает модель активной (лениво загрузив состав). Вкладки не трогает."""
         self._ensure_loaded(model_id)
