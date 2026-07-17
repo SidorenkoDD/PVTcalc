@@ -20,6 +20,7 @@ from typing import Optional
 from calc_core.Composition.Composition import Composition
 from calc_core.EOS.BaseEOS import EOSType
 from calc_core.Utils.CompositionLoader import CompositionExcelLoader
+from calc_core.Utils.E300Import import parse_e300
 from calc_core.Utils.Export import ModelJSONDB
 from calc_core.Utils.JsonDBReader import JsonDBReader
 
@@ -249,6 +250,85 @@ def import_excel(path: str, header: bool, sheet: str) -> dict:
     logger.info("Excel-импорт %s: %d распознано, %d нет",
                 path, len(recognized), len(unrecognized))
     return {"recognized": recognized, "unrecognized": unrecognized}
+
+
+# --- импорт E300 -------------------------------------------------------------
+
+def _save_composition_as_model(db_path: str, model_id: str, name: str,
+                               composition: Composition, eos_value: str,
+                               t_res: float, field: Optional[str] = None) -> None:
+    """Сохраняет готовый `Composition` как модель (guard базы + бэкап `.bak`)."""
+    p = Path(db_path)
+    db = ModelJSONDB(db_path)
+    if p.exists() and p.stat().st_size > 2 and not db._db:
+        raise RuntimeError(
+            "models database exists but could not be loaded - aborting save "
+            "to avoid data loss")
+    if p.exists():
+        shutil.copyfile(p, str(p) + ".bak")
+    db.export_and_save(model_id, name, composition.composition,
+                       composition.composition_data, eos_value,
+                       results=None, field=field, t_res=float(t_res))
+
+
+def import_e300(db_path: str, path: str, t_res: float = 373.15) -> dict:
+    """
+    Импортирует состав из E300-дека и сохраняет его отдельной моделью.
+
+    Свойства из дека (MW/Tc/Pc/Vc/ω/shift/BIP) переносятся как есть: сначала
+    `evaluate_composition_data` заполняет структуру, затем значения дека
+    перезаписывают её (`edit_component_properties` при Tc/Pc/ω пересчитывает
+    EOS-зависимые коэффициенты — модель остаётся согласованной). Модель
+    создаётся на живом EOS Брусиловского независимо от ключа EOS в деке
+    (в деке это лишь метка Eclipse — MPR/SRK).
+
+    Returns
+    -------
+    dict
+        `{"model_id", "name", "recognized": [...], "unrecognized": [...],
+        "deck_eos": str|None}`.
+    """
+    parsed = parse_e300(path)
+    available = set(_component_db()["available_components"])
+    names = parsed["names"]
+    recognized = [n for n in names if n in available]
+    unrecognized = [n for n in names if n not in available]
+
+    zi_clean = {n: float(parsed["zi"][n]) for n in recognized
+                if float(parsed["zi"].get(n, 0.0)) > 0}
+    if not zi_clean:
+        raise ValueError("E300 deck has no recognized components with a positive fraction")
+
+    name = Path(path).stem
+    model_id = suggest_model_id(name, db_path)
+
+    composition = Composition(zi_clean, T_res=float(t_res), eos_name=EOSType.BRSEOS)
+    composition.normalize_composition()
+    composition.evaluate_composition_data(comp_svc.default_correlations())
+
+    # перенос свойств из дека (только по распознанным компонентам)
+    for data_key, col in parsed["props"].items():
+        for comp_name, val in col.items():
+            if comp_name in zi_clean and val is not None:
+                try:
+                    composition.edit_component_properties(comp_name, data_key, float(val))
+                except KeyError:
+                    logger.warning("E300-импорт: свойство %s недоступно", data_key)
+    # перенос BIP
+    bip = parsed["bip"]
+    rec = list(zi_clean.keys())
+    for ci in rec:
+        for cj in rec:
+            if ci != cj:
+                composition.edit_bip_for_components(
+                    ci, cj, float(bip.get(ci, {}).get(cj, 0.0)))
+
+    _save_composition_as_model(db_path, model_id, name, composition,
+                               str(EOSType.BRSEOS), t_res)
+    logger.info("E300-импорт %s: модель '%s' (%d компонентов, %d нераспознано)",
+                path, model_id, len(recognized), len(unrecognized))
+    return {"model_id": model_id, "name": name, "recognized": recognized,
+            "unrecognized": unrecognized, "deck_eos": parsed["eos"]}
 
 
 # --- сводка «что рассчитано» ------------------------------------------------
