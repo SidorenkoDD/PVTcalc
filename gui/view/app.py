@@ -42,8 +42,6 @@ _STATUS_BAR = "status_bar"
 # статичные контейнеры-экраны (создаются один раз, переключаются show=)
 _PROJECTS_SCREEN = "projects_screen"
 _PROJECTS_CONTENT = "projects_content"
-_NEW_FLUID_SCREEN = "new_fluid_screen"
-_NEW_FLUID_CONTENT = "new_fluid_content"
 _WORKSPACE_SCREEN = "workspace_screen"
 
 _STATUS_H = 28    # высота строки статуса
@@ -99,11 +97,12 @@ class PVTcalcApp:
         self._excel_sheet_id: int | None = None
         self._excel_header_id: int | None = None
         self._excel_preview_group: int | None = None
-        # форма создания нового флюида (экран new_fluid)
+        # форма создания нового флюида — модальное окно
+        self._new_fluid_win: int | None = None
         self._new_fluid_form = NewFluidForm(
             get_db_path=lambda: self._state.db_path,
             on_created=self._on_fluid_created,
-            on_cancel=self._on_back_to_projects,
+            on_cancel=self._close_new_fluid_modal,
             set_status=self._set_status,
         )
         state.subscribe(self._render)
@@ -275,11 +274,6 @@ class PVTcalcApp:
                                   border=False, show=True):
                 dpg.add_group(tag=_PROJECTS_CONTENT)
 
-            # --- экран создания нового флюида ---
-            with dpg.child_window(tag=_NEW_FLUID_SCREEN, height=-_STATUS_H,
-                                  border=False, show=False):
-                dpg.add_group(tag=_NEW_FLUID_CONTENT)
-
             # --- экран рабочего пространства (дерево + вкладки) ---
             with dpg.group(tag=_WORKSPACE_SCREEN, show=False):
                 # таблица-сплиттер: перетаскиваемая граница между деревом и
@@ -312,15 +306,14 @@ class PVTcalcApp:
         screen = self._state.current_screen
         if dpg.does_item_exist(_PROJECTS_SCREEN):
             dpg.configure_item(_PROJECTS_SCREEN, show=(screen == "projects"))
-            dpg.configure_item(_NEW_FLUID_SCREEN, show=(screen == "new_fluid"))
             dpg.configure_item(_WORKSPACE_SCREEN, show=(screen == "workspace"))
         if screen == "projects":
             self._render_projects()
         elif screen == "workspace":
             self._render_tree()
             self._render_workspace()
-        # new_fluid рендерится один раз при входе (не по notify) — форма
-        # держит ввод локально и не должна терять фокус (см. Этап 3)
+        # Форма нового флюида — модальное окно поверх Projects (рендерится один
+        # раз при открытии, не по notify: держит ввод локально, не теряет фокус).
 
     # ==================================================================
     #  Экран Projects (стартовый)
@@ -527,11 +520,29 @@ class PVTcalcApp:
 
     def _on_new_fluid_manual(self, sender=None, app_data=None, user_data=None) -> None:
         self._new_fluid_form.clear_prefill()
-        self._state.show_new_fluid()
-        self._new_fluid_form.render(_NEW_FLUID_CONTENT)
+        self._open_new_fluid_modal()
+
+    def _open_new_fluid_modal(self) -> None:
+        """Открывает форму нового флюида в модальном окне (не на весь экран)."""
+        if self._new_fluid_win and dpg.does_item_exist(self._new_fluid_win):
+            dpg.delete_item(self._new_fluid_win)
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        width, height = 680, max(420, h - 120)
+        with dpg.window(label="New fluid", modal=True, no_collapse=True,
+                        width=width, height=height,
+                        pos=(max(0, w // 2 - width // 2), 60)) as win:
+            self._new_fluid_win = self._track_modal(win)
+            content = dpg.add_group()
+        self._new_fluid_form.render(content)
+
+    def _close_new_fluid_modal(self) -> None:
+        if self._new_fluid_win and dpg.does_item_exist(self._new_fluid_win):
+            dpg.delete_item(self._new_fluid_win)
+        self._new_fluid_win = None
 
     def _on_fluid_created(self, model_id: str) -> None:
-        """Колбэк формы: новая модель сохранена — открыть её в workspace."""
+        """Колбэк формы: новая модель сохранена — закрыть модалку, открыть в workspace."""
+        self._close_new_fluid_modal()
         self._state.refresh_model_list()
         self._restored_models.add(model_id)  # свежая модель, восстанавливать нечего
         self._expanded_models.add(model_id)
@@ -635,8 +646,7 @@ class PVTcalcApp:
         self._new_fluid_form.set_prefill(
             res["recognized"], name=Path(self._excel_path).stem,
             unrecognized=res["unrecognized"])
-        self._state.show_new_fluid()
-        self._new_fluid_form.render(_NEW_FLUID_CONTENT)
+        self._open_new_fluid_modal()
         n_bad = len(res["unrecognized"])
         self._set_status(
             f"Imported {len(res['recognized'])} components from Excel"

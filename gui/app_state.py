@@ -128,7 +128,8 @@ class AppState:
         self.models: dict[str, Model] = {}
         self.active_model_id: Optional[str] = None
         self.active_variant_id: Optional[str] = None
-        # текущий экран: "projects" (стартовый) | "new_fluid" | "workspace"
+        # текущий экран: "projects" (стартовый) | "workspace"
+        # (форма нового флюида — модальное окно поверх Projects, не экран)
         self.current_screen: str = "projects"
         self._listeners: list = []
 
@@ -286,11 +287,6 @@ class AppState:
     def show_projects(self) -> None:
         """Переход на стартовый экран Projects."""
         self.current_screen = "projects"
-        self._notify()
-
-    def show_new_fluid(self) -> None:
-        """Переход на экран создания нового флюида."""
-        self.current_screen = "new_fluid"
         self._notify()
 
     def enter_model(self, model_id: str) -> None:

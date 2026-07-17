@@ -74,11 +74,8 @@ class NewFluidForm:
         self._ovr_ids = {}
         self._corr_ids = {}
 
-        dpg.add_spacer(height=6, parent=parent)
-        with dpg.group(horizontal=True, parent=parent):
-            dpg.add_text("New fluid")
-            dpg.add_button(label="< Back to Projects",
-                           callback=lambda: self._on_cancel())
+        dpg.add_text("Set name, EOS, reservoir T, component fractions, then Create.",
+                     parent=parent)
         dpg.add_separator(parent=parent)
 
         if self._unrecognized:

@@ -108,7 +108,7 @@ def test_enter_model_switches_to_workspace(repo):
     assert events[-1] == "workspace"
 
 
-def test_show_projects_and_new_fluid(repo):
+def test_show_projects_keeps_active_model(repo):
     state = AppState(repo)
     state.refresh_model_list()
     state.enter_model("KRSNL_PVTSIM")
@@ -116,8 +116,6 @@ def test_show_projects_and_new_fluid(repo):
     assert state.current_screen == "projects"
     # активная модель не сбрасывается — «Continue last» и workspace живы
     assert state.active_model_id == "KRSNL_PVTSIM"
-    state.show_new_fluid()
-    assert state.current_screen == "new_fluid"
 
 
 def test_enter_unknown_model_keeps_screen(repo):
