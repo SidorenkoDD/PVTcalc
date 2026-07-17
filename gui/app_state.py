@@ -43,11 +43,12 @@ class NodeStatus(Enum):
 class NodeKind(Enum):
     """Тип узла графа."""
 
-    COMPOSITION = auto()   # корневой узел: состав + свойства
-    FLASH = auto()         # флэш в точке P,T
-    EXPERIMENT = auto()    # PVT-эксперимент (CCE/DLE/Separator), params["kind"]
-    COMPARE = auto()       # сравнение нескольких расчётов (params["members"])
-    # SATURATION / PHASE_ENVELOPE / ... — добавляются позже
+    COMPOSITION = auto()     # корневой узел: состав + свойства
+    FLASH = auto()           # флэш в точке P,T
+    EXPERIMENT = auto()      # PVT-эксперимент (CCE/DLE/Separator), params["kind"]
+    COMPARE = auto()         # сравнение нескольких расчётов (params["members"])
+    PHASE_ENVELOPE = auto()  # фазовая огибающая P-T + крит. точка + пластовое Psat
+    # SATURATION / ... — добавляются позже
 
 
 @dataclass
@@ -86,6 +87,7 @@ class Variant:
     nodes: dict[str, GraphNode] = field(default_factory=dict)
     flash_seq: int = 0                                  # счётчик id флэш-узлов
     exp_seq: int = 0                                    # счётчик id узлов экспериментов
+    env_seq: int = 0                                    # счётчик id узлов фазовой огибающей
     open_node_ids: list[str] = field(default_factory=list)   # вкладки
     active_node_id: Optional[str] = None                # активная вкладка
     # стеки undo/redo (снимки состояния варианта), у каждой модели свои
@@ -99,6 +101,10 @@ class Variant:
     def experiment_runs(self) -> list[GraphNode]:
         """Все узлы-эксперименты варианта в порядке добавления."""
         return [n for n in self.nodes.values() if n.kind is NodeKind.EXPERIMENT]
+
+    def envelope_runs(self) -> list[GraphNode]:
+        """Все узлы фазовой огибающей варианта в порядке добавления."""
+        return [n for n in self.nodes.values() if n.kind is NodeKind.PHASE_ENVELOPE]
 
 
 @dataclass
@@ -487,6 +493,29 @@ class AppState:
         self.open_node(node_id)
         return node_id
 
+    def new_envelope(self, defaults: dict) -> Optional[str]:
+        """
+        Заводит новый узел фазовой огибающей (P-T + крит. точка + пластовое
+        Psat) с параметрами по умолчанию и открывает его вкладку.
+        Возвращает id узла.
+        """
+        variant = self.active_variant
+        if variant is None or self.active_composition is None:
+            return None
+        self._push_undo()
+        variant.env_seq += 1
+        node_id = f"env_{variant.env_seq}"
+        variant.nodes[node_id] = GraphNode(
+            node_id=node_id,
+            kind=NodeKind.PHASE_ENVELOPE,
+            title="Phase envelope",
+            status=NodeStatus.EMPTY,
+            params=dict(defaults),
+            upstream=["composition"],
+        )
+        self.open_node(node_id)
+        return node_id
+
     def open_compare(self, member_ids: list[str]) -> Optional[str]:
         """
         Открывает вкладку сравнения выбранных узлов (единственный узел
@@ -550,11 +579,12 @@ class AppState:
         self._notify()
 
     def _invalidate_flash(self) -> None:
-        """Помечает посчитанные флэши и эксперименты `STALE` при изменении состава."""
+        """Помечает посчитанные флэши/эксперименты/огибающие `STALE` при изменении состава."""
         variant = self.active_variant
         if variant is None:
             return
-        for node in variant.flash_runs() + variant.experiment_runs():
+        for node in (variant.flash_runs() + variant.experiment_runs()
+                     + variant.envelope_runs()):
             if node.status is NodeStatus.FRESH:
                 node.status = NodeStatus.STALE
 

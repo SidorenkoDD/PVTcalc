@@ -25,6 +25,7 @@ from gui.app_state import AppState, NodeKind, NodeStatus
 from gui.services import composition_service as comp_svc
 from gui.services import experiment_service as exp_svc
 from gui.services import flash_service
+from gui.services import phase_envelope_service as pe_svc
 from gui.services import project_service as proj_svc
 from gui.session import SessionState, save_session
 from gui.view.new_fluid_form import NewFluidForm
@@ -47,6 +48,15 @@ _WORKSPACE_SCREEN = "workspace_screen"
 _STATUS_H = 28    # высота строки статуса
 _TREE_W = 320     # ширина левой панели
 _BIP_CELL_W = 60  # ширина ячейки матрицы BIP
+
+# Методы фазовой огибающей (подписи в комбо диалога <-> ключ params["method"])
+_ENV_METHOD_SSM = "SSM (curve)"
+_ENV_METHOD_GRID = "Grid (stability scan)"
+
+
+def _env_method_from_label(label: str) -> str:
+    """Подпись метода из комбо -> ключ метода (`ssm`/`grid`)."""
+    return "grid" if str(label).startswith("Grid") else "ssm"
 
 # Скалярные свойства компонент в таблице состава (ключ -> заголовок колонки).
 _COMPOSITION_COLUMNS: list[tuple[str, str]] = [
@@ -82,6 +92,10 @@ class PVTcalcApp:
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
         self._exp_input_ids: dict[str, dict] = {}
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
+        # модальное окно параметров фазовой огибающей (собирается перед расчётом)
+        self._env_dialog_win: int | None = None
+        self._env_dialog_ids: dict = {}
+        self._env_dialog_node: str | None = None  # None = новый узел, иначе re-run
         # модели, чей workspace уже восстановлен из сессии в этом запуске
         self._restored_models: set[str] = set()
         # стек открытых модальных окон (для закрытия по Esc, верхнее первым)
@@ -749,7 +763,24 @@ class PVTcalcApp:
                                        parent=_MODEL_TREE, user_data=(mid, kind),
                                        callback=self._on_new_experiment)
 
-        dpg.add_text("    Saturation (soon)", parent=_MODEL_TREE)
+        # Phase envelope — категория с историей запусков (P-T огибающая + Psat)
+        pcat_key = f"{mid}:env"
+        pcat_exp = pcat_key in self._expanded_cats
+        env_runs = variant.envelope_runs()
+        dpg.add_selectable(
+            label=f"  {'v' if pcat_exp else '>'} Phase envelope ({len(env_runs)})",
+            parent=_MODEL_TREE, user_data=pcat_key, callback=self._on_cat_toggle)
+        if pcat_exp:
+            for run in env_runs:
+                sel = dpg.add_selectable(
+                    label="      " + self._env_run_leaf_label(run),
+                    parent=_MODEL_TREE,
+                    default_value=(active_nid == run.node_id),
+                    user_data=(mid, run.node_id),
+                    callback=self._on_tree_open_node)
+                self._attach_env_context_menu(sel, run.node_id)
+            dpg.add_selectable(label="      + New envelope", parent=_MODEL_TREE,
+                               user_data=mid, callback=self._on_new_envelope)
 
     # --- обработчики дерева ----------------------------------------------
 
@@ -901,6 +932,48 @@ class PVTcalcApp:
             self._state.new_experiment(node.params["kind"], defaults)
             self._set_status("Experiment duplicated.")
 
+    # --- фазовая огибающая: дерево ----------------------------------------
+
+    def _env_run_leaf_label(self, node) -> str:
+        """Подпись листа огибающей — метод, диапазон T и статус."""
+        p = node.params
+        seq = node.node_id.split("_")[-1]
+        if p.get("method") == "grid":
+            desc = f"grid T=[0..{self._g(p.get('grid_t_max_c'))}]C"
+        else:
+            desc = f"ssm T=[{self._g(p.get('t_min_c'))}..{self._g(p.get('t_max_c'))}]C"
+        core = f"#{seq}  {desc}{self._exp_status_suffix(node)}"
+        label = p.get("label")
+        return f"{label}  ({core})" if label else core
+
+    def _on_new_envelope(self, sender, app_data, user_data) -> None:
+        mid = user_data
+        if mid != self._state.active_model_id:
+            self._state.set_active_model(mid)
+        if self._state.active_composition is None:
+            return
+        self._expanded_cats.add(f"{mid}:env")
+        # параметры собираем во всплывающем окне; узел заводится по «Run»
+        self._open_envelope_dialog(None)
+
+    def _attach_env_context_menu(self, item_id, node_id: str) -> None:
+        with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
+            dpg.add_text("Phase envelope")
+            dpg.add_separator()
+            dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
+                               user_data=node_id, callback=self._on_flash_rename)
+            dpg.add_button(label="Duplicate", width=200, user_data=node_id,
+                           callback=self._on_env_duplicate)
+            dpg.add_button(label="Delete", width=200, user_data=node_id,
+                           callback=self._on_flash_delete)
+
+    def _on_env_duplicate(self, sender, app_data, user_data) -> None:
+        node = self._state.node_by_id(user_data)
+        if node is not None:
+            defaults = {k: v for k, v in node.params.items() if k != "label"}
+            self._state.new_envelope(defaults)
+            self._set_status("Phase envelope duplicated.")
+
     # ==================================================================
     #  Рабочая область (вкладки)
     # ==================================================================
@@ -908,6 +981,9 @@ class PVTcalcApp:
     def _render_workspace(self) -> None:
         if not dpg.does_item_exist(_WORKSPACE):
             return
+        # синхронизировать закрытые крестиком вкладки до пересборки (иначе
+        # они «воскресли» бы из состояния при следующей отрисовке)
+        self._reconcile_closed_tabs()
         dpg.delete_item(_WORKSPACE, children_only=True)
         self._flash_input_ids = {}
         self._exp_input_ids = {}
@@ -937,19 +1013,19 @@ class PVTcalcApp:
                 n = variant.nodes.get(nid)
                 if n is None:
                     continue
-                with dpg.tab(label=self._tab_label(n)) as tab_id:
+                # closable=True -> крестик «×» рядом с названием вкладки
+                with dpg.tab(label=self._tab_label(n), closable=True) as tab_id:
                     self._tab_ids[nid] = tab_id
                     page = dpg.add_group()
-                    with dpg.group(horizontal=True, parent=page):
-                        dpg.add_button(label="x Close", user_data=nid,
-                                       callback=self._on_close_tab)
-                    dpg.add_separator(parent=page)
+                    dpg.add_spacer(height=2, parent=page)
                     if n.kind is NodeKind.COMPOSITION:
                         self._render_composition_tab(page, n)
                     elif n.kind is NodeKind.FLASH:
                         self._render_flash_tab(page, n)
                     elif n.kind is NodeKind.EXPERIMENT:
                         self._render_experiment_tab(page, n)
+                    elif n.kind is NodeKind.PHASE_ENVELOPE:
+                        self._render_envelope_tab(page, n)
                     elif n.kind is NodeKind.COMPARE:
                         self._render_compare_tab(page, n)
 
@@ -959,14 +1035,41 @@ class PVTcalcApp:
             dpg.set_value(self._tabbar_id, self._tab_ids[active])
 
     def _on_tab_changed(self, sender, app_data, user_data=None) -> None:
+        # закрытие вкладки крестиком меняет выбор -> ловим его здесь же
+        if self._reconcile_closed_tabs():
+            self._render_workspace()
+            return
         # app_data — id выбранной вкладки; обратное сопоставление к node_id
         nid = next((k for k, v in self._tab_ids.items() if v == app_data), None)
         if nid is not None:
             self._state.focus_node(nid)
             self._render_tree()  # обновить подсветку без пересборки вкладок
 
-    def _on_close_tab(self, sender, app_data, user_data) -> None:
-        self._state.close_node(user_data)
+    def _reconcile_closed_tabs(self) -> bool:
+        """
+        Синхронизирует состояние с вкладками, закрытыми крестиком (DPG ставит
+        `show=False` или удаляет элемент). Правит `open_node_ids`/`active_node_id`
+        БЕЗ уведомления (вызывается из рендера/коллбэка вкладок). Возвращает
+        True, если что-то закрылось.
+        """
+        variant = self._state.active_variant
+        if variant is None:
+            return False
+        closed = []
+        for nid, tab_id in self._tab_ids.items():
+            if nid not in variant.open_node_ids:
+                continue
+            if (not dpg.does_item_exist(tab_id)
+                    or not dpg.get_item_configuration(tab_id).get("show", True)):
+                closed.append(nid)
+        for nid in closed:
+            idx = variant.open_node_ids.index(nid)
+            variant.open_node_ids.remove(nid)
+            if variant.active_node_id == nid:
+                variant.active_node_id = (
+                    variant.open_node_ids[min(idx, len(variant.open_node_ids) - 1)]
+                    if variant.open_node_ids else None)
+        return bool(closed)
 
     def _tab_label(self, node) -> str:
         if node.kind is NodeKind.COMPOSITION:
@@ -978,6 +1081,8 @@ class PVTcalcApp:
             base = exp_svc.EXPERIMENT_TYPES.get(node.params.get("kind"), {}).get(
                 "label", "Exp")
             return label or f"{base} {node.node_id.split('_')[-1]}"
+        if node.kind is NodeKind.PHASE_ENVELOPE:
+            return node.params.get("label") or f"Envelope {node.node_id.split('_')[-1]}"
         if node.kind is NodeKind.FLASH:
             label = node.params.get("label")
             if label:
@@ -993,6 +1098,8 @@ class PVTcalcApp:
             return f"Compare ({len(node.params.get('members', []))} runs)"
         if node.kind is NodeKind.EXPERIMENT:
             return "Experiments  >  " + self._exp_tree_label(node)
+        if node.kind is NodeKind.PHASE_ENVELOPE:
+            return "Phase envelope  >  " + self._env_run_leaf_label(node)
         if node.kind is NodeKind.FLASH:
             return "Flash  >  " + self._flash_tree_label(node)
         return node.title
@@ -1626,6 +1733,292 @@ class PVTcalcApp:
         return out
 
     # ==================================================================
+    #  Вкладка Phase envelope (P-T огибающая + крит. точка + пластовое Psat)
+    # ==================================================================
+
+    def _render_envelope_tab(self, parent, node) -> None:
+        nid = node.node_id
+        p = node.params
+        running = node.status is NodeStatus.RUNNING
+
+        # параметры — read-only сводка (правятся во всплывающем окне)
+        if p.get("method") == "grid":
+            dpg.add_text("Phase envelope (P-T): thermodynamic stability scan on "
+                         "a P-T grid.", parent=parent)
+            summary = (f"Grid: T = [0 .. {self._g(p.get('grid_t_max_c'))}] C, "
+                       f"P = [1 .. {self._g(p.get('grid_p_max_bar'))}] bar, "
+                       f"{self._g(p.get('grid_t_points'))}x{self._g(p.get('grid_p_points'))} points")
+        else:
+            dpg.add_text("Phase envelope (P-T): saturation curve (SSM) + reservoir "
+                         "saturation pressure.", parent=parent)
+            summary = (f"SSM: T = [{self._g(p.get('t_min_c'))} .. {self._g(p.get('t_max_c'))}] C, "
+                       f"step {self._g(p.get('t_step_c'))} C    |    "
+                       f"P max = {self._g(p.get('p_max_bar'))} bar")
+        dpg.add_text(summary, parent=parent)
+        tres = p.get("T_res_c")
+        if tres is not None:
+            dpg.add_text(f"Reservoir T = {self._g(tres)} C (Psat marker)", parent=parent)
+
+        with dpg.group(horizontal=True, parent=parent):
+            if running:
+                dpg.add_loading_indicator(style=1, radius=2.0)
+                dpg.add_button(label="Cancel", user_data=nid,
+                               callback=self._on_flash_cancel)
+            else:
+                dpg.add_button(label="Edit parameters & run...", user_data=nid,
+                               callback=self._on_envelope_edit)
+        if running:
+            dpg.add_text("Computing envelope (this may take up to a minute)...",
+                         parent=parent)
+        if node.status is NodeStatus.STALE and node.error:
+            err = dpg.add_text(f"Error: {node.error}", parent=parent)
+            dpg.bind_item_theme(err, self._theme_stale())
+        elif node.status is NodeStatus.STALE and node.result is not None:
+            st = dpg.add_text("Result is stale (composition changed) - re-run.",
+                              parent=parent)
+            dpg.bind_item_theme(st, self._theme_stale())
+
+        if node.result is not None:
+            dpg.add_separator(parent=parent)
+            with dpg.tab_bar(parent=parent):
+                with dpg.tab(label="Chart") as t:
+                    self._render_envelope_chart(node.result, t)
+                with dpg.tab(label="Data") as t:
+                    self._render_envelope_table(node.result, t)
+
+    def _render_envelope_chart(self, result, parent) -> None:
+        res = result.get("reservoir")
+        if result.get("method") == "grid":
+            grid = result.get("grid", {})
+            uns, sta = grid.get("unstable", {}), grid.get("stable", {})
+            all_p = [v for v in (uns.get("P", []) + sta.get("P", [])) if v is not None]
+        else:
+            env = result.get("envelope", {})
+            all_p = [v for v in env.get("P", []) if v is not None]
+        if res and res.get("P_sat") is not None:
+            all_p.append(res["P_sat"])
+        if not all_p:
+            dpg.add_text("No envelope data - try a wider range or higher P max.",
+                         parent=parent)
+            return
+        p_hi = max(all_p) * 1.05
+
+        # фиксированная высота — надёжнее, чем height=-1 во вложенном таб-баре
+        with dpg.plot(label="Phase envelope (P-T)", height=520, width=-1, parent=parent):
+            dpg.add_plot_legend()
+            dpg.add_plot_axis(dpg.mvXAxis, label="Temperature, C")
+            yax = dpg.add_plot_axis(dpg.mvYAxis, label="Pressure, bar")
+            if result.get("method") == "grid":
+                if sta.get("T"):
+                    dpg.add_scatter_series(sta["T"], sta["P"],
+                                           label="Single-phase (stable)", parent=yax)
+                if uns.get("T"):
+                    dpg.add_scatter_series(uns["T"], uns["P"],
+                                           label="Two-phase (unstable)", parent=yax)
+            else:
+                if env.get("T"):
+                    dpg.add_line_series(env["T"], env["P"],
+                                        label="Phase envelope", parent=yax)
+            self._envelope_reservoir_overlay(res, p_hi, yax)
+
+    def _envelope_reservoir_overlay(self, res, p_hi, yax) -> None:
+        """Вертикаль пластовой T + маркер Psat (если посчитан) на графике огибающей."""
+        if not res or res.get("T_c") is None:
+            return
+        tr = res["T_c"]
+        dpg.add_line_series([tr, tr], [0.0, p_hi],
+                            label=f"Reservoir T={self._g(tr)}C", parent=yax)
+        if res.get("P_sat") is not None:
+            dpg.add_scatter_series(
+                [tr], [res["P_sat"]],
+                label=f"Reservoir Psat={self._g(res['P_sat'])} bar", parent=yax)
+
+    def _render_envelope_table(self, result, parent) -> None:
+        tbl = result.get("table", {})
+        cols = tbl.get("columns", [])
+        rows = tbl.get("rows", [])
+        if not cols:
+            dpg.add_text("No data.", parent=parent)
+            return
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, scrollX=True, height=-1,
+                       freeze_rows=1, freeze_columns=1):
+            for c in cols:
+                dpg.add_table_column(label=c)
+            for row in rows:
+                with dpg.table_row():
+                    for v in row:
+                        dpg.add_text(self._fmt(v))
+
+    # --- всплывающее окно параметров огибающей ----------------------------
+
+    def _on_envelope_edit(self, sender, app_data, user_data) -> None:
+        """«Edit parameters & run…» на вкладке — открыть диалог для узла."""
+        self._open_envelope_dialog(user_data)
+
+    def _open_envelope_dialog(self, node_id) -> None:
+        """
+        Модальное окно параметров огибающей перед расчётом. `node_id=None` —
+        параметры нового узла (создаётся по «Run»); иначе — правка/пересчёт
+        существующего узла.
+        """
+        composition = self._state.active_composition
+        if composition is None:
+            return
+        if node_id is not None and self._state.node_by_id(node_id) is not None:
+            params = dict(self._state.node_by_id(node_id).params)
+            title = "Phase envelope - edit & run"
+        else:
+            node_id = None
+            params = pe_svc.default_envelope_params(composition)
+            title = "New phase envelope"
+
+        method = params.get("method", "ssm")
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label=title, modal=True, no_resize=True, no_collapse=True,
+                        width=380, height=340,
+                        pos=(max(0, w // 2 - 190), max(0, h // 2 - 170))) as win:
+            self._track_modal(win)
+            self._env_dialog_win = win
+            self._env_dialog_node = node_id
+            ids: dict = {}
+            ids["method"] = dpg.add_combo(
+                items=[_ENV_METHOD_SSM, _ENV_METHOD_GRID], width=220, label="Method",
+                default_value=(_ENV_METHOD_GRID if method == "grid" else _ENV_METHOD_SSM),
+                callback=self._on_env_method_changed)
+            dpg.add_separator()
+
+            # SSM: марш по температуре (кривая)
+            with dpg.group(show=(method == "ssm")) as ssm_grp:
+                dpg.add_text("Temperature march + pressure cap:")
+                ids["t_min_c"] = dpg.add_input_float(
+                    label="T min, C", width=150, step=0,
+                    default_value=float(params.get("t_min_c", -100.0)))
+                ids["t_max_c"] = dpg.add_input_float(
+                    label="T max, C", width=150, step=0,
+                    default_value=float(params.get("t_max_c", 200.0)))
+                ids["t_step_c"] = dpg.add_input_float(
+                    label="T step, C", width=150, step=0,
+                    default_value=float(params.get("t_step_c", 10.0)))
+                ids["p_max_bar"] = dpg.add_input_float(
+                    label="P max, bar", width=150, step=0,
+                    default_value=float(params.get("p_max_bar", 700.0)))
+            ids["_ssm_grp"] = ssm_grp
+
+            # Grid: скан стабильности P×T (T идёт от 0 °C)
+            with dpg.group(show=(method == "grid")) as grid_grp:
+                dpg.add_text("Stability scan grid (T from 0 C, P from 1 bar):")
+                ids["grid_t_max_c"] = dpg.add_input_float(
+                    label="T max, C", width=150, step=0,
+                    default_value=float(params.get("grid_t_max_c", 300.0)))
+                ids["grid_p_max_bar"] = dpg.add_input_float(
+                    label="P max, bar", width=150, step=0,
+                    default_value=float(params.get("grid_p_max_bar", 700.0)))
+                ids["grid_t_points"] = dpg.add_input_int(
+                    label="T points", width=150, step=0,
+                    default_value=int(params.get("grid_t_points", 30)))
+                ids["grid_p_points"] = dpg.add_input_int(
+                    label="P points", width=150, step=0,
+                    default_value=int(params.get("grid_p_points", 30)))
+            ids["_grid_grp"] = grid_grp
+
+            self._env_dialog_ids = ids
+            dpg.add_separator()
+            tres = params.get("T_res_c")
+            if tres is not None:
+                dpg.add_text(f"Reservoir T = {self._g(tres)} C (Psat marker)")
+            dpg.add_spacer(height=4)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Run", width=110,
+                               callback=self._on_envelope_dialog_run)
+                dpg.add_button(label="Cancel", width=110,
+                               callback=lambda: dpg.delete_item(win))
+
+    def _on_env_method_changed(self, sender, app_data) -> None:
+        """Переключает видимые поля диалога под выбранный метод."""
+        method = _env_method_from_label(app_data)
+        ids = self._env_dialog_ids
+        if dpg.does_item_exist(ids.get("_ssm_grp", 0)):
+            dpg.configure_item(ids["_ssm_grp"], show=(method == "ssm"))
+        if dpg.does_item_exist(ids.get("_grid_grp", 0)):
+            dpg.configure_item(ids["_grid_grp"], show=(method == "grid"))
+
+    def _on_envelope_dialog_run(self, sender, app_data, user_data) -> None:
+        if self._active_job is not None:
+            self._set_status("Another calculation is already running.")
+            return
+        composition = self._state.active_composition
+        if composition is None:
+            return
+        ids = self._env_dialog_ids
+        node_id = self._env_dialog_node
+        method = _env_method_from_label(dpg.get_value(ids["method"]))
+        # стартуем от полного набора параметров (сохраняем поля второго метода)
+        base = (pe_svc.default_envelope_params(composition) if node_id is None
+                else dict(self._state.node_by_id(node_id).params))
+        params = dict(base)
+        params["method"] = method
+        try:
+            if method == "grid":
+                params["grid_t_max_c"] = float(dpg.get_value(ids["grid_t_max_c"]))
+                params["grid_p_max_bar"] = float(dpg.get_value(ids["grid_p_max_bar"]))
+                params["grid_t_points"] = int(dpg.get_value(ids["grid_t_points"]))
+                params["grid_p_points"] = int(dpg.get_value(ids["grid_p_points"]))
+                if params["grid_t_max_c"] <= 0 or params["grid_p_max_bar"] <= 0:
+                    raise ValueError("T max and P max must be positive")
+                if params["grid_t_points"] < 2 or params["grid_p_points"] < 2:
+                    raise ValueError("need at least 2 grid points per axis")
+            else:
+                params["t_min_c"] = float(dpg.get_value(ids["t_min_c"]))
+                params["t_max_c"] = float(dpg.get_value(ids["t_max_c"]))
+                params["t_step_c"] = float(dpg.get_value(ids["t_step_c"]))
+                params["p_max_bar"] = float(dpg.get_value(ids["p_max_bar"]))
+                if params["t_max_c"] <= params["t_min_c"]:
+                    raise ValueError("T max must be greater than T min")
+                if params["t_step_c"] <= 0:
+                    raise ValueError("T step must be positive")
+                if params["p_max_bar"] <= 0:
+                    raise ValueError("P max must be positive")
+        except (ValueError, KeyError) as exc:
+            self._set_status(f"Invalid input: {exc}")
+            return
+
+        if node_id is None:
+            node_id = self._state.new_envelope(params)
+        else:
+            self._state.node_by_id(node_id).params.update(params)
+
+        if dpg.does_item_exist(self._env_dialog_win):
+            dpg.delete_item(self._env_dialog_win)
+        self._start_envelope_job(node_id)
+
+    def _start_envelope_job(self, nid: str) -> None:
+        """Запускает расчёт огибающей узла `nid` в воркер-потоке (прогресс/отмена)."""
+        node = self._state.node_by_id(nid)
+        composition = self._state.active_composition
+        if node is None or composition is None:
+            return
+        params = dict(node.params)
+
+        holder = {"result": None, "error": None, "done": threading.Event()}
+        self._active_job = {"holder": holder, "cancelled": False, "node_id": nid}
+        self._state.set_node_running(nid)
+
+        def worker() -> None:
+            try:
+                holder["result"] = pe_svc.run_envelope(composition, params)
+            except Exception as exc:  # noqa: BLE001
+                holder["error"] = str(exc)
+                logger.exception("Расчёт фазовой огибающей не удался")
+            finally:
+                holder["done"].set()
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._set_status("Phase envelope running...")
+        self._arm_flash_poll()
+
+    # ==================================================================
     #  Вспомогательное
     # ==================================================================
 
@@ -1702,6 +2095,12 @@ class PVTcalcApp:
             if nid and e.get("result"):
                 self._state.set_node_result(nid, e["result"])
 
+        # воссоздать фазовые огибающие (id env_1, env_2, … совпадут)
+        for e in ws.get("envelopes", []):
+            nid = self._state.new_envelope(e.get("params", {}))
+            if nid and e.get("result"):
+                self._state.set_node_result(nid, e["result"])
+
         # восстановить открытые вкладки / активную
         open_tabs = ws.get("open_tabs")
         if open_tabs is not None:
@@ -1738,11 +2137,18 @@ class PVTcalcApp:
                 "params": dict(run.params),
                 "result": run.result if run.status is NodeStatus.FRESH else None,
             })
+        envelopes: list = []
+        for run in variant.envelope_runs():
+            envelopes.append({
+                "params": dict(run.params),
+                "result": run.result if run.status is NodeStatus.FRESH else None,
+            })
         return {
             "open_tabs": list(variant.open_node_ids),
             "active_tab": variant.active_node_id,
             "flashes": flashes,
             "experiments": experiments,
+            "envelopes": envelopes,
         }
 
     def _persist_session(self) -> None:
