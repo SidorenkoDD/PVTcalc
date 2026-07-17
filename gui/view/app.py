@@ -86,6 +86,8 @@ class PVTcalcApp:
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
         # модели, чей workspace уже восстановлен из сессии в этом запуске
         self._restored_models: set[str] = set()
+        # стек открытых модальных окон (для закрытия по Esc, верхнее первым)
+        self._modals: list[int] = []
         # экран Projects: выбранная модель + распознавание двойного клика
         self._selected_project: str | None = None
         self._proj_row_ids: dict[str, int] = {}
@@ -155,6 +157,53 @@ class PVTcalcApp:
                 dpg, "mvKey_KeyPadEnter", None)
             if npad is not None:
                 dpg.add_key_press_handler(npad, callback=self._on_key_enter)
+            dpg.add_key_press_handler(dpg.mvKey_Escape, callback=self._on_key_escape)
+            dpg.add_key_press_handler(dpg.mvKey_Up, callback=self._on_key_up)
+            dpg.add_key_press_handler(dpg.mvKey_Down, callback=self._on_key_down)
+
+    # --- модальные окна (закрытие по Esc) -------------------------------
+
+    def _track_modal(self, win: int) -> int:
+        """Регистрирует модальное окно в стеке для закрытия по Esc. Возвращает id."""
+        self._modals.append(win)
+        return win
+
+    def _has_open_modal(self) -> bool:
+        return any(dpg.does_item_exist(w) for w in self._modals)
+
+    def _on_key_escape(self, sender, app_data) -> None:
+        """Esc закрывает верхнее открытое модальное окно."""
+        while self._modals:
+            win = self._modals[-1]
+            if dpg.does_item_exist(win):
+                dpg.delete_item(win)
+                self._modals.pop()
+                return
+            self._modals.pop()
+
+    def _on_key_up(self, sender, app_data) -> None:
+        self._project_move_selection(-1)
+
+    def _on_key_down(self, sender, app_data) -> None:
+        self._project_move_selection(+1)
+
+    def _project_move_selection(self, delta: int) -> None:
+        """Стрелки ↑/↓ двигают выбор в таблице проектов (когда нет модалок)."""
+        if self._state.current_screen != "projects" or self._has_open_modal():
+            return
+        ids = list(self._proj_row_ids.keys())
+        if not ids:
+            return
+        if self._selected_project in ids:
+            i = min(len(ids) - 1, max(0, ids.index(self._selected_project) + delta))
+        else:
+            i = 0
+        mid = ids[i]
+        self._selected_project = mid
+        for m, sid in self._proj_row_ids.items():
+            if dpg.does_item_exist(sid):
+                dpg.set_value(sid, m == mid)
+        self._set_status(f"Selected '{mid}' (double-click or Enter to open).")
 
     @staticmethod
     def _ctrl_down() -> bool:
@@ -191,8 +240,8 @@ class PVTcalcApp:
             self._do_redo()
 
     def _on_key_enter(self, sender, app_data) -> None:
-        # Enter на странице Projects открывает выбранную модель
-        if self._state.current_screen != "projects":
+        # Enter на странице Projects открывает выбранную модель (не при модалке)
+        if self._state.current_screen != "projects" or self._has_open_modal():
             return
         mid = self._selected_project
         if mid and mid in self._state.models:
@@ -415,6 +464,7 @@ class PVTcalcApp:
         with dpg.window(label=f"Composition (read-only) - {mid}", modal=True,
                         width=720, height=560,
                         pos=(max(0, w // 2 - 360), max(0, h // 2 - 280))) as win:
+            self._track_modal(win)
             data = comp.composition_data
             with dpg.table(header_row=True, borders_innerH=True, borders_outerH=True,
                            borders_innerV=True, borders_outerV=True,
@@ -437,6 +487,7 @@ class PVTcalcApp:
         with dpg.window(label="Delete model", modal=True, no_resize=True,
                         width=420, height=140,
                         pos=(max(0, w // 2 - 210), max(0, h // 2 - 70))) as win:
+            self._track_modal(win)
             dpg.add_text(f"Delete model '{mid}' from the database?")
             dpg.add_text("This cannot be undone.")
             dpg.add_spacer(height=8)
@@ -496,6 +547,7 @@ class PVTcalcApp:
             width=720, height=440,
             callback=self._on_excel_file_chosen,
             cancel_callback=lambda s, a: dpg.delete_item(s))
+        self._track_modal(dialog)
         dpg.add_file_extension(".xlsx", parent=dialog)
         dpg.add_file_extension(".xls", parent=dialog)
         dpg.add_file_extension(".*", parent=dialog)
@@ -521,7 +573,7 @@ class PVTcalcApp:
         with dpg.window(label="Import composition from Excel", modal=True,
                         width=760, height=560,
                         pos=(max(0, w // 2 - 380), max(0, h // 2 - 280))) as win:
-            self._excel_win = win
+            self._excel_win = self._track_modal(win)
             dpg.add_text(Path(path).name)
             with dpg.group(horizontal=True):
                 self._excel_sheet_id = dpg.add_combo(
