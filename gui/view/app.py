@@ -660,7 +660,12 @@ class PVTcalcApp:
         self._new_fluid_form.set_prefill(
             res["recognized"], name=Path(self._excel_path).stem,
             unrecognized=res["unrecognized"])
-        self._open_new_fluid_modal()
+        # Открыть форму на СЛЕДУЮЩЕМ кадре: новая modal-модалка, созданная в
+        # том же кадре, где закрыли предыдущую (Excel-предпросмотр), у ImGui
+        # остаётся скрытой (OpenPopup не срабатывает, пока закрывается старый
+        # popup) — из-за этого форма «не появлялась» после загрузки из листа.
+        dpg.set_frame_callback(dpg.get_frame_count() + 1,
+                               lambda *_: self._open_new_fluid_modal())
         n_bad = len(res["unrecognized"])
         self._set_status(
             f"Imported {len(res['recognized'])} components from Excel"
