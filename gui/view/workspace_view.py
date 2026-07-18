@@ -53,9 +53,10 @@ class WorkspaceViewMixin(ContextBoundView):
                 user_data=model.model_id, callback=self._on_model_row,
             )
             self._attach_model_context_menu(sel, model.model_id)
-            # Раскрываем узлы только уже загруженной моделью; клик по корню
-            # неактивной модели сначала делает её активной и лениво загружает.
-            if expanded and model.loaded and model.model_id == self._state.active_model_id:
+            # Раскрываем узлы каждой раскрытой и уже загруженной модели. Активна
+            # при этом только одна модель, но несколько корней могут оставаться
+            # раскрытыми одновременно — как в обычном IDE-дереве.
+            if expanded and model.loaded:
                 self._render_model_children(model)
 
     def _render_model_children(self, model) -> None:
@@ -166,16 +167,19 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_model_row(self, sender, app_data, user_data) -> None:
         mid = user_data
-        if mid != self._state.active_model_id:
-            self._expanded_models.add(mid)
-            self._state.set_active_model(mid, notify=False)
-            self._restore_workspace(mid)
-            self._state.notify(StateChange(StateChangeKind.NAVIGATION))
-            return
+        # Один клик по корню всегда переключает его состояние раскрытия. Ранее
+        # для неактивной модели первый клик только активировал её, а схлопывание
+        # происходило лишь вторым кликом — это выглядело как запаздывающие
+        # стрелки.
         if mid in self._expanded_models:
             self._expanded_models.discard(mid)
         else:
             self._expanded_models.add(mid)
+        if mid != self._state.active_model_id:
+            self._state.set_active_model(mid, notify=False)
+            self._restore_workspace(mid)
+            self._state.notify(StateChange(StateChangeKind.NAVIGATION))
+            return
         self._render_tree()
 
     def _on_cat_toggle(self, sender, app_data, user_data) -> None:
