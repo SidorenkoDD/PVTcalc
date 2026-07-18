@@ -191,8 +191,13 @@ def duplicate_model(db_path: str, source_id: str, *, new_id: str | None = None,
                                 if key != "results"})
         copy_record["Model_name"] = name
         project_id = source.get("project_id")
-        copy_record["project_id"] = (project_id if isinstance(project_id, str)
-                                      and project_id else source_id)
+        copy_record["project_id"] = (project_id.strip()
+                                      if isinstance(project_id, str)
+                                      and project_id.strip() else source_id)
+        project_name = source.get("project_name")
+        copy_record["project_name"] = (project_name if isinstance(project_name, str)
+                                        and project_name.strip()
+                                        else source.get("Model_name") or source_id)
         copy_record["created_at"] = now
         copy_record["updated_at"] = now
         copy_record["results"] = []
@@ -270,7 +275,8 @@ def create_model(db_path: str, model_id: str, name: str, field: Optional[str],
     db.export_and_save(model_id, name, composition.composition,
                        composition.composition_data, str(eos_value),
                        results=None, field=field or None, t_res=float(t_res),
-                       correlations=selected_correlations)
+                       correlations=selected_correlations,
+                       project_id=model_id, project_name=name)
     logger.info("Модель '%s' создана и сохранена в %s", model_id, db_path)
     return model_id
 
@@ -299,6 +305,46 @@ def delete_model(db_path: str, model_id: str) -> bool:
         return False
     logger.info("Модель '%s' удалена из %s", model_id, db_path)
     return True
+
+
+def delete_project(db_path: str, project_id: str) -> bool:
+    """Удаляет проект вместе со всеми его моделями.
+
+    Для старых записей без ``project_id`` используется сам ключ модели как
+    идентификатор проекта. Поэтому операция безопасна и для старого формата,
+    где каждая модель фактически была отдельным проектом.
+    """
+    project_key = str(project_id).strip()
+    if not project_key or not Path(db_path).exists():
+        return False
+
+    removed = 0
+
+    class _ProjectNotFound(Exception):
+        pass
+
+    def remove(data) -> None:
+        nonlocal removed
+        for model_id, record in list(data.items()):
+            record_project = (record.get("project_id") if isinstance(record, dict)
+                              else None)
+            effective_project = (record_project.strip()
+                                 if isinstance(record_project, str)
+                                 and record_project.strip() else model_id)
+            if effective_project == project_key:
+                del data[model_id]
+                removed += 1
+        if not removed:
+            raise _ProjectNotFound
+
+    try:
+        update_model_store(db_path, remove)
+    except _ProjectNotFound:
+        return False
+    if removed:
+        logger.info("Проект '%s' удалён вместе с %d моделями из %s",
+                    project_key, removed, db_path)
+    return bool(removed)
 
 
 # --- импорт Excel ------------------------------------------------------------
@@ -359,7 +405,8 @@ def _save_composition_as_model(db_path: str, model_id: str, name: str,
     db.export_and_save(model_id, name, composition.composition,
                        composition.composition_data, eos_value,
                        results=None, field=field, t_res=float(t_res),
-                       correlations=correlations or comp_svc.default_correlations())
+                       correlations=correlations or comp_svc.default_correlations(),
+                       project_id=model_id, project_name=name)
 
 
 def preview_e300(path: str) -> dict:

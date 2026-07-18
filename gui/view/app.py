@@ -106,7 +106,7 @@ class PVTcalcApp(
         self._restored_models: set[str] = set()
         # стек открытых модальных окон (для закрытия по Esc, верхнее первым)
         self._modals: list[int] = []
-        # экран Projects: выбранная модель + распознавание двойного клика
+        # экран Projects: выбранный проект + распознавание двойного клика
         self._selected_project: str | None = None
         self._proj_row_ids: dict[str, int] = {}
         self._last_proj_click: str | None = None
@@ -122,7 +122,7 @@ class PVTcalcApp(
         self._e300_win: int | None = None
         # форма создания нового флюида — модальное окно
         self._new_fluid_win: int | None = None
-        # модальное окно копирования модели из Projects
+        # модальное окно копирования модели из рабочего дерева
         self._duplicate_win: int | None = None
         self._duplicate_ids: dict[str, int] = {}
         self._new_fluid_form = NewFluidForm(
@@ -284,9 +284,9 @@ class PVTcalcApp(
         # Enter на странице Projects открывает выбранную модель (не при модалке)
         if self._state.current_screen != "projects" or self._has_open_modal():
             return
-        mid = self._selected_project
-        if mid and mid in self._state.models:
-            self._open_project(mid)
+        project_id = self._selected_project
+        if project_id and project_id in self._state.projects:
+            self._open_project(project_id)
 
     def _do_undo(self) -> None:
         if self._state.can_undo():
@@ -530,6 +530,7 @@ class PVTcalcApp(
         return snapshot_workspace(variant)
 
     def _persist_session(self) -> None:
+        self._session.active_project_id = self._state.active_project_id
         self._session.active_model_id = self._state.active_model_id
         try:
             self._session.window_width = dpg.get_viewport_width()

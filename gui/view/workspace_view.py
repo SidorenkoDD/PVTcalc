@@ -39,9 +39,9 @@ class WorkspaceViewMixin(ContextBoundView):
         if not models:
             dpg.add_text("No models in this project.", parent=_MODEL_TREE)
             return
-        dpg.add_text("Models in project" +
-                     (f" ({project_id})" if project_id else ""),
-                     parent=_MODEL_TREE)
+        project = self._state.projects.get(project_id) if project_id else None
+        project_label = project.title if project else (project_id or "Current")
+        dpg.add_text(f"Models in project: {project_label}", parent=_MODEL_TREE)
         for model in models:
             expanded = model.model_id in self._expanded_models
             arrow = "v " if expanded else "> "
@@ -154,9 +154,13 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _attach_model_context_menu(self, item_id, model_id: str) -> None:
         """Контекстные действия корневого узла модели в рабочем дереве."""
+        model = self._state.models.get(model_id)
         with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
-            dpg.add_text(model_id)
+            dpg.add_text(model.title if model else model_id)
             dpg.add_separator()
+            dpg.add_menu_item(label="View composition (read-only)",
+                              user_data=model_id,
+                              callback=self._on_view_composition)
             dpg.add_menu_item(label="Duplicate model...", user_data=model_id,
                               callback=self._on_duplicate_model_confirm)
 

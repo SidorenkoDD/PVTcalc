@@ -41,12 +41,14 @@ def test_session_v2_workspaces_roundtrip(tmp_path):
     ws = {"open_tabs": ["composition", "flash_1"], "active_tab": "flash_1",
           "flashes": [{"P": 50.0, "T": 20.0, "result": {"is_two_phase": True}}],
           "experiments": []}
-    original = SessionState(active_model_id="KRSNL_PVTSIM", window_width=1000,
+    original = SessionState(active_project_id="PVT_PROJECT",
+                            active_model_id="KRSNL_PVTSIM", window_width=1000,
                             workspaces={"KRSNL_PVTSIM": ws, "OTHER": {"flashes": []}})
     save_session(original, path)
     loaded = load_session(path)
 
     assert loaded.version == 3
+    assert loaded.active_project_id == "PVT_PROJECT"
     assert loaded.active_model_id == "KRSNL_PVTSIM"
     assert loaded.workspaces["KRSNL_PVTSIM"]["active_tab"] == "flash_1"
     assert loaded.workspaces["KRSNL_PVTSIM"]["flashes"][0]["P"] == 50.0

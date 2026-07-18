@@ -31,8 +31,8 @@ class SessionState:
     workspace содержит общий список сериализованных узлов, открытые вкладки,
     активную вкладку и состояние сравнения. Формат v2 также читается —
     каждая модель помнит свои вкладки и расчёты; восстановление происходит
-    при входе в модель со страницы Projects. `active_model_id` — последняя
-    активная модель (для строки «Continue last»).
+    при входе в модель со страницы Projects. `active_project_id` — последний
+    проект, а `active_model_id` — последняя активная модель внутри него.
 
     Поля `open_tabs`/`active_tab`/`flashes`/`experiments` — legacy v1
     (workspace одной активной модели); при загрузке мигрируются в
@@ -40,6 +40,7 @@ class SessionState:
     """
 
     version: int = 3
+    active_project_id: Optional[str] = None
     active_model_id: Optional[str] = None
     window_width: int = 1280
     window_height: int = 800
@@ -86,6 +87,7 @@ def load_session(path: str = DEFAULT_SESSION_PATH) -> SessionState:
             }
         state = SessionState(
             version=3,
+            active_project_id=optional_str(data.get("active_project_id")),
             active_model_id=optional_str(data.get("active_model_id")),
             window_width=window_size(data.get("window_width"), 1280),
             window_height=window_size(data.get("window_height"), 800),

@@ -153,6 +153,15 @@ class Model:
     summary: Optional[ModelSummary] = None
 
 
+@dataclass(frozen=True)
+class Project:
+    """Проект первого уровня, объединяющий несколько моделей-вариантов."""
+
+    project_id: str
+    title: str
+    model_ids: tuple[str, ...] = ()
+
+
 class AppState:
     """
     Корень состояния приложения. Держит список моделей проекта и активный
@@ -163,6 +172,7 @@ class AppState:
     def __init__(self, repository: ModelRepository):
         self._repo = repository
         self.models: dict[str, Model] = {}
+        self.projects: dict[str, Project] = {}
         self.model_list_error: str | None = None
         self.active_model_id: Optional[str] = None
         self.active_project_id: Optional[str] = None
@@ -312,6 +322,7 @@ class AppState:
             # Оставляем Projects работоспособным и показываем диагностический
             # баннер; запись намеренно не пытаемся "починить" автоматически.
             self.models = {}
+            self.projects = {}
             self.active_model_id = None
             self.active_project_id = None
             self.active_variant_id = None
@@ -323,6 +334,8 @@ class AppState:
         self.model_list_error = None
         existing = self.models
         self.models = {}
+        grouped_ids: dict[str, list[str]] = {}
+        grouped_titles: dict[str, str] = {}
         for s in summaries:
             prev = existing.get(s.model_id)
             model = Model(
@@ -339,6 +352,16 @@ class AppState:
                 model.variants = prev.variants
                 model.dirty = prev.dirty
             self.models[s.model_id] = model
+            project_id = model.project_id or model.model_id
+            grouped_ids.setdefault(project_id, []).append(model.model_id)
+            grouped_titles.setdefault(project_id,
+                                       s.project_name or model.title)
+        self.projects = {
+            project_id: Project(project_id=project_id,
+                                title=grouped_titles[project_id],
+                                model_ids=tuple(model_ids))
+            for project_id, model_ids in grouped_ids.items()
+        }
         if self.active_model_id not in self.models:
             self.active_model_id = None
             self.active_project_id = None

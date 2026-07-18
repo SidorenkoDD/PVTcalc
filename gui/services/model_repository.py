@@ -38,6 +38,7 @@ class ModelSummary:
     created_at: Optional[str] = None
     t_res: Optional[float] = None
     project_id: Optional[str] = None
+    project_name: Optional[str] = None
     # лёгкий срез results из models.json (без data): [{"module", "timestamp"}]
     results_brief: tuple = ()
 
@@ -82,8 +83,13 @@ class ModelRepository:
             )
             t_res = rec.get("T_res")
             project_id = rec.get("project_id")
-            if not isinstance(project_id, str) or not project_id:
+            if not isinstance(project_id, str) or not project_id.strip():
                 project_id = model_id
+            else:
+                project_id = project_id.strip()
+            project_name = rec.get("project_name")
+            if not isinstance(project_name, str) or not project_name.strip():
+                project_name = rec.get("Model_name") or model_id
             summaries.append(
                 ModelSummary(
                     model_id=model_id,
@@ -94,6 +100,7 @@ class ModelRepository:
                     created_at=rec.get("created_at"),
                     t_res=float(t_res) if t_res is not None else None,
                     project_id=project_id,
+                    project_name=project_name,
                     results_brief=results_brief,
                 )
             )

@@ -66,6 +66,7 @@ def test_duplicate_model_uses_unique_name_and_resets_results(tmp_path):
     assert data[copy_id]["composition"] == data["A"]["composition"]
     assert data[copy_id]["correlations"] == data["A"]["correlations"]
     assert data[copy_id]["project_id"] == "A"
+    assert data[copy_id]["project_name"] == "Original"
     assert data[copy_id]["results"] == []
     assert data[copy_id]["created_at"] != data["A"]["created_at"]
 
@@ -232,6 +233,20 @@ def test_delete_model(tmp_path):
     # повторное удаление / отсутствующая модель / нет файла
     assert svc.delete_model(db, "A") is False
     assert svc.delete_model(str(tmp_path / "нет.json"), "A") is False
+
+
+def test_delete_project_removes_all_model_variants(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "A", "Original", None, "PREOS", 373.15, dict(_ZI))
+    copy_id = svc.duplicate_model(db, "A", new_id="A_COPY",
+                                  new_name="Original (copy)")
+    svc.create_model(db, "OTHER", "Other", None, "PREOS", 373.15, dict(_ZI))
+
+    assert svc.delete_project(db, "A") is True
+    data = json.loads(Path(db).read_text(encoding="utf-8"))
+    assert set(data) == {"OTHER"}
+    assert svc.delete_project(db, "A") is False
+    assert copy_id == "A_COPY"
 
 
 def test_repository_saves_edited_composition_and_preserves_metadata(tmp_path):

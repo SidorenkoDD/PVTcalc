@@ -80,18 +80,22 @@ class ProjectsViewMixin(ContextBoundView):
                 )
             dpg.add_separator(parent=parent)
 
-        # строка «продолжить последнюю сессию»
-        last = self._session.active_model_id
-        if last and last in self._state.models:
+        # строка «продолжить последний проект»
+        last = self._session.active_project_id
+        if (last is None and self._session.active_model_id
+                and self._session.active_model_id in self._state.models):
+            last = self._state.models[self._session.active_model_id].project_id
+        if last and last in self._state.projects:
             saved = self._format_saved_at(self._session.saved_at)
+            project = self._state.projects[last]
             with dpg.group(horizontal=True, parent=parent):
-                dpg.add_text(f"Continue last: {last}"
+                dpg.add_text(f"Continue last project: {project.title}"
                              + (f"  (saved {saved})" if saved else ""))
                 dpg.add_button(label="Open", user_data=last,
                                callback=self._on_open_model)
             dpg.add_separator(parent=parent)
 
-        dpg.add_text("Double-click (or Enter) to open a model, right-click for "
+        dpg.add_text("Double-click (or Enter) to open a project, right-click for "
                      "more actions.", parent=parent)
 
         # таблица моделей — строки выбираемые (клик = выбор, двойной = открыть)
@@ -100,25 +104,40 @@ class ProjectsViewMixin(ContextBoundView):
                        borders_outerH=True, borders_innerV=True,
                        borders_outerV=True, resizable=True, scrollY=True,
                        height=380, freeze_rows=1):
-            for label in ("Model", "Field", "EOS", "Components", "T res, K",
+            for label in ("Project", "Models", "Field", "EOS", "Components",
                           "Calculated", "Created"):
                 dpg.add_table_column(label=label)
             workspaces = self._session.workspaces or {}
-            for model in self._state.models.values():
-                s = model.summary
+            for project in self._state.projects.values():
+                models = [self._state.models[mid] for mid in project.model_ids
+                          if mid in self._state.models]
+                if not models:
+                    continue
+                summaries = [model.summary for model in models
+                             if model.summary is not None]
+                fields = {model.field_name for model in models if model.field_name}
+                eos_values = {model.eos for model in models if model.eos}
+                component_counts = ", ".join(
+                    str(model.n_components) for model in models)
+                calculated = "; ".join(
+                    f"{model.title}: {self._calc_summary_text(model, workspaces)}"
+                    for model in models)
                 with dpg.table_row():
                     sel = dpg.add_selectable(
-                        label=model.title + ("  *" if model.dirty else ""), span_columns=True,
-                        default_value=(model.model_id == self._selected_project),
-                        user_data=model.model_id, callback=self._on_project_click)
-                    self._proj_row_ids[model.model_id] = sel
-                    self._attach_project_context_menu(sel, model.model_id)
-                    dpg.add_text(model.field_name or "-")
-                    dpg.add_text(model.eos or "-")
-                    dpg.add_text(str(model.n_components))
-                    dpg.add_text(self._g(s.t_res) if s and s.t_res else "-")
-                    dpg.add_text(self._calc_summary_text(model, workspaces))
-                    dpg.add_text((s.created_at or "-")[:10] if s else "-")
+                        label=project.title + ("  *" if any(m.dirty for m in models)
+                                               else ""), span_columns=True,
+                        default_value=(project.project_id == self._selected_project),
+                        user_data=project.project_id, callback=self._on_project_click)
+                    self._proj_row_ids[project.project_id] = sel
+                    self._attach_project_context_menu(sel, project.project_id)
+                    dpg.add_text(str(len(models)))
+                    dpg.add_text(", ".join(sorted(fields)) if fields else "-")
+                    dpg.add_text(", ".join(sorted(eos_values)) if eos_values else "-")
+                    dpg.add_text(component_counts)
+                    dpg.add_text(calculated or "-")
+                    created = min((s.created_at for s in summaries if s.created_at),
+                                  default=None)
+                    dpg.add_text((created or "-")[:10])
 
         dpg.add_spacer(height=8, parent=parent)
         dpg.add_text("New composition", parent=parent)
@@ -150,49 +169,66 @@ class ProjectsViewMixin(ContextBoundView):
 
     def _on_project_click(self, sender, app_data, user_data) -> None:
         """Клик по строке: выбор + подсветка; двойной клик — открыть модель."""
-        mid = user_data
+        project_id = user_data
         now = time.monotonic()
-        is_double = (self._last_proj_click == mid
+        is_double = (self._last_proj_click == project_id
                      and now - self._last_proj_click_time < 0.4)
-        self._last_proj_click = mid
+        self._last_proj_click = project_id
         self._last_proj_click_time = now
-        self._selected_project = mid
+        self._selected_project = project_id
         # подсветка без перерисовки (иначе двойной клик не долетит до строки)
-        for m, sid in self._proj_row_ids.items():
+        for pid, sid in self._proj_row_ids.items():
             if dpg.does_item_exist(sid):
-                dpg.set_value(sid, m == mid)
+                dpg.set_value(sid, pid == project_id)
         if is_double:
-            self._open_project(mid)
+            self._open_project(project_id)
         else:
-            self._set_status(f"Selected '{mid}' (double-click or Enter to open).")
+            self._set_status(
+                f"Selected project '{project_id}' (double-click or Enter to open).")
 
-    def _open_project(self, mid: str) -> None:
+    def _open_project(self, identifier: str) -> None:
         if self._jobs.busy:
             self._set_status("Calculation in progress - wait or cancel first.")
             return
-        try:
-            self._state.enter_model(mid, notify=False)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Не удалось открыть модель %s", mid)
-            self._set_status(f"Failed to open '{mid}': {exc}")
+        project_id = identifier
+        if project_id not in self._state.projects:
+            model = self._state.models.get(identifier)
+            if model is None:
+                self._set_status(f"Project or model '{identifier}' not found.")
+                return
+            project_id = model.project_id
+        project = self._state.projects.get(project_id)
+        if project is None or not project.model_ids:
+            self._set_status(f"Project '{project_id}' has no models.")
             return
-        self._expanded_models.add(mid)
-        self._restore_workspace(mid)
+        preferred = self._session.active_model_id
+        model_id = (preferred if preferred in project.model_ids
+                    else (self._state.active_model_id
+                          if self._state.active_model_id in project.model_ids
+                          else project.model_ids[0]))
+        try:
+            self._state.enter_model(model_id, notify=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось открыть проект %s", project_id)
+            self._set_status(f"Failed to open project '{project_id}': {exc}")
+            return
+        self._selected_project = project_id
+        self._expanded_models.add(model_id)
+        self._restore_workspace(model_id)
         self._state.notify(StateChange(StateChangeKind.NAVIGATION))
-        self._set_status(f"Model '{mid}' opened.")
+        self._set_status(f"Project '{project.title}' opened.")
 
-    # --- контекстное меню модели на стартовом Projects ---------------------
+    # --- контекстное меню проекта на стартовом Projects --------------------
 
-    def _attach_project_context_menu(self, item_id, model_id: str) -> None:
+    def _attach_project_context_menu(self, item_id, project_id: str) -> None:
+        project = self._state.projects.get(project_id)
         with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
-            dpg.add_text(model_id)
+            dpg.add_text(project.title if project else project_id)
             dpg.add_separator()
-            dpg.add_menu_item(label="Open", user_data=model_id,
+            dpg.add_menu_item(label="Open", user_data=project_id,
                               callback=self._on_open_model)
-            dpg.add_menu_item(label="View composition (read-only)",
-                              user_data=model_id, callback=self._on_view_composition)
-            dpg.add_menu_item(label="Delete model...", user_data=model_id,
-                              callback=self._on_delete_model_confirm)
+            dpg.add_menu_item(label="Delete project...", user_data=project_id,
+                              callback=self._on_delete_project_confirm)
 
     def _on_view_composition(self, sender, app_data, user_data) -> None:
         mid = user_data
@@ -223,19 +259,23 @@ class ProjectsViewMixin(ContextBoundView):
                             dpg.add_text(self._fmt(data.get(key, {}).get(name)))
             dpg.add_button(label="Close", callback=lambda: dpg.delete_item(win))
 
-    def _on_delete_model_confirm(self, sender, app_data, user_data) -> None:
-        mid = user_data
+    def _on_delete_project_confirm(self, sender, app_data, user_data) -> None:
+        project_id = str(user_data)
+        project = self._state.projects.get(project_id)
+        title = project.title if project else project_id
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
-        with dpg.window(label="Delete model", modal=True, no_resize=True,
-                        width=420, height=140,
-                        pos=(max(0, w // 2 - 210), max(0, h // 2 - 70))) as win:
+        with dpg.window(label="Delete project", modal=True, no_resize=True,
+                        width=500, height=160,
+                        pos=(max(0, w // 2 - 250), max(0, h // 2 - 80))) as win:
             self._track_modal(win)
-            dpg.add_text(f"Delete model '{mid}' from the database?")
+            dpg.add_text(f"Delete project '{title}' and all its models?")
+            dpg.add_text("All model records and saved calculation results will be removed.")
             dpg.add_text("This cannot be undone.")
             dpg.add_spacer(height=8)
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Delete", width=120, user_data=(mid, win),
-                               callback=self._on_delete_model_do)
+                dpg.add_button(label="Delete", width=120,
+                               user_data=(project_id, win),
+                               callback=self._on_delete_project_do)
                 dpg.add_button(label="Cancel", width=120,
                                callback=lambda: dpg.delete_item(win))
 
@@ -316,9 +356,12 @@ class ProjectsViewMixin(ContextBoundView):
             logger.exception("Не удалось скопировать модель %s", mid)
             self._set_status(f"Duplicate failed: {exc}")
             return
+        source_project_id = (source.project_id if source is not None
+                             else (self._state.models[mid].project_id
+                                   if mid in self._state.models else None))
         self._close_duplicate_modal(win)
-        self._selected_project = new_id
         self._state.refresh_model_list()
+        self._selected_project = source_project_id
         self._restored_models.add(new_id)
         self._expanded_models.add(new_id)
         self._state.enter_model(new_id, notify=False)
@@ -326,27 +369,40 @@ class ProjectsViewMixin(ContextBoundView):
         self._set_status(
             f"Model '{new_id}' duplicated in the current project.")
 
-    def _on_delete_model_do(self, sender, app_data, user_data) -> None:
-        mid, win = user_data
+    def _on_delete_project_do(self, sender, app_data, user_data) -> None:
+        project_id, win = user_data
         dpg.delete_item(win)
+        project = self._state.projects.get(project_id)
+        model_ids = set(project.model_ids) if project else {
+            mid for mid, model in self._state.models.items()
+            if model.project_id == project_id
+        }
         try:
-            ok = proj_svc.delete_model(self._state.db_path, mid)
+            ok = proj_svc.delete_project(self._state.db_path, project_id)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Не удалось удалить модель %s", mid)
+            logger.exception("Не удалось удалить проект %s", project_id)
             self._set_status(f"Delete failed: {exc}")
             return
         if not ok:
-            self._set_status(f"Model '{mid}' not found.")
+            self._set_status(f"Project '{project_id}' not found.")
             return
         # почистить след модели в сессии/выборе
-        if self._session.workspaces:
-            self._session.workspaces.pop(mid, None)
-        if self._session.active_model_id == mid:
+        for mid in model_ids:
+            if self._session.workspaces is not None:
+                self._session.workspaces.pop(mid, None)
+            self._expanded_models.discard(mid)
+            self._restored_models.discard(mid)
+        if self._session.active_model_id in model_ids:
             self._session.active_model_id = None
-        if self._selected_project == mid:
+            self._session.active_project_id = None
+        if self._state.active_model_id in model_ids:
+            self._state.active_model_id = None
+            self._state.active_project_id = None
+            self._state.active_variant_id = None
+        if self._selected_project == project_id:
             self._selected_project = None
         self._state.refresh_model_list()  # notify -> перерисовка Projects
-        self._set_status(f"Model '{mid}' deleted.")
+        self._set_status(f"Project '{project_id}' and {len(model_ids)} model(s) deleted.")
 
     def _on_back_to_projects(self, sender=None, app_data=None, user_data=None) -> None:
         if self._jobs.busy:
@@ -382,7 +438,7 @@ class ProjectsViewMixin(ContextBoundView):
         self._state.refresh_model_list()
         self._restored_models.add(model_id)  # свежая модель, восстанавливать нечего
         self._expanded_models.add(model_id)
-        self._state.enter_model(model_id)
+        self._open_project(model_id)
 
     # --- импорт Excel -------------------------------------------------------
 
@@ -472,7 +528,7 @@ class ProjectsViewMixin(ContextBoundView):
         mid = res["model_id"]
         self._restored_models.add(mid)     # свежая модель, восстанавливать нечего
         self._expanded_models.add(mid)
-        self._state.enter_model(mid)
+        self._open_project(mid)
         n_bad = len(res["unrecognized"])
         note = (f", {n_bad} unrecognized skipped ({', '.join(res['unrecognized'][:4])})"
                 if n_bad else "")

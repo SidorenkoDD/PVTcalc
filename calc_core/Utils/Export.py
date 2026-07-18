@@ -50,7 +50,9 @@ class ModelJSONDB:
                results: Optional[Any] = None, # Сделали Optional, так как может быть None
                field: Optional[str] = None,
                t_res: Optional[float] = None,
-               correlations: Optional[Dict[str, Any]] = None):
+               correlations: Optional[Dict[str, Any]] = None,
+               project_id: Optional[str] = None,
+               project_name: Optional[str] = None):
         """Кладёт модель в оперативную память 'базы'.
 
         `t_res` — пластовая температура, K (опционально). Если задана —
@@ -90,6 +92,10 @@ class ModelJSONDB:
             record["T_res"] = float(t_res)
         if correlations is not None:
             record["correlations"] = correlations
+        if project_id is not None:
+            record["project_id"] = project_id
+        if project_name is not None:
+            record["project_name"] = project_name
         self._db[model_id] = record
 
     def save(self):
@@ -120,8 +126,10 @@ class ModelJSONDB:
                         composition_data: Dict[str, Any], eos: Any,
                         results: Optional[Any] = None, field: Optional[str] = None,
                         t_res: Optional[float] = None,
-                        correlations: Optional[Dict[str, Any]] = None):
+                        correlations: Optional[Dict[str, Any]] = None,
+                        project_id: Optional[str] = None,
+                        project_name: Optional[str] = None):
         """Добавляет модель в память и сразу сохраняет на диск."""
         self.export(model_id, name, composition, composition_data, eos, results,
-                    field, t_res, correlations)
+                    field, t_res, correlations, project_id, project_name)
         self.save()
