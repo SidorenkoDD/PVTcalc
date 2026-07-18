@@ -1,11 +1,10 @@
 """Вкладка фазовой огибающей, её график и диалог параметров."""
 
-from typing import Any
-
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
 from gui.services import phase_envelope_service as pe_svc
+from gui.view.contracts import ContextBoundView
 
 _ENV_METHOD_SSM = "SSM (curve)"
 _ENV_METHOD_GRID = "Grid (stability scan)"
@@ -16,21 +15,12 @@ def _env_method_from_label(label: str) -> str:
     return "grid" if str(label).startswith("Grid") else "ssm"
 
 
-class EnvelopeViewMixin:
+class EnvelopeViewMixin(ContextBoundView):
     """Рендер и callbacks Phase Envelope."""
 
-    _state: Any
-    _jobs: Any
-    _env_dialog_win: Any
-    _env_dialog_ids: Any
-    _env_dialog_node: Any
-    _fmt: Any
-    _g: Any
-    _set_status: Any
-    _theme_stale: Any
-    _track_modal: Any
-    _arm_flash_poll: Any
-    _on_flash_cancel: Any
+    _env_dialog_win: int | None
+    _env_dialog_ids: dict[str, int]
+    _env_dialog_node: str | None
 
     def _render_envelope_tab(self, parent, node) -> None:
         nid = node.node_id

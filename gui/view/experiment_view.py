@@ -1,26 +1,17 @@
 """Вкладки PVT-экспериментов, таблицы и графики результатов."""
 
-from typing import Any
-
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
 from gui.services import experiment_service as exp_svc
+from gui.view.contracts import ContextBoundView
 
 
-class ExperimentViewMixin:
+class ExperimentViewMixin(ContextBoundView):
     """Рендер и callbacks CCE/DLE/Separator."""
 
-    _state: Any
-    _jobs: Any
-    _exp_input_ids: Any
-    _exp_chart_holder: Any
-    _fmt: Any
-    _g: Any
-    _set_status: Any
-    _theme_stale: Any
-    _arm_flash_poll: Any
-    _on_flash_cancel: Any
+    _exp_input_ids: dict[str, dict[str, int]]
+    _exp_chart_holder: dict[str, int]
 
     def _render_experiment_tab(self, parent, node) -> None:
         nid = node.node_id

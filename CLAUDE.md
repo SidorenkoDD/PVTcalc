@@ -164,3 +164,5 @@ DLE.DLE.calculate() / SeparatorTest.SeparatorTest.calculate() / CCE.CCE.calculat
 2026-07-18: GUI прошёл стабилизационный рефакторинг без добавления предметных функций. Персистентность атомарна, редактируемые модели имеют dirty/save lifecycle, фоновые задачи адресуются через стабильный `NodeRef`, сессия v3 вынесена в `workspace_codec`, orchestration — в `calculation_coordinator`; добавлены headless DPG и persistence-тесты. Полное описание — `docs/GUI.md`, СТАТУС-6.
 
 2026-07-18 (следующий блок): монолитный `gui/view/app.py` декомпозирован на composition root (около 500 строк) и семь предметных `gui/view/*_view.py`: Projects, Composition, Flash/Compare, Experiments, Envelope, общие dialogs и Workspace tree/tabs. Поведение не менялось; headless smoke теперь собирает вкладки всех основных типов. Детали — `docs/GUI.md`, СТАТУС-7.
+
+2026-07-18 (контракты View): добавлен `gui/view/contracts.py` с `ViewContext`/`ViewHost`/`ContextBoundView`; неявные `Any`-контракты feature-view удалены. Settings теперь строго read-only и показывает фактические константы движка; `gui_settings.json` больше не создаётся и не читается. Детали — `docs/GUI.md`, СТАТУС-8.

@@ -22,6 +22,7 @@ from gui.app_state import AppState, NodeKind
 from gui.calculation_coordinator import CalculationCoordinator
 from gui.session import SessionState, save_session
 from gui.view.composition_view import CompositionViewMixin
+from gui.view.contracts import ViewContext
 from gui.view.dialogs_view import DialogsViewMixin
 from gui.view.envelope_view import EnvelopeViewMixin
 from gui.view.experiment_view import ExperimentViewMixin
@@ -61,15 +62,16 @@ class PVTcalcApp(
     """View-контроллер: связывает `AppState` с виджетами DearPyGui."""
 
     def __init__(self, state: AppState, session: SessionState):
-        self._state = state
-        self._session = session
+        self._view_context = ViewContext(
+            state=state,
+            session=session,
+            jobs=CalculationCoordinator(),
+        )
         # состояние разворота дерева (во View, чтобы переживать перерисовку)
         self._expanded_models: set[str] = set()
         self._expanded_cats: set[str] = set()
         # выбор узлов для сравнения (Ctrl+клик в дереве)
         self._compare_selection: set[str] = set()
-        # фреймворк-независимый координатор фоновых расчётов
-        self._jobs = CalculationCoordinator()
         # id таб-бара и вкладок рабочей области (захватываем при отрисовке,
         # чтобы не плодить фиксированные алиасы при пересоздании)
         self._tabbar_id: int | None = None
@@ -170,7 +172,7 @@ class PVTcalcApp(
                 dpg.add_menu_item(label="Export model...",
                                   callback=self._on_open_export_dialog)
             with dpg.menu(label="Settings"):
-                dpg.add_menu_item(label="Constants & convergence...",
+                dpg.add_menu_item(label="Engine constants (read only)...",
                                   callback=self._on_open_settings)
 
     def _build_shortcuts(self) -> None:

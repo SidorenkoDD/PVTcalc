@@ -8,6 +8,7 @@ from gui.app_state import AppState
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState
 from gui.view.app import _PRIMARY, _PROJECTS_CONTENT, _WORKSPACE, PVTcalcApp
+from gui.view.contracts import ViewHost
 
 MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
 
@@ -22,6 +23,9 @@ def test_dpg_context_builds_and_renders_projects():
         app._build_layout()
         app._build_shortcuts()
         state.refresh_model_list()
+        assert isinstance(app, ViewHost)
+        assert app._view_context.state is state
+        assert app._view_context.jobs is app._jobs
         assert dpg.does_item_exist(_PRIMARY)
         assert dpg.does_item_exist(_PROJECTS_CONTENT)
         assert state.models
@@ -38,5 +42,11 @@ def test_dpg_context_builds_and_renders_projects():
         experiment_id = state.new_experiment("dle", {"pressures": [200.0, 100.0]})
         envelope_id = state.new_envelope({"method": "ssm"})
         assert {flash_id, experiment_id, envelope_id}.issubset(app._tab_ids)
+
+        app._on_open_settings()
+        assert dpg.does_item_exist(app._settings_win)
+        assert app._settings_ids
+        assert all(dpg.get_item_configuration(wid)["readonly"]
+                   for wid in app._settings_ids.values())
     finally:
         dpg.destroy_context()

@@ -1,32 +1,28 @@
 """Общие модальные диалоги экспорта и настроек GUI."""
 
 import logging
-from typing import Any
 
 import dearpygui.dearpygui as dpg
 
 from gui.services import export_service as exp_out_svc
 from gui.services import settings_service as settings_svc
+from gui.view.contracts import ContextBoundView
 
 logger = logging.getLogger(__name__)
 
 
-class DialogsViewMixin:
+class DialogsViewMixin(ContextBoundView):
     """Диалоги, доступные из главного меню приложения."""
 
-    _state: Any
-    _selected_project: Any
-    _export_comp: Any
-    _export_label: Any
-    _export_fmt: Any
-    _export_eos: Any
-    _export_ids: Any
-    _export_win: Any
-    _settings_ids: Any
-    _settings_win: Any
-    _set_status: Any
-    _theme_stale: Any
-    _track_modal: Any
+    _selected_project: str | None
+    _export_comp: object | None
+    _export_label: str
+    _export_fmt: str
+    _export_eos: str
+    _export_ids: dict[str, int]
+    _export_win: int | None
+    _settings_ids: dict[str, int]
+    _settings_win: int | None
 
     def _composition_for_export(self):
         """Состав для экспорта: активная модель, иначе выбранная на Projects."""
@@ -120,18 +116,19 @@ class DialogsViewMixin:
     # --- настройки (константы/условия/критерии сходимости) ------------------
 
     def _on_open_settings(self, sender=None, app_data=None, user_data=None) -> None:
-        values = settings_svc.load_settings()
+        values = settings_svc.engine_defaults()
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
         height = min(max(360, h - 120), 620)
-        with dpg.window(label="Settings", modal=True, no_collapse=True,
+        with dpg.window(label="Engine constants (read only)", modal=True,
+                        no_collapse=True,
                         width=460, height=height,
                         pos=(max(0, w // 2 - 230), 60)) as win:
             self._track_modal(win)
             self._settings_win = win
             self._settings_ids = {}
             note = dpg.add_text(
-                "Current engine values. Saved to gui_settings.json, but do NOT\n"
-                "affect calculations yet (engine wiring is planned).",
+                "Actual values used by the calculation engine. Editing will be\n"
+                "available only after an explicit EngineConfig API is added.",
                 wrap=430)
             dpg.bind_item_theme(note, self._theme_stale())
             dpg.add_separator()
@@ -142,14 +139,11 @@ class DialogsViewMixin:
                             key = f["key"]
                             self._settings_ids[key] = dpg.add_input_text(
                                 label=f["label"], width=180,
+                                readonly=True,
                                 default_value=self._fmt_setting(values.get(key), f))
             dpg.add_separator()
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Save", width=110, callback=self._on_settings_save)
-                dpg.add_button(label="Reset to defaults", width=150,
-                               callback=self._on_settings_reset)
-                dpg.add_button(label="Cancel", width=90,
-                               callback=lambda: dpg.delete_item(win))
+            dpg.add_button(label="Close", width=100,
+                           callback=lambda: dpg.delete_item(win))
 
     @staticmethod
     def _fmt_setting(value, field) -> str:
@@ -159,26 +153,3 @@ class DialogsViewMixin:
             return field.get("fmt", "%.6g") % float(value)
         except (TypeError, ValueError):
             return str(value)
-
-    def _on_settings_save(self, sender=None, app_data=None, user_data=None) -> None:
-        values = {}
-        try:
-            for key, wid in self._settings_ids.items():
-                values[key] = float(dpg.get_value(wid))
-        except (ValueError, TypeError) as exc:
-            self._set_status(f"Invalid settings value: {exc}")
-            return
-        settings_svc.save_settings(values)
-        if self._settings_win and dpg.does_item_exist(self._settings_win):
-            dpg.delete_item(self._settings_win)
-        self._set_status("Settings saved (not yet applied to calculations).")
-
-    def _on_settings_reset(self, sender=None, app_data=None, user_data=None) -> None:
-        """Возвращает поля к дефолтам движка (без сохранения)."""
-        defaults = settings_svc.engine_defaults()
-        fmt_by_key = {f["key"]: f for grp in settings_svc.SCHEMA for f in grp["fields"]}
-        for key, wid in self._settings_ids.items():
-            if dpg.does_item_exist(wid):
-                dpg.set_value(wid, self._fmt_setting(defaults.get(key),
-                                                     fmt_by_key.get(key, {})))
-        self._set_status("Settings reset to engine defaults (not saved yet).")

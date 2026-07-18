@@ -1,23 +1,16 @@
 """Вкладки Flash/Compare и callbacks фонового flash-расчёта."""
 
-from typing import Any
-
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
 from gui.services import flash_service
+from gui.view.contracts import ContextBoundView
 
 
-class FlashViewMixin:
+class FlashViewMixin(ContextBoundView):
     """Рендер Flash/Compare и приём завершённых GUI-задач."""
 
-    _state: Any
-    _jobs: Any
-    _flash_input_ids: Any
-    _fmt: Any
-    _g: Any
-    _set_status: Any
-    _theme_stale: Any
+    _flash_input_ids: dict[str, tuple[int, int]]
 
     def _render_flash_tab(self, parent, node) -> None:
         nid = node.node_id

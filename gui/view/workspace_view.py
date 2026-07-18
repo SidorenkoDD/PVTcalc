@@ -1,37 +1,26 @@
 """IDE-дерево модели и диспетчер вкладок рабочего пространства."""
 
-from typing import Any
-
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeKind, NodeStatus
 from gui.services import experiment_service as exp_svc
+from gui.view.contracts import ContextBoundView
 
 _MODEL_TREE = "model_tree"
 _WORKSPACE = "workspace_content"
 
 
-class WorkspaceViewMixin:
+class WorkspaceViewMixin(ContextBoundView):
     """Навигационное дерево, context menus и маршрутизация вкладок."""
 
-    _state: Any
-    _expanded_models: Any
-    _expanded_cats: Any
-    _compare_selection: Any
-    _tabbar_id: Any
-    _tab_ids: Any
-    _flash_input_ids: Any
-    _exp_input_ids: Any
-    _exp_chart_holder: Any
-    _ctrl_down: Any
-    _g: Any
-    _set_status: Any
-    _open_envelope_dialog: Any
-    _render_composition_tab: Any
-    _render_flash_tab: Any
-    _render_compare_tab: Any
-    _render_experiment_tab: Any
-    _render_envelope_tab: Any
+    _expanded_models: set[str]
+    _expanded_cats: set[str]
+    _compare_selection: set[str]
+    _tabbar_id: int | None
+    _tab_ids: dict[str, int]
+    _flash_input_ids: dict[str, tuple[int, int]]
+    _exp_input_ids: dict[str, dict[str, int]]
+    _exp_chart_holder: dict[str, int]
 
     def _render_tree(self) -> None:
         """Дерево показывает ТОЛЬКО активную модель (выбор — на Projects)."""

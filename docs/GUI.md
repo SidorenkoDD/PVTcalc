@@ -4,6 +4,16 @@
 
 ---
 
+## СТАТУС-8 на 2026-07-18: явный ViewContext и честные Settings
+
+Feature-view больше не объявляют скрытые зависимости `_state/_jobs/_session/callback: Any`. Добавлен `gui/view/contracts.py`: immutable `ViewContext(state, session, jobs)`, runtime-checkable `ViewHost` и типизированная база `ContextBoundView`. `PVTcalcApp` создаёт контекст один раз; общие методы feature-view проверяются `mypy`, а дальнейший переход от mixins к объектной композиции можно делать по одному экрану.
+
+Settings приведён в соответствие фактическому поведению движка: окно переименовано в **Engine constants (read only)**, показывает только значения `engine_defaults()`, все поля readonly, Save/Reset и неиспользуемое сохранение `gui_settings.json` удалены. Редактирование вернётся только вместе с явным `EngineConfig`, реально передаваемым солверам.
+
+Headless smoke проверяет `ViewHost`/`ViewContext`, сборку основных вкладок и readonly-конфигурацию каждого поля Settings. После удаления трёх тестов неиспользуемого settings persistence и добавления актуальных проверок: **125 тестов зелёные**, `ruff gui tests` и `mypy gui` проходят.
+
+---
+
 ## СТАТУС-7 на 2026-07-18: декомпозиция DearPyGui View
 
 `gui/view/app.py` сокращён с 2450 до 492 строк без изменения пользовательской функциональности. `PVTcalcApp` теперь является composition root: создаёт состояние виджетов, жизненный цикл DPG, меню/shortcuts/layout, autosave/session и общие helpers. Предметные экраны подключаются как изолированные view-mixins:

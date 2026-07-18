@@ -1,11 +1,10 @@
 """Редактор состава: свойства компонентов, корреляции и BIP."""
 
-from typing import Any
-
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
 from gui.services import composition_service as comp_svc
+from gui.view.contracts import ContextBoundView
 
 _BIP_CELL_W = 60
 
@@ -20,13 +19,10 @@ _COMPOSITION_COLUMNS: list[tuple[str, str]] = [
 ]
 
 
-class CompositionViewMixin:
+class CompositionViewMixin(ContextBoundView):
     """Рендер и callbacks вкладки Composition."""
 
-    _state: Any
-    _bip_ids: Any
-    _set_status: Any
-    _theme_stale: Any
+    _bip_ids: dict[tuple[int, int], int]
 
     def _render_composition_tab(self, parent, node) -> None:
         composition = self._state.active_composition

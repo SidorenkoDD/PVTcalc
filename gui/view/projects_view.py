@@ -7,11 +7,12 @@ composition root `PVTcalcApp` и изолирует крупный DPG-срез 
 import logging
 import time
 from pathlib import Path
-from typing import Any
 
 import dearpygui.dearpygui as dpg
 
 from gui.services import project_service as proj_svc
+from gui.view.contracts import ContextBoundView
+from gui.view.new_fluid_form import NewFluidForm
 
 logger = logging.getLogger(__name__)
 
@@ -29,36 +30,24 @@ _COMPOSITION_COLUMNS: list[tuple[str, str]] = [
 ]
 
 
-class ProjectsViewMixin:
+class ProjectsViewMixin(ContextBoundView):
     """Рендер Projects и callbacks создания/импорта моделей."""
 
-    # Контракт с PVTcalcApp. Any здесь осознан: DPG ids и доменные объекты
-    # динамические, а конкретные поля и helpers создаёт composition root.
-    _state: Any
-    _session: Any
-    _jobs: Any
-    _new_fluid_form: Any
-    _new_fluid_win: Any
-    _selected_project: Any
-    _proj_row_ids: Any
-    _last_proj_click: Any
-    _last_proj_click_time: Any
-    _expanded_models: Any
-    _restored_models: Any
-    _excel_path: Any
-    _excel_win: Any
-    _excel_sheet_id: Any
-    _excel_header_id: Any
-    _excel_preview_group: Any
-    _e300_path: Any
-    _e300_win: Any
-    _fmt: Any
-    _g: Any
-    _format_saved_at: Any
-    _set_status: Any
-    _theme_stale: Any
-    _track_modal: Any
-    _restore_workspace: Any
+    _new_fluid_form: NewFluidForm
+    _new_fluid_win: int | None
+    _selected_project: str | None
+    _proj_row_ids: dict[str, int]
+    _last_proj_click: str | None
+    _last_proj_click_time: float
+    _expanded_models: set[str]
+    _restored_models: set[str]
+    _excel_path: str | None
+    _excel_win: int | None
+    _excel_sheet_id: int | None
+    _excel_header_id: int | None
+    _excel_preview_group: int | None
+    _e300_path: str | None
+    _e300_win: int | None
 
     def _render_projects(self) -> None:
         if not dpg.does_item_exist(_PROJECTS_CONTENT):

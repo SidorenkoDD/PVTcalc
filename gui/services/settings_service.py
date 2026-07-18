@@ -1,27 +1,14 @@
 """
-Настройки движка для панели Settings (пока «показать/хранить»).
+Фактические константы движка для read-only панели Settings.
 
 Собирает актуальные значения констант, стандартных условий и критериев
 сходимости из движка (`calc_core.Utils.Constants`, `Conditions.StandardConditions`)
-и хранит пользовательские правки в `gui_settings.json`.
-
-**Важно:** на этом этапе правки НЕ влияют на расчёт — движок продолжает
-использовать свои значения из модулей (многие импортируются по значению при
-загрузке модуля, поэтому надёжная проводка — отдельная задача). Панель
-показывает текущие значения и запоминает изменённые на будущее.
+Панель намеренно не сохраняет «настройки»: до появления явного EngineConfig
+любые редактируемые поля создавали бы ложное впечатление, что расчёт изменён.
 """
 
-import json
-import logging
-from pathlib import Path
-
 from calc_core.Utils import Constants
-from calc_core.Utils.AtomicFile import atomic_write_json
 from calc_core.Utils.Conditions import StandardConditions
-
-logger = logging.getLogger(__name__)
-
-DEFAULT_SETTINGS_PATH = "gui_settings.json"
 
 # Ключи стандартных условий (не константы модуля — читаются из StandardConditions).
 _STD_P = "STD_P"
@@ -73,29 +60,3 @@ def engine_defaults() -> dict:
     values[_STD_P] = std.p
     values[_STD_T] = std.t
     return values
-
-
-def load_settings(path: str = DEFAULT_SETTINGS_PATH) -> dict:
-    """
-    Значения для панели: дефолты движка, поверх которых наложены сохранённые
-    пользовательские правки (если файл есть и валиден).
-    """
-    values = engine_defaults()
-    p = Path(path)
-    if p.exists():
-        try:
-            saved = json.loads(p.read_text(encoding="utf-8"))
-            for k in ALL_KEYS:
-                if k in saved:
-                    values[k] = float(saved[k])
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            logger.warning("Настройки %s повреждены (%s), беру дефолты движка", p, exc)
-    return values
-
-
-def save_settings(values: dict, path: str = DEFAULT_SETTINGS_PATH) -> None:
-    """Пишет только известные ключи схемы (как float) в `gui_settings.json`."""
-    out = {k: float(values[k]) for k in ALL_KEYS if k in values}
-    p = Path(path)
-    atomic_write_json(p, out)
-    logger.info("Настройки сохранены в %s (%d полей)", p, len(out))

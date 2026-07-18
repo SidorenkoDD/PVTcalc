@@ -13,6 +13,8 @@
 
 **View-декомпозиция 2026-07-18 выполнена**: `gui/view/app.py` оставлен composition root, Projects/Composition/Flash/Experiments/Envelope/dialogs/workspace вынесены в отдельные модули. Следующий архитектурный блок GUI — заменить динамический mixin-контракт на явные protocol/controller interfaces там, где это даст практическую пользу, либо перейти к config/cancellation API движка.
 
+**View-контракт 2026-07-18 выполнен**: `ViewContext` типизирует state/session/jobs, `ViewHost` фиксирует минимальный API composition root, feature-view наследуют проверяемый `ContextBoundView` без деклараций `Any`. Settings сделан read-only до реализации настоящего `EngineConfig`.
+
 ## Архитектура
 
 Главный пробел: нет единого провалидированного сервисного слоя, на который может опереться внешний код (в первую очередь — будущий интерфейс). `CompositionalModel` задуман как фасад, но не покрывает эксперименты и фазовую диаграмму (те обращаются к `Flash`/`SaturationPressure` напрямую) и не валидирует вход.
