@@ -37,6 +37,7 @@ EXPERIMENT_TYPES: dict[str, dict] = {
                          "vapor_mole_frac", "liquid_mole_frac", "liquid_density"],
         "charts": ["v/v_sat", "v/v_res", "Compressibility", "liquid_density",
                    "vapor_density", "liquid_z"],
+        "lab_columns": ["pressure", "v/v_sat", "v/v_res", "Compressibility"],
     },
     "dle": {
         "label": "DLE",
@@ -48,6 +49,8 @@ EXPERIMENT_TYPES: dict[str, dict] = {
                          "liquid_mole_frac", "liquid_density", "vapor_density"],
         "charts": ["Bo", "Rs", "liquid_density", "vapor_density",
                    "liquid_z", "vapor_z"],
+        "lab_columns": ["pressure", "Bo", "Rs", "liquid_density",
+                         "vapor_density"],
     },
     "separator": {
         "label": "Separator",
@@ -58,6 +61,8 @@ EXPERIMENT_TYPES: dict[str, dict] = {
         "main_columns": ["pressure", "Bo", "Rs", "vapor_mole_frac",
                          "liquid_mole_frac", "liquid_density"],
         "charts": ["Bo", "Rs", "liquid_density", "vapor_density"],
+        "lab_columns": ["pressure", "Bo", "Rs", "liquid_density",
+                         "vapor_density"],
     },
 }
 

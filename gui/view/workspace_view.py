@@ -24,6 +24,8 @@ class WorkspaceViewMixin(ContextBoundView):
     _flash_input_ids: dict[str, tuple[int, int]]
     _exp_input_ids: dict[str, dict[str, int]]
     _exp_chart_holder: dict[str, int]
+    _lab_data_holder: dict[str, int]
+    _lab_data_controls: dict[str, tuple[int, int, int]]
 
     def _render_tree(self) -> None:
         """Дерево показывает ТОЛЬКО активную модель (выбор — на Projects)."""
@@ -347,6 +349,8 @@ class WorkspaceViewMixin(ContextBoundView):
         self._flash_input_ids = {}
         self._exp_input_ids = {}
         self._exp_chart_holder = {}
+        self._lab_data_holder = {}
+        self._lab_data_controls = {}
 
         model = self._state.active_model
         variant = self._state.active_variant
@@ -412,6 +416,8 @@ class WorkspaceViewMixin(ContextBoundView):
         elif node.kind is NodeKind.EXPERIMENT:
             self._exp_input_ids.pop(node_id, None)
             self._exp_chart_holder.pop(node_id, None)
+            self._lab_data_holder.pop(node_id, None)
+            self._lab_data_controls.pop(node_id, None)
 
         if node.kind is NodeKind.COMPOSITION:
             self._render_composition_tab(page, node)

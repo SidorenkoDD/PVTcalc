@@ -119,6 +119,44 @@ def test_node_status_update_keeps_other_workspace_tabs_intact():
         dpg.destroy_context()
 
 
+def test_experiment_lab_data_and_chart_grid_render():
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        state.enter_model(next(iter(state.models)))
+        state.open_node("composition")
+        nid = state.new_experiment("dle", {"pressures": [400.0, 200.0]})
+        node = state.node_by_id(nid)
+        node.result = {
+            "columns": ["pressure", "Bo", "Rs", "liquid_density",
+                        "vapor_density"],
+            "rows": [[400.0, 1.3, 90.0, 700.0, 20.0],
+                     [200.0, 1.1, 70.0, 710.0, 18.0]],
+            "x": "pressure",
+            "charts": ["Bo", "Rs", "liquid_density", "vapor_density"],
+            "plot_all": ["Bo", "Rs", "liquid_density", "vapor_density"],
+            "main_columns": ["pressure", "Bo", "Rs"],
+            "stages": [],
+        }
+        state.add_lab_data_row(nid, ["pressure", "Bo", "Rs", "liquid_density",
+                                     "vapor_density"])
+        state.set_lab_data_value(nid, 0, 0, 350.0)
+        state.set_lab_data_value(nid, 0, 1, 1.2)
+        app._render_node_content(nid)
+
+        assert _has_label(_WORKSPACE, "Lab Data (measured)")
+        assert _has_label(_WORKSPACE, "Bo vs pressure")
+        assert _has_label(_WORKSPACE, "vapor_density vs pressure")
+        assert len([item for item in dpg.get_item_children(
+            app._exp_chart_holder[nid], 1)
+            if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]) == 2
+    finally:
+        dpg.destroy_context()
+
+
 def test_projects_open_survives_malformed_saved_workspace():
     state = AppState(ModelRepository(str(MODELS_JSON)))
     session = SessionState(workspaces={

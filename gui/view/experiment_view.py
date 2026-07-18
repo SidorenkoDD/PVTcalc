@@ -1,5 +1,7 @@
 """Вкладки PVT-экспериментов, таблицы и графики результатов."""
 
+import math
+
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
@@ -12,6 +14,8 @@ class ExperimentViewMixin(ContextBoundView):
 
     _exp_input_ids: dict[str, dict[str, int]]
     _exp_chart_holder: dict[str, int]
+    _lab_data_holder: dict[str, int]
+    _lab_data_controls: dict[str, tuple[int, int, int]]
 
     def _render_experiment_tab(self, parent, node) -> None:
         nid = node.node_id
@@ -58,6 +62,8 @@ class ExperimentViewMixin(ContextBoundView):
                               parent=parent)
             dpg.bind_item_theme(st, self._theme_stale())
 
+        self._render_lab_data(node, parent)
+
         if node.result is not None:
             dpg.add_separator(parent=parent)
             with dpg.tab_bar(parent=parent):
@@ -70,6 +76,132 @@ class ExperimentViewMixin(ContextBoundView):
                     self._render_exp_composition(node.result, t)
                 with dpg.tab(label="Chart") as t:
                     self._render_exp_chart(node.result, t, nid)
+
+    def _lab_columns(self, node) -> list[str]:
+        kind = node.params.get("kind", "cce")
+        meta = exp_svc.EXPERIMENT_TYPES.get(kind, {})
+        return list(meta.get("lab_columns", ["pressure"]))
+
+    def _lab_rows(self, node, columns: list[str]) -> list[list[float | None]]:
+        data = node.params.get("lab_data")
+        raw_rows = data.get("rows") if isinstance(data, dict) else None
+        if not isinstance(raw_rows, list):
+            return []
+        rows: list[list[float | None]] = []
+        for raw in raw_rows:
+            if not isinstance(raw, list):
+                continue
+            rows.append([
+                value if isinstance(value, (int, float))
+                and not isinstance(value, bool) and math.isfinite(float(value))
+                else None
+                for value in (raw[:len(columns)] + [None] * len(columns))[:len(columns)]
+            ])
+        return rows
+
+    def _render_lab_data(self, node, parent) -> None:
+        """Сворачиваемый ввод измерений, привязанный к одному Experiment-узлу."""
+        columns = self._lab_columns(node)
+        rows = self._lab_rows(node, columns)
+        with dpg.collapsing_header(label="Lab Data (measured)",
+                                  default_open=True, parent=parent) as header:
+            dpg.add_text(
+                "Enter measured points for this experiment. Blank cells are ignored.",
+                parent=header,
+            )
+            with dpg.group(horizontal=True, parent=header):
+                dpg.add_button(label="Add point", user_data=node.node_id,
+                               callback=self._on_lab_add_row)
+                remove_id = dpg.add_button(
+                    label="Remove last", user_data=node.node_id,
+                    callback=self._on_lab_remove_row, enabled=bool(rows))
+                clear_id = dpg.add_button(
+                    label="Clear", user_data=node.node_id,
+                    callback=self._on_lab_clear, enabled=bool(rows))
+                count_id = dpg.add_text(f"{len(rows)} point(s)", parent=header)
+                self._lab_data_controls[node.node_id] = (
+                    remove_id, clear_id, count_id)
+            holder = dpg.add_group(parent=header)
+            self._lab_data_holder[node.node_id] = holder
+            self._render_lab_data_table(node, holder, columns, rows)
+
+    def _render_lab_data_table(self, node, holder, columns, rows) -> None:
+        if dpg.does_item_exist(holder):
+            dpg.delete_item(holder, children_only=True)
+        if not rows:
+            dpg.add_text("No measured points yet.", parent=holder)
+            return
+        with dpg.table(parent=holder, header_row=True,
+                       borders_innerH=True, borders_outerH=True,
+                       borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, scrollX=True,
+                       height=190, freeze_rows=1):
+            dpg.add_table_column(label="#", width_fixed=True, width=35)
+            for column in columns:
+                dpg.add_table_column(label=column)
+            for row_index, row in enumerate(rows):
+                with dpg.table_row():
+                    dpg.add_text(str(row_index + 1))
+                    for column_index, value in enumerate(row):
+                        dpg.add_input_text(
+                            default_value="" if value is None else self._g(value),
+                            width=115,
+                            user_data=(node.node_id, row_index, column_index),
+                            callback=self._on_lab_cell,
+                        )
+
+    def _rebuild_lab_data_table(self, node_id: str) -> None:
+        node = self._state.node_by_id(node_id)
+        holder = self._lab_data_holder.get(node_id)
+        if node is None or holder is None:
+            return
+        columns = self._lab_columns(node)
+        rows = self._lab_rows(node, columns)
+        self._render_lab_data_table(node, holder, columns, rows)
+        controls = self._lab_data_controls.get(node_id)
+        if controls:
+            remove_id, clear_id, count_id = controls
+            dpg.configure_item(remove_id, enabled=bool(rows))
+            dpg.configure_item(clear_id, enabled=bool(rows))
+            dpg.set_value(count_id, f"{len(rows)} point(s)")
+
+    def _on_lab_add_row(self, sender, app_data, user_data) -> None:
+        node = self._state.node_by_id(user_data)
+        if node is None:
+            return
+        self._state.add_lab_data_row(user_data, self._lab_columns(node))
+        self._rebuild_lab_data_table(user_data)
+        self._rebuild_exp_chart_grid(user_data)
+        self._schedule_session_autosave()
+
+    def _on_lab_remove_row(self, sender, app_data, user_data) -> None:
+        self._state.remove_lab_data_row(user_data)
+        self._rebuild_lab_data_table(user_data)
+        self._rebuild_exp_chart_grid(user_data)
+        self._schedule_session_autosave()
+
+    def _on_lab_clear(self, sender, app_data, user_data) -> None:
+        self._state.clear_lab_data(user_data)
+        self._rebuild_lab_data_table(user_data)
+        self._rebuild_exp_chart_grid(user_data)
+        self._schedule_session_autosave()
+
+    def _on_lab_cell(self, sender, app_data, user_data) -> None:
+        node_id, row, column = user_data
+        raw = str(app_data).strip()
+        if not raw:
+            value = None
+        else:
+            try:
+                value = float(raw)
+                if not math.isfinite(value):
+                    raise ValueError("value must be finite")
+            except ValueError as exc:
+                self._set_status(f"Invalid lab value: {exc}")
+                return
+        self._state.set_lab_data_value(node_id, row, column, value)
+        self._rebuild_exp_chart_grid(node_id)
+        self._schedule_session_autosave()
 
     def _render_exp_table(self, result, parent, cols) -> None:
         allcols = result["columns"]
@@ -121,46 +253,90 @@ class ExperimentViewMixin(ContextBoundView):
 
     def _render_exp_chart(self, result, parent, nid) -> None:
         node = self._state.node_by_id(nid)
-        charts = list(result.get("charts", []))
-        for c in (node.params.get("extra_charts", []) if node else []):
-            if c not in charts:
-                charts.append(c)
         with dpg.group(horizontal=True, parent=parent):
             dpg.add_combo(items=result.get("plot_all", []), width=240,
                           label="Add chart for column", user_data=nid,
                           callback=self._on_exp_add_chart)
         holder = dpg.add_group(parent=parent)
         self._exp_chart_holder[nid] = holder
+        self._render_exp_chart_grid(result, node, holder)
+
+    def _render_exp_chart_grid(self, result, node, holder) -> None:
+        """Рендерит графики карточками по два в строке."""
+        if dpg.does_item_exist(holder):
+            dpg.delete_item(holder, children_only=True)
+        charts = list(result.get("charts", []))
+        extra = node.params.get("extra_charts", []) if node else []
+        if isinstance(extra, list):
+            charts.extend(c for c in extra if c not in charts)
         if not charts:
             dpg.add_text("No plottable columns.", parent=holder)
-        for col in charts:
-            self._add_one_chart(result, col, holder)
+            return
+        lab_data = self._lab_chart_data(node)
+        for offset in range(0, len(charts), 2):
+            with dpg.group(horizontal=True, parent=holder) as row:
+                for col in charts[offset:offset + 2]:
+                    with dpg.child_window(width=440, height=270,
+                                          border=True, parent=row) as card:
+                        self._add_one_chart(result, col, card, lab_data)
+
+    def _rebuild_exp_chart_grid(self, node_id: str) -> None:
+        node = self._state.node_by_id(node_id)
+        holder = self._exp_chart_holder.get(node_id)
+        if (node is None or not isinstance(node.result, dict)
+                or holder is None or not dpg.does_item_exist(holder)):
+            return
+        self._render_exp_chart_grid(node.result, node, holder)
+
+    def _lab_chart_data(self, node):
+        if node is None:
+            return None
+        columns = self._lab_columns(node)
+        return {"columns": columns, "rows": self._lab_rows(node, columns),
+                "x": "pressure"}
 
     @staticmethod
-    def _exp_x_range(result) -> tuple[float, float] | None:
+    def _exp_x_range(result, lab_result=None) -> tuple[float, float] | None:
         """Диапазон оси X (давления) по данным эксперимента, с малым отступом."""
-        cols = result.get("columns", [])
-        x = result.get("x")
-        if x not in cols:
-            return None
-        xi = cols.index(x)
-        xv = [row[xi] for row in result["rows"] if row[xi] is not None]
+        xv: list[float] = []
+        for source in (result, lab_result):
+            if not isinstance(source, dict):
+                continue
+            cols = source.get("columns", [])
+            x = source.get("x")
+            if x not in cols:
+                continue
+            xi = cols.index(x)
+            for row in source.get("rows", []):
+                if not isinstance(row, list) or xi >= len(row):
+                    continue
+                value = row[xi]
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    if math.isfinite(float(value)):
+                        xv.append(float(value))
         if not xv:
             return None
         lo, hi = min(xv), max(xv)
         margin = (hi - lo) * 0.02 if hi > lo else 1.0
         return lo - margin, hi + margin
 
-    def _add_one_chart(self, result, col, parent) -> None:
+    def _add_one_chart(self, result, col, parent, lab_result=None) -> None:
         xs, ys = exp_svc.series_for_plot(result, col)
-        if not xs:
+        lab_x, lab_y = (exp_svc.series_for_plot(lab_result, col)
+                        if lab_result else ([], []))
+        if not xs and not lab_x:
             return
-        xr = self._exp_x_range(result)
-        with dpg.plot(label=f"{col} vs pressure", height=220, width=-1, parent=parent):
+        xr = self._exp_x_range(result, lab_result)
+        with dpg.plot(label=f"{col} vs pressure", height=235, width=-1,
+                      parent=parent):
             dpg.add_plot_legend()
             xax = dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
             yax = dpg.add_plot_axis(dpg.mvYAxis, label=col)
-            dpg.add_line_series(xs, ys, label=col, parent=yax)
+            if xs:
+                dpg.add_line_series(xs, ys, label=col, parent=yax)
+            if lab_x:
+                dpg.add_scatter_series(lab_x, lab_y, label=f"{col} (lab)",
+                                       parent=yax)
             if xr is not None:
                 dpg.set_axis_limits(xax, xr[0], xr[1])
 
@@ -170,12 +346,14 @@ class ExperimentViewMixin(ContextBoundView):
         node = self._state.node_by_id(nid)
         if not col or node is None or not isinstance(node.result, dict):
             return
-        extra = node.params.setdefault("extra_charts", [])
+        extra = node.params.get("extra_charts")
+        if not isinstance(extra, list):
+            extra = []
+            node.params["extra_charts"] = extra
         if col not in extra and col not in node.result.get("charts", []):
             extra.append(col)
-        holder = self._exp_chart_holder.get(nid)
-        if holder is not None and dpg.does_item_exist(holder):
-            self._add_one_chart(node.result, col, holder)
+        self._rebuild_exp_chart_grid(nid)
+        self._schedule_session_autosave()
         self._set_status(f"Added chart: {col}")
 
     def _on_experiment_run(self, sender, app_data, user_data) -> None:

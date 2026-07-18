@@ -83,6 +83,8 @@ class PVTcalcApp(
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
         self._exp_input_ids: dict[str, dict] = {}
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
+        self._lab_data_holder: dict[str, int] = {}
+        self._lab_data_controls: dict[str, tuple[int, int, int]] = {}
         # модальное окно параметров фазовой огибающей (собирается перед расчётом)
         self._env_dialog_win: int | None = None
         self._env_dialog_ids: dict = {}

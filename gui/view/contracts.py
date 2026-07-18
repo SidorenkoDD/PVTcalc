@@ -78,6 +78,9 @@ class ContextBoundView:
     def _arm_flash_poll(self) -> None:
         raise NotImplementedError
 
+    def _schedule_session_autosave(self) -> None:
+        raise NotImplementedError
+
     def _on_flash_cancel(self, sender, app_data, user_data) -> None:
         raise NotImplementedError
 

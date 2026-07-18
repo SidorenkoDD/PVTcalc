@@ -89,6 +89,27 @@ def test_new_experiment_node(state):
     assert node in state.active_variant.experiment_runs()
 
 
+def test_lab_data_rows_are_typed_and_editable(state):
+    nid = state.new_experiment("dle", {"pressures": [400, 200]})
+    columns = exp_svc.EXPERIMENT_TYPES["dle"]["lab_columns"]
+
+    state.add_lab_data_row(nid, columns)
+    state.set_lab_data_value(nid, 0, 0, 250.0)
+    state.set_lab_data_value(nid, 0, 1, 1.23)
+    node = state.node_by_id(nid)
+    assert node.params["lab_data"] == {
+        "schema_version": 1,
+        "columns": columns,
+        "rows": [[250.0, 1.23, None, None, None]],
+    }
+
+    state.add_lab_data_row(nid, columns)
+    state.remove_lab_data_row(nid)
+    assert len(node.params["lab_data"]["rows"]) == 1
+    state.clear_lab_data(nid)
+    assert node.params["lab_data"]["rows"] == []
+
+
 def test_composition_change_invalidates_experiment(state):
     nid = state.new_experiment("dle", {"pressures": [400, 200], "T_c": 90.0})
     state.set_node_result(nid, {"columns": ["pressure"], "rows": [[1.0]],

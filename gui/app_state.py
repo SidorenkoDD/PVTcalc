@@ -778,6 +778,58 @@ class AppState:
             ref = node_id if isinstance(node_id, NodeRef) else self.node_ref(node.node_id)
             self._notify(StateChange(StateChangeKind.NODE, ref))
 
+    # --- фактические точки эксперимента ----------------------------------
+
+    def _lab_node(self, node_id: str) -> Optional[GraphNode]:
+        node = self.node_by_id(node_id)
+        return node if node is not None and node.kind is NodeKind.EXPERIMENT else None
+
+    def add_lab_data_row(self, node_id: str, columns: list[str]) -> None:
+        """Добавляет пустую строку фактических данных без пересборки View."""
+        node = self._lab_node(node_id)
+        if node is None or not columns:
+            return
+        data = node.params.get("lab_data")
+        if not isinstance(data, dict) or data.get("columns") != columns:
+            data = {"schema_version": 1, "columns": list(columns), "rows": []}
+            node.params["lab_data"] = data
+        rows = data.setdefault("rows", [])
+        if isinstance(rows, list):
+            rows.append([None] * len(columns))
+
+    def remove_lab_data_row(self, node_id: str) -> None:
+        """Удаляет последнюю строку фактических данных."""
+        node = self._lab_node(node_id)
+        if node is None:
+            return
+        data = node.params.get("lab_data")
+        rows = data.get("rows") if isinstance(data, dict) else None
+        if isinstance(rows, list) and rows:
+            rows.pop()
+
+    def clear_lab_data(self, node_id: str) -> None:
+        """Очищает точки, сохраняя выбранную схему колонок."""
+        node = self._lab_node(node_id)
+        if node is None:
+            return
+        data = node.params.get("lab_data")
+        if isinstance(data, dict):
+            data["rows"] = []
+
+    def set_lab_data_value(self, node_id: str, row: int, column: int,
+                           value: float | None) -> None:
+        """Меняет одну фактическую точку без уведомления (сохраняет фокус поля)."""
+        node = self._lab_node(node_id)
+        if node is None:
+            return
+        data = node.params.get("lab_data")
+        rows = data.get("rows") if isinstance(data, dict) else None
+        if (not isinstance(rows, list) or row < 0 or row >= len(rows)
+                or not isinstance(rows[row], list)
+                or column < 0 or column >= len(rows[row])):
+            return
+        rows[row][column] = value
+
     # --- обобщённые переходы статуса узла-расчёта (флэш/эксперимент) -----
 
     def set_node_running(self, node_id: str | NodeRef) -> None:
