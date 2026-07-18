@@ -7,7 +7,7 @@ import dearpygui.dearpygui as dpg
 from gui.app_state import AppState
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState
-from gui.view.app import _PRIMARY, _PROJECTS_CONTENT, PVTcalcApp
+from gui.view.app import _PRIMARY, _PROJECTS_CONTENT, _WORKSPACE, PVTcalcApp
 
 MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
 
@@ -25,5 +25,18 @@ def test_dpg_context_builds_and_renders_projects():
         assert dpg.does_item_exist(_PRIMARY)
         assert dpg.does_item_exist(_PROJECTS_CONTENT)
         assert state.models
+
+        # Реально собрать вкладки каждого вынесенного view-модуля. Расчёты не
+        # запускаются: smoke проверяет DPG wiring/callback construction.
+        model_id = next(iter(state.models))
+        app._open_project(model_id)
+        assert dpg.does_item_exist(_WORKSPACE)
+        state.open_node("composition")
+        assert "composition" in app._tab_ids
+
+        flash_id = state.new_flash_run(100.0, 50.0)
+        experiment_id = state.new_experiment("dle", {"pressures": [200.0, 100.0]})
+        envelope_id = state.new_envelope({"method": "ssm"})
+        assert {flash_id, experiment_id, envelope_id}.issubset(app._tab_ids)
     finally:
         dpg.destroy_context()
