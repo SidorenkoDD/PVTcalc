@@ -19,15 +19,15 @@ Calculation Flow) и то, что дальше передаётся в `Flash`, 
 `BrusilovskiyEOS` и эксперименты (`DLE`/`CCE`/`SeparatorTest`).
 """
 
+import logging
 from copy import deepcopy
 
-from calc_core.PlusComponents.PlusComponentCorrelations import PlusComponentProperties
-from calc_core.Utils.JsonDBReader import JsonDBReader
-from calc_core.Utils import BRS_EOS_DB as BRSDB
-from calc_core.Utils.Errors import NoComponentError, InvalidMolarFractionError
 from calc_core.EOS.BaseEOS import EOSType
-import json
-import logging
+from calc_core.PlusComponents.PlusComponentCorrelations import PlusComponentProperties
+from calc_core.Utils import BRS_EOS_DB as BRSDB
+from calc_core.Utils.Errors import InvalidMolarFractionError, NoComponentError
+from calc_core.Utils.JsonDBReader import JsonDBReader
+
 logger = logging.getLogger(__name__)
 db = JsonDBReader().load_database('DB.json')
 
@@ -686,15 +686,15 @@ class Composition:
         >>> db = Composition.from_db("models.json")
         >>> comp = db.KRSNL_PVTSIM
         """
-        import json
         from pathlib import Path
+
+        from calc_core.Utils.ModelStore import read_model_store
 
         path = Path(db_path)
         if not path.exists():
             raise FileNotFoundError(f"Файл БД не найден: {path}")
 
-        with open(path, "r", encoding="utf-8") as f:
-            db_data = json.load(f)
+        db_data = read_model_store(path)
 
         class _CompositionDBProxy:
             """Ленивый доступ к моделям из `models.json` через атрибуты (см. `Composition.from_db`)."""
@@ -724,9 +724,12 @@ class Composition:
                 # 3. Восстановление типа УРС из строки/Enum
                 eos_raw = rec.get("eos", "PREOS")
                 eos_str = str(eos_raw).upper()
-                if "SRK" in eos_str: obj._eos_name = EOSType.SRKEOS
-                elif "BRS" in eos_str: obj._eos_name = EOSType.BRSEOS
-                else: obj._eos_name = EOSType.PREOS
+                if "SRK" in eos_str:
+                    obj._eos_name = EOSType.SRKEOS
+                elif "BRS" in eos_str:
+                    obj._eos_name = EOSType.BRSEOS
+                else:
+                    obj._eos_name = EOSType.PREOS
 
                 # 4. Пластовая температура: новые записи могут хранить её в
                 #    ключе "T_res" (см. Export.py, параметр t_res); старые

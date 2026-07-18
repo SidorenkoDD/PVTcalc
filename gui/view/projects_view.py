@@ -59,6 +59,20 @@ class ProjectsViewMixin(ContextBoundView):
         dpg.add_text("Projects", parent=parent)
         dpg.add_separator(parent=parent)
 
+        if self._state.model_list_error:
+            warning = dpg.add_text(
+                "Models database could not be read. No data was changed.\n"
+                f"{self._state.model_list_error}",
+                parent=parent,
+                wrap=920,
+            )
+            dpg.bind_item_theme(warning, self._theme_stale())
+            dpg.add_text(
+                "Restore or correct models.json, then restart the application.",
+                parent=parent,
+            )
+            dpg.add_separator(parent=parent)
+
         # строка «продолжить последнюю сессию»
         last = self._session.active_model_id
         if last and last in self._state.models:

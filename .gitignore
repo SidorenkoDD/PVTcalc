@@ -10,6 +10,7 @@ build/
 gui_session.json
 # Legacy-файл прежней панели Settings; новые версии его не создают
 gui_settings.json
-# бэкап базы моделей (пишется перед каждым сохранением из GUI)
-models.json.bak
+# Ротационные backup и межпроцессный lock базы моделей
+models.json.bak*
+models.json.lock
 *.tmp

@@ -24,6 +24,7 @@ from enum import Enum, auto
 from typing import Optional
 
 from calc_core.Composition.Composition import Composition
+from calc_core.Utils.ModelStore import ModelStoreError
 from gui.services import composition_service as comp_svc
 from gui.services.model_repository import ModelRepository, ModelSummary
 
@@ -141,6 +142,7 @@ class AppState:
     def __init__(self, repository: ModelRepository):
         self._repo = repository
         self.models: dict[str, Model] = {}
+        self.model_list_error: str | None = None
         self.active_model_id: Optional[str] = None
         self.active_variant_id: Optional[str] = None
         # текущий экран: "projects" (стартовый) | "workspace"
@@ -273,7 +275,19 @@ class AppState:
 
     def refresh_model_list(self) -> None:
         """Читает сводку моделей из репозитория (без загрузки составов)."""
-        summaries: list[ModelSummary] = self._repo.list_models()
+        try:
+            summaries: list[ModelSummary] = self._repo.list_models()
+        except ModelStoreError as exc:
+            # Ошибка пользовательского файла не должна прерывать запуск GUI.
+            # Оставляем Projects работоспособным и показываем диагностический
+            # баннер; запись намеренно не пытаемся "починить" автоматически.
+            self.models = {}
+            self.model_list_error = str(exc)
+            logger.error("Не удалось обновить список моделей: %s", exc)
+            self._notify()
+            return
+
+        self.model_list_error = None
         existing = self.models
         self.models = {}
         for s in summaries:

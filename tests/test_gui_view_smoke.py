@@ -13,6 +13,36 @@ from gui.view.contracts import ViewHost
 MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
 
 
+def _text_values(root: int | str) -> list[str]:
+    """Собирает значения DPG text-виджетов под контейнером ``root``."""
+    values: list[str] = []
+    pending: list[int | str] = [root]
+    while pending:
+        item = pending.pop()
+        for children in dpg.get_item_children(item).values():
+            pending.extend(children)
+            for child in children:
+                if dpg.get_item_type(child) == "mvAppItemType::mvText":
+                    values.append(str(dpg.get_value(child)))
+    return values
+
+
+def test_projects_renders_corrupt_store_diagnostic(tmp_path):
+    path = tmp_path / "models.json"
+    path.write_text('{"broken":', encoding="utf-8")
+    state = AppState(ModelRepository(str(path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        texts = _text_values(_PROJECTS_CONTENT)
+        assert any("Models database could not be read" in text for text in texts)
+        assert any("строка 1, столбец 11" in text for text in texts)
+    finally:
+        dpg.destroy_context()
+
+
 def test_dpg_context_builds_and_renders_projects():
     state = AppState(ModelRepository(str(MODELS_JSON)))
     app = PVTcalcApp(state, SessionState())

@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from calc_core.Composition.Composition import Composition
+from calc_core.Utils.ModelStore import ModelStoreCorruptError
 from gui.services import project_service as svc
 from gui.services.model_repository import ModelRepository
 
@@ -39,7 +40,9 @@ def test_component_catalog_full_and_grouped():
 
 def test_suggest_model_id_slug_and_unique(tmp_path):
     db = tmp_path / "m.json"
-    db.write_text('{"MY_FLUID": {}}', encoding="utf-8")
+    db.write_text(
+        '{"MY_FLUID": {"composition": {"C1": 1.0}, '
+        '"composition_data": {}}}', encoding="utf-8")
     assert svc.suggest_model_id("My fluid!", str(db)) == "MY_FLUID_2"
     assert svc.suggest_model_id("2 phases", str(db)).startswith("MODEL")
     assert svc.suggest_model_id("нефть", str(db)).startswith("MODEL")
@@ -47,7 +50,9 @@ def test_suggest_model_id_slug_and_unique(tmp_path):
 
 def test_validate_new_model_errors(tmp_path):
     db = tmp_path / "m.json"
-    db.write_text('{"X": {}}', encoding="utf-8")
+    db.write_text(
+        '{"X": {"composition": {"C1": 1.0}, '
+        '"composition_data": {}}}', encoding="utf-8")
     errors = svc.validate_new_model("X", "", {}, str(db))
     joined = " ".join(errors)
     assert "already exists" in joined
@@ -102,7 +107,7 @@ def test_create_model_appends_not_overwrites(tmp_path):
 def test_create_model_refuses_on_corrupt_db(tmp_path):
     db = tmp_path / "models.json"
     db.write_text("{corrupted", encoding="utf-8")   # непустой, но битый JSON
-    with pytest.raises(RuntimeError):
+    with pytest.raises(ModelStoreCorruptError, match="строка 1, столбец 2"):
         svc.create_model(str(db), "X", "X", None, "PREOS", 373.15, dict(_ZI))
     assert db.read_text(encoding="utf-8") == "{corrupted"  # база не тронута
 

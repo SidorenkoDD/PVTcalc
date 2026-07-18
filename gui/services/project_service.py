@@ -10,21 +10,19 @@
 - `CompositionExcelLoader` — импорт zi из Excel (2 колонки: имя | доля).
 """
 
-import json
 import logging
 import math
 import re
-import shutil
 from pathlib import Path
 from typing import Optional
 
 from calc_core.Composition.Composition import Composition
 from calc_core.EOS.BaseEOS import EOSType
-from calc_core.Utils.AtomicFile import atomic_write_json
 from calc_core.Utils.CompositionLoader import CompositionExcelLoader
 from calc_core.Utils.E300Import import parse_e300
 from calc_core.Utils.Export import ModelJSONDB
 from calc_core.Utils.JsonDBReader import JsonDBReader
+from calc_core.Utils.ModelStore import read_model_store, update_model_store
 from gui.services import composition_service as comp_svc
 
 logger = logging.getLogger(__name__)
@@ -86,14 +84,7 @@ def component_catalog() -> list[dict]:
 # --- имена/валидация ---------------------------------------------------------
 
 def _existing_ids(db_path: str) -> set:
-    p = Path(db_path)
-    if not p.exists():
-        return set()
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            return set(json.load(f).keys())
-    except json.JSONDecodeError:
-        return set()
+    return set(read_model_store(db_path, missing_ok=True))
 
 
 def suggest_model_id(name: str, db_path: str = "models.json") -> str:
@@ -156,11 +147,8 @@ def create_model(db_path: str, model_id: str, name: str, field: Optional[str],
     Порядок важен: overrides M/gamma/Tb для C7+ применяются ДО
     `evaluate_composition_data` — эти свойства входят в корреляции C7+.
 
-    Raises
-    ------
-    RuntimeError
-        Если существующий непустой models.json не удалось загрузить —
-        прерываемся, чтобы `save()` не затёр базу.
+    Повреждённая или несовместимая база поднимает диагностируемую ошибку
+    ModelStore и никогда не перезаписывается пустым содержимым.
     """
     zi_clean = {k: float(v) for k, v in zi.items() if v and float(v) > 0}
     composition = Composition(zi_clean, T_res=float(t_res),
@@ -177,16 +165,7 @@ def create_model(db_path: str, model_id: str, name: str, field: Optional[str],
     selected_correlations = correlations or comp_svc.default_correlations()
     composition.evaluate_composition_data(selected_correlations)
 
-    # защита от затирания базы: файл есть и непуст, а load() дал пусто
-    p = Path(db_path)
     db = ModelJSONDB(db_path)
-    if p.exists() and p.stat().st_size > 2 and not db._db:
-        raise RuntimeError(
-            "models database exists but could not be loaded - aborting save "
-            "to avoid data loss")
-    if p.exists():
-        shutil.copyfile(p, str(p) + ".bak")
-
     db.export_and_save(model_id, name, composition.composition,
                        composition.composition_data, str(eos_value),
                        results=None, field=field or None, t_res=float(t_res),
@@ -202,16 +181,21 @@ def delete_model(db_path: str, model_id: str) -> bool:
     Удаляет модель из models.json (с бэкапом `.bak`). Возвращает True, если
     модель была и удалена. Битый JSON пробрасывает исключение (не затираем).
     """
-    p = Path(db_path)
-    if not p.exists():
+    if not Path(db_path).exists():
         return False
-    with open(p, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    if model_id not in data:
+
+    class _ModelNotFound(Exception):
+        pass
+
+    def remove(data) -> None:
+        if model_id not in data:
+            raise _ModelNotFound
+        del data[model_id]
+
+    try:
+        update_model_store(db_path, remove)
+    except _ModelNotFound:
         return False
-    shutil.copyfile(p, str(p) + ".bak")
-    del data[model_id]
-    atomic_write_json(p, data)
     logger.info("Модель '%s' удалена из %s", model_id, db_path)
     return True
 
@@ -269,15 +253,8 @@ def _save_composition_as_model(db_path: str, model_id: str, name: str,
                                composition: Composition, eos_value: str,
                                t_res: float, field: Optional[str] = None,
                                correlations: Optional[dict] = None) -> None:
-    """Сохраняет готовый `Composition` как модель (guard базы + бэкап `.bak`)."""
-    p = Path(db_path)
+    """Сохраняет готовый ``Composition`` через единый безопасный ModelStore."""
     db = ModelJSONDB(db_path)
-    if p.exists() and p.stat().st_size > 2 and not db._db:
-        raise RuntimeError(
-            "models database exists but could not be loaded - aborting save "
-            "to avoid data loss")
-    if p.exists():
-        shutil.copyfile(p, str(p) + ".bak")
     db.export_and_save(model_id, name, composition.composition,
                        composition.composition_data, eos_value,
                        results=None, field=field, t_res=float(t_res),

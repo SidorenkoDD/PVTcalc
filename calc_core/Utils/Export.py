@@ -8,18 +8,19 @@
 результаты расчётов самого движка, см. CLAUDE.md.
 """
 
-import json
-import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from calc_core.Utils.AtomicFile import atomic_write_json
+from calc_core.Utils.ModelStore import (
+    StoreRevision,
+    read_model_store,
+    store_revision,
+    write_model_store,
+)
+
 # from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
 # from calc_core.Utils.Results import ResultStore
-
-logger = logging.getLogger(__name__)
-
 
 class ModelJSONDB:
     """Простая JSON-"база" в памяти (`self._db`), синхронизируемая с файлом на диске через `load()`/`save()`."""
@@ -35,6 +36,7 @@ class ModelJSONDB:
         """
         self.filepath = Path(filepath)
         self._db: Dict[str, Dict[str, Any]] = {}
+        self._source_revision: StoreRevision = None
         
         # ВАЖНО: Сразу загружаем существующие данные при инициализации,
         # чтобы новые записи добавлялись к старым, а не заменяли их.
@@ -46,7 +48,7 @@ class ModelJSONDB:
                composition_data: Dict[str, Any],
                eos: Any,
                results: Optional[Any] = None, # Сделали Optional, так как может быть None
-               field: str = None,
+               field: Optional[str] = None,
                t_res: Optional[float] = None,
                correlations: Optional[Dict[str, Any]] = None):
         """Кладёт модель в оперативную память 'базы'.
@@ -91,31 +93,32 @@ class ModelJSONDB:
         self._db[model_id] = record
 
     def save(self):
-        """Атомарно записывает все накопленные модели в файл."""
-        atomic_write_json(self.filepath, self._db, default=str)
+        """Валидирует и атомарно пишет store с lock/backup/concurrency check."""
+        write_model_store(
+            self.filepath,
+            self._db,
+            expected_revision=self._source_revision,
+        )
+        self._source_revision = store_revision(self.filepath)
 
     def load(self):
         """Загружает файл в текущее содержимое. Если файла нет, оставляет self._db пустым."""
-        if self.filepath.exists():
-            try:
-                with open(self.filepath, "r", encoding="utf-8") as f:
-                    self._db = json.load(f)
-            except json.JSONDecodeError:
-                # На случай, если файл поврежден, начинаем с чистого листа
-                logger.warning("%s поврежден. Начинаем с пустой базы.", self.filepath)
-                self._db = {}
+        self._db = read_model_store(self.filepath, missing_ok=True)
+        self._source_revision = store_revision(self.filepath)
 
     @staticmethod
     def _safe_json(data: Any) -> Any:
         """Превращает numpy/pandas в list/dict, чтобы JSON не падал."""
-        if hasattr(data, "tolist"): return data.tolist()
-        if hasattr(data, "to_dict"): return data.to_dict(orient="list")
+        if hasattr(data, "tolist"):
+            return data.tolist()
+        if hasattr(data, "to_dict"):
+            return data.to_dict(orient="list")
         return data
 
     # --- ДОПОЛНИТЕЛЬНО: Удобный метод "всё в одном" ---
     def export_and_save(self, model_id: str, name: str, composition: Dict[str, Any],
                         composition_data: Dict[str, Any], eos: Any,
-                        results: Optional[Any] = None, field: str = None,
+                        results: Optional[Any] = None, field: Optional[str] = None,
                         t_res: Optional[float] = None,
                         correlations: Optional[Dict[str, Any]] = None):
         """Добавляет модель в память и сразу сохраняет на диск."""

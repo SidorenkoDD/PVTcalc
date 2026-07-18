@@ -34,6 +34,25 @@ def test_repository_missing_file_returns_empty(tmp_path):
     assert repo.list_models() == []
 
 
+def test_app_state_exposes_corrupt_store_without_crashing(tmp_path):
+    db_path = tmp_path / "models.json"
+    db_path.write_text('{"broken":', encoding="utf-8")
+    state = AppState(ModelRepository(db_path=str(db_path)))
+    notifications: list[None] = []
+    state.subscribe(lambda: notifications.append(None))
+
+    state.refresh_model_list()
+
+    assert state.models == {}
+    assert state.model_list_error is not None
+    assert "строка 1, столбец 11" in state.model_list_error
+    assert notifications == [None]
+
+    db_path.write_text("{}", encoding="utf-8")
+    state.refresh_model_list()
+    assert state.model_list_error is None
+
+
 def test_repository_load_composition(repo):
     comp = repo.load_composition("KRSNL_PVTSIM")
     assert len(comp.composition) == 40

@@ -14,16 +14,14 @@
 docs/GUI.md, заметка 2026-07-16).
 """
 
-import json
 import logging
-import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from calc_core.Composition.Composition import Composition
-from calc_core.Utils.AtomicFile import atomic_write_json
+from calc_core.Utils.ModelStore import read_model_store, update_model_store
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +52,7 @@ class ModelRepository:
             Путь к файлу снэпшотов моделей. По умолчанию `models.json`.
         t_res : float
             Пластовая температура, проставляемая загруженным составам
-            (в файле не хранится — см. `Composition.from_db`).
+            без собственного ``T_res`` (для legacy-записей).
         """
         self._db_path = Path(db_path)
         self._t_res = t_res
@@ -73,8 +71,7 @@ class ModelRepository:
             logger.warning("Файл моделей не найден: %s", self._db_path)
             return []
 
-        with open(self._db_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+        raw = read_model_store(self._db_path)
 
         summaries: list[ModelSummary] = []
         for model_id, rec in raw.items():
@@ -113,8 +110,7 @@ class ModelRepository:
         """Возвращает сохранённый выбор корреляций C7+ модели, если он есть."""
         if not self._db_path.exists():
             return None
-        with open(self._db_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
+        raw = read_model_store(self._db_path)
         rec = raw.get(model_id)
         if not isinstance(rec, dict):
             return None
@@ -125,26 +121,20 @@ class ModelRepository:
                          correlations: Optional[dict] = None) -> None:
         """Атомарно сохраняет отредактированный состав, сохраняя метаданные.
 
-        Перед записью создаётся совместимый с прежним поведением ``.bak``.
+        Перед записью ротируются ``.bak``, ``.bak.1`` и ``.bak.2``.
         ``created_at`` и история результатов не сбрасываются; меняется только
         редактируемая часть модели и ``updated_at``.
         """
-        if not self._db_path.exists():
-            raise FileNotFoundError(f"Файл моделей не найден: {self._db_path}")
-        with open(self._db_path, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        if not isinstance(raw, dict) or model_id not in raw:
-            raise KeyError(f"Модель '{model_id}' не найдена в {self._db_path}")
-        rec = raw[model_id]
-        if not isinstance(rec, dict):
-            raise ValueError(f"Запись модели '{model_id}' имеет неверный формат")
+        def update(raw) -> None:
+            if model_id not in raw:
+                raise KeyError(f"Модель '{model_id}' не найдена в {self._db_path}")
+            rec = raw[model_id]
+            rec["composition"] = dict(composition.composition)
+            rec["composition_data"] = composition.composition_data
+            rec["eos"] = composition.eos_name.value
+            rec["T_res"] = float(composition.T)
+            rec["correlations"] = dict(correlations or {})
+            rec["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
-        shutil.copy2(self._db_path, str(self._db_path) + ".bak")
-        rec["composition"] = dict(composition.composition)
-        rec["composition_data"] = composition.composition_data
-        rec["eos"] = composition.eos_name.value
-        rec["T_res"] = float(composition.T)
-        rec["correlations"] = dict(correlations or {})
-        rec["updated_at"] = datetime.now().isoformat(timespec="seconds")
-        atomic_write_json(self._db_path, raw, default=str)
+        update_model_store(self._db_path, update)
         logger.info("Модель '%s' сохранена в %s", model_id, self._db_path)
