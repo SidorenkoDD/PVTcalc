@@ -168,3 +168,5 @@ DLE.DLE.calculate() / SeparatorTest.SeparatorTest.calculate() / CCE.CCE.calculat
 2026-07-18 (контракты View): добавлен `gui/view/contracts.py` с `ViewContext`/`ViewHost`/`ContextBoundView`; неявные `Any`-контракты feature-view удалены. Settings теперь строго read-only и показывает фактические константы движка; `gui_settings.json` больше не создаётся и не читается. Детали — `docs/GUI.md`, СТАТУС-8.
 
 2026-07-18 (ModelStore): чтение/запись `models.json` централизованы в версионированном валидируемом слое с lock, optimistic concurrency и ротационными backup. Повреждённый store не перезаписывается и отображается в Projects как диагностическое состояние. Детали — `docs/GUI.md`, СТАТУС-9.
+
+2026-07-19 (гранулярный рендер): `AppState` публикует типизированные `StateChange`-события, а DearPyGui обновляет только затронутый экран/дерево или body конкретной вкладки. Фоновые переходы статуса не пересоздают соседние вкладки; восстановление workspace передаёт одно событие навигации. Детали — `docs/GUI.md`, СТАТУС-10.

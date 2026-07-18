@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from gui.app_state import AppState, NodeKind, NodeStatus
+from gui.app_state import (
+    AppState,
+    NodeKind,
+    NodeStatus,
+    StateChangeKind,
+)
 from gui.services.model_repository import ModelRepository
 
 MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
@@ -86,6 +91,28 @@ def test_app_state_refresh_and_open(repo):
 
     # refresh + open породили хотя бы два уведомления наблюдателя
     assert len(notifications) >= 2
+
+
+def test_state_change_events_describe_render_scope(repo):
+    state = AppState(repo)
+    changes = []
+    state.subscribe_changes(changes.append)
+
+    state.refresh_model_list()
+    state.open_model("KRSNL_PVTSIM")
+    state.open_node("composition")
+    flash_id = state.new_flash_run(100.0, 20.0)
+    state.set_node_running(flash_id)
+
+    assert [change.kind for change in changes] == [
+        StateChangeKind.MODEL_LIST,
+        StateChangeKind.WORKSPACE,
+        StateChangeKind.WORKSPACE,
+        StateChangeKind.WORKSPACE,
+        StateChangeKind.NODE,
+    ]
+    assert changes[-1].node_ref is not None
+    assert changes[-1].node_ref.node_id == flash_id
 
 
 def test_app_state_reopen_reuses_loaded_variant(repo):

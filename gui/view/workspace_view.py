@@ -18,6 +18,9 @@ class WorkspaceViewMixin(ContextBoundView):
     _compare_selection: set[str]
     _tabbar_id: int | None
     _tab_ids: dict[str, int]
+    _tab_content_ids: dict[str, int]
+    _workspace_crumb_id: int | None
+    _bip_ids: dict[tuple[int, int], int]
     _flash_input_ids: dict[str, tuple[int, int]]
     _exp_input_ids: dict[str, dict[str, int]]
     _exp_chart_holder: dict[str, int]
@@ -354,7 +357,7 @@ class WorkspaceViewMixin(ContextBoundView):
         # хлебные крошки
         node = self._state.active_node
         crumb = model.title + (f"   >   {self._node_crumb(node)}" if node else "")
-        dpg.add_text(crumb, parent=_WORKSPACE)
+        self._workspace_crumb_id = dpg.add_text(crumb, parent=_WORKSPACE)
         dpg.add_separator(parent=_WORKSPACE)
 
         if not variant.open_node_ids:
@@ -362,6 +365,7 @@ class WorkspaceViewMixin(ContextBoundView):
             return
 
         self._tab_ids = {}
+        self._tab_content_ids = {}
         with dpg.tab_bar(parent=_WORKSPACE, reorderable=True,
                          callback=self._on_tab_changed) as tabbar:
             self._tabbar_id = tabbar
@@ -373,6 +377,7 @@ class WorkspaceViewMixin(ContextBoundView):
                 with dpg.tab(label=self._tab_label(n), closable=True) as tab_id:
                     self._tab_ids[nid] = tab_id
                     page = dpg.add_group()
+                    self._tab_content_ids[nid] = page
                     dpg.add_spacer(height=2, parent=page)
                     if n.kind is NodeKind.COMPOSITION:
                         self._render_composition_tab(page, n)
@@ -389,6 +394,47 @@ class WorkspaceViewMixin(ContextBoundView):
         active = variant.active_node_id
         if active in self._tab_ids:
             dpg.set_value(self._tabbar_id, self._tab_ids[active])
+
+    def _render_node_content(self, node_id: str) -> bool:
+        """Пересобирает только body одной уже открытой вкладки."""
+        variant = self._state.active_variant
+        node = variant.nodes.get(node_id) if variant is not None else None
+        page = self._tab_content_ids.get(node_id)
+        if node is None or page is None or not dpg.does_item_exist(page):
+            return False
+
+        dpg.delete_item(page, children_only=True)
+        dpg.add_spacer(height=2, parent=page)
+        if node.kind is NodeKind.COMPOSITION:
+            self._bip_ids = {}
+        elif node.kind is NodeKind.FLASH:
+            self._flash_input_ids.pop(node_id, None)
+        elif node.kind is NodeKind.EXPERIMENT:
+            self._exp_input_ids.pop(node_id, None)
+            self._exp_chart_holder.pop(node_id, None)
+
+        if node.kind is NodeKind.COMPOSITION:
+            self._render_composition_tab(page, node)
+        elif node.kind is NodeKind.FLASH:
+            self._render_flash_tab(page, node)
+        elif node.kind is NodeKind.EXPERIMENT:
+            self._render_experiment_tab(page, node)
+        elif node.kind is NodeKind.PHASE_ENVELOPE:
+            self._render_envelope_tab(page, node)
+        elif node.kind is NodeKind.COMPARE:
+            self._render_compare_tab(page, node)
+
+        tab_id = self._tab_ids.get(node_id)
+        if tab_id is not None and dpg.does_item_exist(tab_id):
+            dpg.configure_item(tab_id, label=self._tab_label(node))
+        if (self._workspace_crumb_id is not None
+                and self._state.active_node is not None
+                and node_id == self._state.active_node.node_id):
+            model = self._state.active_model
+            if model is not None:
+                dpg.set_value(self._workspace_crumb_id,
+                              f"{model.title}   >   {self._node_crumb(node)}")
+        return True
 
     def _on_tab_changed(self, sender, app_data, user_data=None) -> None:
         # закрытие вкладки крестиком меняет выбор -> ловим его здесь же

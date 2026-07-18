@@ -18,7 +18,7 @@ import logging
 
 import dearpygui.dearpygui as dpg
 
-from gui.app_state import AppState, NodeKind
+from gui.app_state import AppState, NodeKind, StateChange, StateChangeKind
 from gui.calculation_coordinator import CalculationCoordinator
 from gui.session import SessionState, save_session
 from gui.view.composition_view import CompositionViewMixin
@@ -76,6 +76,8 @@ class PVTcalcApp(
         # чтобы не плодить фиксированные алиасы при пересоздании)
         self._tabbar_id: int | None = None
         self._tab_ids: dict[str, int] = {}
+        self._tab_content_ids: dict[str, int] = {}
+        self._workspace_crumb_id: int | None = None
         # id полей ввода (захватываем при отрисовке, без фиксированных алиасов)
         self._bip_ids: dict[tuple[int, int], int] = {}
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
@@ -124,7 +126,7 @@ class PVTcalcApp(
             on_cancel=self._close_new_fluid_modal,
             set_status=self._set_status,
         )
-        state.subscribe(self._render)
+        state.subscribe_changes(self._render_change)
         state.subscribe(self._schedule_session_autosave)
         state.subscribe_dirty(self._schedule_model_autosave)
 
@@ -395,6 +397,48 @@ class PVTcalcApp(
             self._render_workspace()
         # Форма нового флюида — модальное окно поверх Projects (рендерится один
         # раз при открытии, не по notify: держит ввод локально, не теряет фокус).
+
+    def _render_change(self, change: StateChange) -> None:
+        """Обновляет только затронутую область после команды AppState.
+
+        Полная пересборка остаётся явным fallback для публичного ``notify()``.
+        Особенно важен путь ``NODE``: завершение фонового расчёта не трогает
+        соседние вкладки и не сбрасывает их локальные DPG-состояния.
+        """
+        if change.kind is StateChangeKind.FULL:
+            self._render()
+            return
+        if not dpg.does_item_exist(_PROJECTS_SCREEN):
+            return
+
+        screen = self._state.current_screen
+        dpg.configure_item(_PROJECTS_SCREEN, show=(screen == "projects"))
+        dpg.configure_item(_WORKSPACE_SCREEN, show=(screen == "workspace"))
+
+        if screen == "projects":
+            if change.kind in (StateChangeKind.NAVIGATION,
+                               StateChangeKind.MODEL_LIST):
+                self._render_projects()
+            return
+
+        if change.kind is StateChangeKind.NAVIGATION:
+            self._render_tree()
+            self._render_workspace()
+        elif change.kind is StateChangeKind.MODEL_LIST:
+            self._render_tree()
+            if self._state.active_model is None:
+                self._render_workspace()
+        elif change.kind is StateChangeKind.TREE:
+            self._render_tree()
+        elif change.kind is StateChangeKind.WORKSPACE:
+            self._render_tree()
+            self._render_workspace()
+        elif change.kind is StateChangeKind.NODE:
+            ref = change.node_ref
+            if ref is None or ref.model_id == self._state.active_model_id:
+                self._render_tree()
+                if ref is None or not self._render_node_content(ref.node_id):
+                    self._render_workspace()
 
     # ==================================================================
     #  Экран Projects (стартовый)

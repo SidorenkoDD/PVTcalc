@@ -10,6 +10,7 @@ from pathlib import Path
 
 import dearpygui.dearpygui as dpg
 
+from gui.app_state import StateChange, StateChangeKind
 from gui.services import project_service as proj_svc
 from gui.view.contracts import ContextBoundView
 from gui.view.new_fluid_form import NewFluidForm
@@ -164,14 +165,14 @@ class ProjectsViewMixin(ContextBoundView):
             self._set_status("Calculation in progress - wait or cancel first.")
             return
         try:
-            self._state.enter_model(mid)
+            self._state.enter_model(mid, notify=False)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Не удалось открыть модель %s", mid)
             self._set_status(f"Failed to open '{mid}': {exc}")
             return
         self._expanded_models.add(mid)
         self._restore_workspace(mid)
-        self._state.notify()
+        self._state.notify(StateChange(StateChangeKind.NAVIGATION))
         self._set_status(f"Model '{mid}' opened.")
 
     # --- контекстное меню модели (просмотр состава / удаление) -------------

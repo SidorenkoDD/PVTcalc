@@ -80,3 +80,28 @@ def test_dpg_context_builds_and_renders_projects():
                    for wid in app._settings_ids.values())
     finally:
         dpg.destroy_context()
+
+
+def test_node_status_update_keeps_other_workspace_tabs_intact():
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        state.enter_model(next(iter(state.models)))
+        state.open_node("composition")
+        flash_id = state.new_flash_run(100.0, 20.0)
+        assert flash_id is not None
+
+        tabbar = app._tabbar_id
+        composition_page = app._tab_content_ids["composition"]
+        flash_page = app._tab_content_ids[flash_id]
+        state.set_node_running(flash_id)
+
+        assert app._tabbar_id == tabbar
+        assert app._tab_content_ids["composition"] == composition_page
+        assert app._tab_content_ids[flash_id] == flash_page
+        assert state.node_by_id(flash_id).status.name == "RUNNING"
+    finally:
+        dpg.destroy_context()
