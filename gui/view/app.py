@@ -437,7 +437,12 @@ class PVTcalcApp(
             ref = change.node_ref
             if ref is None or ref.model_id == self._state.active_model_id:
                 self._render_tree()
-                if ref is None or not self._render_node_content(ref.node_id):
+                variant = self._state.active_variant
+                is_open = (ref is not None and variant is not None
+                           and ref.node_id in variant.open_node_ids)
+                if ref is None:
+                    self._render_workspace()
+                elif is_open and not self._render_node_content(ref.node_id):
                     self._render_workspace()
 
     # ==================================================================
