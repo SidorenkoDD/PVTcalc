@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from gui.app_state import AppState, NodeStatus
+from gui.app_state import AppState
 from gui.services.model_repository import ModelRepository
 
 MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
@@ -88,3 +88,21 @@ def test_undo_is_per_variant(state):
     # другая модель — своя (пустая) история
     state.open_model("PRRZLM_MDT_TEST")
     assert not state.can_undo()
+
+
+def test_undo_restores_experiment_and_envelope_sequences(state):
+    exp = state.new_experiment("dle", {"pressures": [400, 200], "T_c": 90})
+    env = state.new_envelope({"method": "ssm"})
+    assert (exp, env) == ("exp_1", "env_1")
+    state.undo()
+    assert state.active_variant.env_seq == 0
+    assert state.new_envelope({"method": "grid"}) == "env_1"
+
+
+def test_undo_snapshot_shares_immutable_results(state):
+    nid = state.new_experiment("dle", {"pressures": [400, 200], "T_c": 90})
+    result = {"rows": [[1.0]]}
+    state.set_node_result(nid, result)
+    state.rename_node(nid, "renamed")
+    snap = state.active_variant.undo_stack[-1]
+    assert snap["nodes"][nid].result is result

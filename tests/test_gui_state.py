@@ -132,3 +132,16 @@ def test_model_summary_attached(repo):
     s = state.models["KRSNL_PVTSIM"].summary
     assert s is not None
     assert s.results_brief and s.results_brief[0]["module"] == "Flash"
+
+
+def test_node_ref_resolves_after_switching_models(repo):
+    state = AppState(repo)
+    state.refresh_model_list()
+    state.open_model("KRSNL_PVTSIM")
+    nid = state.new_flash_run(50, 20)
+    ref = state.node_ref(nid)
+    state.open_model("PRRZLM_MDT_TEST")
+    marker = {"done": True}
+    state.set_node_result(ref, marker)
+    assert state.node_by_ref(ref).result is marker
+    assert state.node_by_id(nid) is None

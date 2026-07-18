@@ -72,8 +72,7 @@ class CompositionExcelLoader(CompositionLoader):
                 raise InvalidExcelComponentType('Value not string in Excel!')
             dict_from_df = df.set_index('key')['value'].to_dict()
         else:
-            df = pd.read_excel(io = self._filepath,
-                            header = None)
+            df = pd.read_excel(io=self._filepath, sheet_name=sheet, header=None)
             df.columns = ["key", "value"]
             if not pd.api.types.is_numeric_dtype(df['value']):
                 raise InvalidExcelValueType('Value not numeric in Excel!')

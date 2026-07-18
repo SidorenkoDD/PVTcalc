@@ -12,6 +12,7 @@
 
 import json
 import logging
+import math
 import re
 import shutil
 from pathlib import Path
@@ -19,11 +20,11 @@ from typing import Optional
 
 from calc_core.Composition.Composition import Composition
 from calc_core.EOS.BaseEOS import EOSType
+from calc_core.Utils.AtomicFile import atomic_write_json
 from calc_core.Utils.CompositionLoader import CompositionExcelLoader
 from calc_core.Utils.E300Import import parse_e300
 from calc_core.Utils.Export import ModelJSONDB
 from calc_core.Utils.JsonDBReader import JsonDBReader
-
 from gui.services import composition_service as comp_svc
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,17 @@ def validate_new_model(model_id: str, name: str, zi: dict,
         errors.append("Model id must be a valid identifier (letters/digits/_).")
     elif mid in _existing_ids(db_path):
         errors.append(f"Model id '{mid}' already exists in the database.")
-    positive = {k: v for k, v in (zi or {}).items() if v and float(v) > 0}
+    positive = {}
+    for key, value in (zi or {}).items():
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            errors.append(f"Mole fraction for '{key}' is not a number.")
+            continue
+        if not math.isfinite(number) or number < 0:
+            errors.append(f"Mole fraction for '{key}' must be finite and >= 0.")
+        elif number > 0:
+            positive[key] = number
     if not positive:
         errors.append("Set at least one component fraction > 0.")
     available = set(_component_db()["available_components"])
@@ -135,7 +146,7 @@ def validate_new_model(model_id: str, name: str, zi: dict,
 
 # --- создание/сохранение -----------------------------------------------------
 
-def create_model(db_path: str, model_id: str, name: str, field: str,
+def create_model(db_path: str, model_id: str, name: str, field: Optional[str],
                  eos_value: str, t_res: float, zi: dict,
                  correlations: Optional[dict] = None,
                  c7_overrides: Optional[dict] = None) -> str:
@@ -163,8 +174,8 @@ def create_model(db_path: str, model_id: str, name: str, field: str,
             if val is not None:
                 composition.edit_component_properties(comp_name, prop, float(val))
 
-    composition.evaluate_composition_data(
-        correlations or comp_svc.default_correlations())
+    selected_correlations = correlations or comp_svc.default_correlations()
+    composition.evaluate_composition_data(selected_correlations)
 
     # защита от затирания базы: файл есть и непуст, а load() дал пусто
     p = Path(db_path)
@@ -178,7 +189,8 @@ def create_model(db_path: str, model_id: str, name: str, field: str,
 
     db.export_and_save(model_id, name, composition.composition,
                        composition.composition_data, str(eos_value),
-                       results=None, field=field or None, t_res=float(t_res))
+                       results=None, field=field or None, t_res=float(t_res),
+                       correlations=selected_correlations)
     logger.info("Модель '%s' создана и сохранена в %s", model_id, db_path)
     return model_id
 
@@ -199,8 +211,7 @@ def delete_model(db_path: str, model_id: str) -> bool:
         return False
     shutil.copyfile(p, str(p) + ".bak")
     del data[model_id]
-    with open(p, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    atomic_write_json(p, data)
     logger.info("Модель '%s' удалена из %s", model_id, db_path)
     return True
 
@@ -256,7 +267,8 @@ def import_excel(path: str, header: bool, sheet: str) -> dict:
 
 def _save_composition_as_model(db_path: str, model_id: str, name: str,
                                composition: Composition, eos_value: str,
-                               t_res: float, field: Optional[str] = None) -> None:
+                               t_res: float, field: Optional[str] = None,
+                               correlations: Optional[dict] = None) -> None:
     """Сохраняет готовый `Composition` как модель (guard базы + бэкап `.bak`)."""
     p = Path(db_path)
     db = ModelJSONDB(db_path)
@@ -268,10 +280,31 @@ def _save_composition_as_model(db_path: str, model_id: str, name: str,
         shutil.copyfile(p, str(p) + ".bak")
     db.export_and_save(model_id, name, composition.composition,
                        composition.composition_data, eos_value,
-                       results=None, field=field, t_res=float(t_res))
+                       results=None, field=field, t_res=float(t_res),
+                       correlations=correlations or comp_svc.default_correlations())
 
 
-def import_e300(db_path: str, path: str, t_res: float = 373.15) -> dict:
+def preview_e300(path: str) -> dict:
+    """Анализирует дек до сохранения и возвращает отчёт для подтверждения."""
+    parsed = parse_e300(path)
+    available = set(_component_db()["available_components"])
+    recognized = [n for n in parsed["names"] if n in available]
+    unrecognized = [n for n in parsed["names"] if n not in available]
+    total = sum(float(v) for v in parsed["zi"].values())
+    skipped = sum(float(parsed["zi"].get(n, 0.0)) for n in unrecognized)
+    return {
+        "name": Path(path).stem,
+        "deck_eos": parsed["eos"],
+        "recognized": recognized,
+        "unrecognized": unrecognized,
+        "total_zi": total,
+        "skipped_zi": skipped,
+        "warnings": list(parsed.get("warnings", [])),
+    }
+
+
+def import_e300(db_path: str, path: str, t_res: float = 373.15,
+                *, allow_unrecognized: bool = False) -> dict:
     """
     Импортирует состав из E300-дека и сохраняет его отдельной моделью.
 
@@ -293,6 +326,10 @@ def import_e300(db_path: str, path: str, t_res: float = 373.15) -> dict:
     names = parsed["names"]
     recognized = [n for n in names if n in available]
     unrecognized = [n for n in names if n not in available]
+    if unrecognized and not allow_unrecognized:
+        raise ValueError(
+            "E300 deck contains unrecognized components; preview and confirm "
+            "before importing: " + ", ".join(unrecognized))
 
     zi_clean = {n: float(parsed["zi"][n]) for n in recognized
                 if float(parsed["zi"].get(n, 0.0)) > 0}
@@ -328,7 +365,8 @@ def import_e300(db_path: str, path: str, t_res: float = 373.15) -> dict:
     logger.info("E300-импорт %s: модель '%s' (%d компонентов, %d нераспознано)",
                 path, model_id, len(recognized), len(unrecognized))
     return {"model_id": model_id, "name": name, "recognized": recognized,
-            "unrecognized": unrecognized, "deck_eos": parsed["eos"]}
+            "unrecognized": unrecognized, "deck_eos": parsed["eos"],
+            "warnings": parsed.get("warnings", [])}
 
 
 # --- сводка «что рассчитано» ------------------------------------------------

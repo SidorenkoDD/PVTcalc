@@ -53,9 +53,13 @@ class StopIterationError(ConvergenceError):
     pass
 
 
-class LenthMissMatchError(PVTCalcError):
-    """Не совпадают длины двух массивов (опечатка в имени — Length; используется в живом коде `SeparatorTest`)."""
+class LengthMismatchError(PVTCalcError):
+    """Не совпадают длины двух массивов."""
     pass
+
+
+# Обратная совместимость с исторической опечаткой.
+LenthMissMatchError = LengthMismatchError
 
 
 class nStagesError(PVTCalcError):

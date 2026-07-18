@@ -13,7 +13,7 @@ def test_engine_defaults_match_constants():
     assert d["TOL_SAT_PRESSURE"] == Constants.TOL_SAT_PRESSURE
     # стандартные условия читаются из StandardConditions
     assert d["STD_P"] == 1.01325
-    assert d["STD_T"] == 293.14
+    assert d["STD_T"] == 293.15
 
 
 def test_save_load_roundtrip(tmp_path):

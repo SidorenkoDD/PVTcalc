@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 
 from calc_core.Utils import Constants
+from calc_core.Utils.AtomicFile import atomic_write_json
 from calc_core.Utils.Conditions import StandardConditions
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,5 @@ def save_settings(values: dict, path: str = DEFAULT_SETTINGS_PATH) -> None:
     """Пишет только известные ключи схемы (как float) в `gui_settings.json`."""
     out = {k: float(values[k]) for k in ALL_KEYS if k in values}
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_json(p, out)
     logger.info("Настройки сохранены в %s (%d полей)", p, len(out))

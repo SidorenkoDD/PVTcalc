@@ -93,3 +93,15 @@ def test_import_e300_preserves_properties(comp, tmp_path):
         comp.composition_data["molar_mass"]["C1"])
     # модель сохранена на живом EOS Брусиловского независимо от ключа дека
     assert saved["eos"] == "BRSEOS"
+
+
+def test_import_e300_unknown_component_requires_confirmation(tmp_path):
+    deck = tmp_path / "unknown.inc"
+    deck.write_text(
+        "CNAMES\nC1\nUNKNOWN\n/\nZI\n0.8\n0.2\n/\n",
+        encoding="utf-8")
+    preview = proj_svc.preview_e300(str(deck))
+    assert preview["unrecognized"] == ["UNKNOWN"]
+    assert preview["skipped_zi"] == pytest.approx(0.2)
+    with pytest.raises(ValueError, match="preview and confirm"):
+        proj_svc.import_e300(str(tmp_path / "models.json"), str(deck))

@@ -10,7 +10,6 @@ import argparse
 import logging
 
 from calc_core.Utils.Logging import configure_logging
-
 from gui.app_state import AppState
 from gui.services.model_repository import ModelRepository
 from gui.session import load_session

@@ -33,6 +33,7 @@
 """
 
 import logging
+import math
 
 from calc_core.Composition.Composition import Composition
 from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
@@ -157,6 +158,12 @@ def _run_ssm(composition: Composition, params: dict) -> dict:
     t_max_c = float(params["t_max_c"])
     t_step_c = float(params["t_step_c"])
     p_max_bar = float(params["p_max_bar"])
+    if not all(math.isfinite(v) for v in (t_min_c, t_max_c, t_step_c, p_max_bar)):
+        raise ValueError("Envelope parameters must be finite")
+    if t_min_c <= -273.15 or t_max_c <= t_min_c or t_step_c <= 0 or p_max_bar <= 0:
+        raise ValueError("Invalid SSM temperature/pressure range")
+    if (t_max_c - t_min_c) / t_step_c > 5000:
+        raise ValueError("SSM grid is too large (maximum 5000 temperature steps)")
 
     comp = _normalized_copy(composition)
     model = CompositionalModel(comp)
@@ -205,6 +212,12 @@ def _run_grid(composition: Composition, params: dict) -> dict:
     p_max_bar = float(params.get("grid_p_max_bar", 700.0))
     t_points = int(params.get("grid_t_points", 30))
     p_points = int(params.get("grid_p_points", 30))
+    if not math.isfinite(t_max_c) or not math.isfinite(p_max_bar):
+        raise ValueError("Grid parameters must be finite")
+    if t_max_c <= 0 or p_max_bar <= 0 or t_points < 2 or p_points < 2:
+        raise ValueError("Invalid phase-envelope grid range")
+    if t_points > 200 or p_points > 200 or t_points * p_points > 40000:
+        raise ValueError("Phase-envelope grid is too large (maximum 200x200)")
 
     comp = _normalized_copy(composition)
     model = CompositionalModel(comp)
@@ -219,8 +232,8 @@ def _run_grid(composition: Composition, params: dict) -> dict:
     P = [_f(p) for p in calc.result_pressure_arr]       # бар
     flags = [_f(f) for f in calc.result_stability_flag_arr]  # 1.0 = двухфазно
 
-    unstable = {"T": [], "P": []}
-    stable = {"T": [], "P": []}
+    unstable: dict[str, list[float]] = {"T": [], "P": []}
+    stable: dict[str, list[float]] = {"T": [], "P": []}
     rows = []
     for t, p, f in zip(T, P, flags):
         if t is None or p is None:

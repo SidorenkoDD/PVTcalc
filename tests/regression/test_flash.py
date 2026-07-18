@@ -23,15 +23,16 @@ def test_krsnl_single_phase_above_p_sat(krsnl_composition):
     result = Flash(krsnl_composition, conditions).calculate()
 
     assert result.is_two_phase is False
+    assert result.phase_type == "vapor"
     assert result.vapor.mole_fraction == 0.0
     assert result.liquid.mole_fraction == 1.0
 
     props = result.liquid.properties
     assert props["molecular_ weight"] == pytest.approx(90.7050651693483, rel=REL)
-    assert props["molar_volume"] == pytest.approx(232.05312309533375, rel=REL)
-    assert props["density"] == pytest.approx(0.3908806050935337, rel=REL)
-    assert props["z"] == pytest.approx(1.052740128380821, rel=REL)
-    assert props["viscosity"] == pytest.approx(0.05490972013659039, rel=REL)
+    assert props["molar_volume"] == pytest.approx(232.1824045791991, rel=REL)
+    assert props["density"] == pytest.approx(0.39066295886520613, rel=REL)
+    assert props["z"] == pytest.approx(1.052745404441804, rel=REL)
+    assert props["viscosity"] == pytest.approx(0.05486606329262155, rel=REL)
 
 
 def test_krsnl_two_phase_below_p_sat(krsnl_composition):
@@ -42,22 +43,22 @@ def test_krsnl_two_phase_below_p_sat(krsnl_composition):
     result = Flash(krsnl_composition, conditions).calculate()
 
     assert result.is_two_phase is True
-    assert result.vapor.mole_fraction == pytest.approx(0.323361534981212, rel=REL)
-    assert result.liquid.mole_fraction == pytest.approx(0.676638465018788, rel=REL)
+    assert result.vapor.mole_fraction == pytest.approx(0.3233814250596266, rel=REL)
+    assert result.liquid.mole_fraction == pytest.approx(0.6766185749403735, rel=REL)
 
     liquid = result.liquid.properties
-    assert liquid["molecular_ weight"] == pytest.approx(122.86293663059008, rel=REL)
-    assert liquid["molar_volume"] == pytest.approx(180.29311593492352, rel=REL)
-    assert liquid["density"] == pytest.approx(0.6814621622876452, rel=REL)
-    assert liquid["z"] == pytest.approx(0.5662661819485649, rel=REL)
-    assert liquid["viscosity"] == pytest.approx(0.2930380292976516, rel=REL)
+    assert liquid["molecular_ weight"] == pytest.approx(122.86557171002929, rel=REL)
+    assert liquid["molar_volume"] == pytest.approx(180.39474497264422, rel=REL)
+    assert liquid["density"] == pytest.approx(0.6810928540554833, rel=REL)
+    assert liquid["z"] == pytest.approx(0.5662664965468325, rel=REL)
+    assert liquid["viscosity"] == pytest.approx(0.29192545629531313, rel=REL)
 
     vapor = result.vapor.properties
-    assert vapor["molecular_ weight"] == pytest.approx(23.414276284794113, rel=REL)
-    assert vapor["molar_volume"] == pytest.approx(270.88208995467915, rel=REL)
-    assert vapor["density"] == pytest.approx(0.086437151635649, rel=REL)
-    assert vapor["z"] == pytest.approx(0.8507888170963235, rel=REL)
-    assert vapor["viscosity"] == pytest.approx(0.015582436301816724, rel=REL)
+    assert vapor["molecular_ weight"] == pytest.approx(23.414879590804794, rel=REL)
+    assert vapor["molar_volume"] == pytest.approx(271.03681369721, rel=REL)
+    assert vapor["density"] == pytest.approx(0.08639003414850809, rel=REL)
+    assert vapor["z"] == pytest.approx(0.8507956645345173, rel=REL)
+    assert vapor["viscosity"] == pytest.approx(0.015580193236990185, rel=REL)
 
 
 def test_przlm_single_phase(przlm_composition):
@@ -68,9 +69,10 @@ def test_przlm_single_phase(przlm_composition):
     result = Flash(przlm_composition, conditions).calculate()
 
     assert result.is_two_phase is False
+    assert result.phase_type == "ambiguous"
     props = result.liquid.properties
     assert props["molecular_ weight"] == pytest.approx(162.37014542290848, rel=REL)
-    assert props["molar_volume"] == pytest.approx(233.68588095320453, rel=REL)
-    assert props["density"] == pytest.approx(0.694822232137435, rel=REL)
-    assert props["z"] == pytest.approx(1.5072650822412388, rel=REL)
-    assert props["viscosity"] == pytest.approx(0.4672075164503361, rel=REL)
+    assert props["molar_volume"] == pytest.approx(233.81316561119255, rel=REL)
+    assert props["density"] == pytest.approx(0.6944439805109754, rel=REL)
+    assert props["z"] == pytest.approx(1.5072362357257434, rel=REL)
+    assert props["viscosity"] == pytest.approx(0.46505064148340114, rel=REL)

@@ -1,12 +1,16 @@
+from __future__ import annotations
+
 import logging
 
-from calc_core.VLE.Flash import Flash
-import numpy as np
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from calc_core.VLE.Flash import Flash
 
 logger = logging.getLogger(__name__)
 
 
-class PhaseIndentificator:
+class PhaseIdentificator:
     def __init__(self, flash_object: Flash, Constant = 1.75):
         self.flash_object = flash_object
         self.Constant = Constant
@@ -23,11 +27,13 @@ class PhaseIndentificator:
             logger.debug('Sv > Sl : %s', self.flash_object.phase_stability_object.S_v > self.flash_object.phase_stability_object.S_l)
             logger.debug('Sv > Sl rounded: %s', self.flash_object.phase_stability_object.S_v_rounded > self.flash_object.phase_stability_object.S_l_rounded)
 
-            if Sv < Sl:
-                logger.debug('Sv < Sl -> vapour')
-            else:
-                logger.debug('Sv > Sl -> liquid')
-            if res > self.Constant * 10:
-                logger.debug('%s vapour', res)
-            else:
-                logger.debug('%s liquid', res)
+            stability_phase = 'vapor' if Sv < Sl else 'liquid'
+            volume_phase = 'vapor' if res > self.Constant * 10 else 'liquid'
+            logger.debug('stability heuristic -> %s', stability_phase)
+            logger.debug('volume heuristic (%s) -> %s', res, volume_phase)
+            return stability_phase if stability_phase == volume_phase else 'ambiguous'
+        return None
+
+
+# Обратная совместимость с исторической опечаткой.
+PhaseIndentificator = PhaseIdentificator

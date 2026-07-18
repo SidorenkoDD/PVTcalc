@@ -1,5 +1,6 @@
 __pycache__
-/.pyc
+*.pyc
+.DS_Store
 dist/
 build/
 *.egg-info/
@@ -11,3 +12,4 @@ gui_session.json
 gui_settings.json
 # бэкап базы моделей (пишется перед каждым сохранением из GUI)
 models.json.bak
+*.tmp

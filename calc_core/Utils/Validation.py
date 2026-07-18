@@ -13,12 +13,23 @@
 вызывающий выбирает подходящую.
 """
 
+import math
 from typing import Iterable, Union
 
 from calc_core.Utils.Errors import InputValidationError
 
 # Абсолютный ноль в °C — физическая нижняя граница температуры (эквивалент T_K > 0).
 _ABSOLUTE_ZERO_C = -273.15
+
+
+def _finite_float(value, name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise InputValidationError(f'{name} должно быть числом. Передано: {value!r}') from exc
+    if isinstance(value, bool) or not math.isfinite(number):
+        raise InputValidationError(f'{name} должно быть конечным числом. Передано: {value!r}')
+    return number
 
 
 def validate_positive_pressure(p: Union[float, Iterable[float]], name: str = 'давление') -> None:
@@ -37,9 +48,10 @@ def validate_positive_pressure(p: Union[float, Iterable[float]], name: str = 'д
     InputValidationError
         Если значение (или любой элемент) <= 0.
     """
-    values = p if isinstance(p, Iterable) else [p]
+    values = p if isinstance(p, Iterable) and not isinstance(p, (str, bytes)) else [p]
     for value in values:
-        if value <= 0.0:
+        number = _finite_float(value, name)
+        if number <= 0.0:
             raise InputValidationError(
                 f'{name} должно быть больше 0 (бар). Передано: {value}')
 
@@ -53,7 +65,7 @@ def validate_temperature_kelvin(t: float, name: str = 'температура') 
     InputValidationError
         Если `t` <= 0.
     """
-    if t <= 0.0:
+    if _finite_float(t, name) <= 0.0:
         raise InputValidationError(
             f'{name} должна быть больше 0 K. Передано: {t}')
 
@@ -67,7 +79,7 @@ def validate_temperature_celsius(t: float, name: str = 'температура')
     InputValidationError
         Если `t` <= -273.15.
     """
-    if t <= _ABSOLUTE_ZERO_C:
+    if _finite_float(t, name) <= _ABSOLUTE_ZERO_C:
         raise InputValidationError(
             f'{name} должна быть выше абсолютного нуля ({_ABSOLUTE_ZERO_C} °C). Передано: {t}')
 
@@ -88,6 +100,20 @@ def validate_composition_normalized(composition: dict, tol: float = 1e-6) -> Non
     InputValidationError
         Если сумма долей отклоняется от 1 больше чем на `tol`.
     """
+    if not composition:
+        raise InputValidationError('Состав не должен быть пустым.')
+    invalid = {}
+    for component, value in composition.items():
+        try:
+            number = _finite_float(value, f'zi[{component}]')
+        except InputValidationError:
+            invalid[component] = value
+            continue
+        if number <= 0.0:
+            invalid[component] = value
+    if invalid:
+        raise InputValidationError(
+            f'Мольные доли должны быть конечными и больше 0. Передано: {invalid}')
     total = sum(composition.values())
     if abs(total - 1.0) > tol:
         raise InputValidationError(

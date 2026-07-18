@@ -12,9 +12,10 @@
 """
 
 import logging
+import math
 
-from calc_core.EOS.BaseEOS import EOSType
 from calc_core.Composition.Composition import Composition
+from calc_core.EOS.BaseEOS import EOSType
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,10 @@ def recalculate(composition: Composition, correlations: dict[str, str]) -> None:
 
 def edit_zi(composition: Composition, component: str, value: float) -> None:
     """Меняет мольную долю компонента (без нормализации — см. `normalize`)."""
-    composition.composition[component] = float(value)
+    value = float(value)
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError("Mole fraction must be finite and greater than zero")
+    composition.composition[component] = value
 
 
 def normalize(composition: Composition) -> None:
@@ -129,12 +133,18 @@ def edit_property(composition: Composition, component: str,
     Tc/Pc/omega движок сам пересчитывает EOS-зависимые параметры этой
     компоненты.
     """
-    composition.edit_component_properties(component, property_name, float(value))
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError("Component property must be finite")
+    composition.edit_component_properties(component, property_name, value)
 
 
 def edit_bip(composition: Composition, comp1: str, comp2: str, value: float) -> None:
     """Симметрично задаёт коэффициент парного взаимодействия пары компонент."""
-    composition.edit_bip_for_components(comp1, comp2, float(value))
+    value = float(value)
+    if not math.isfinite(value):
+        raise ValueError("BIP must be finite")
+    composition.edit_bip_for_components(comp1, comp2, value)
 
 
 def get_bip(composition: Composition, comp1: str, comp2: str) -> float:

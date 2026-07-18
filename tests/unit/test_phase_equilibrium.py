@@ -12,8 +12,8 @@ unit-тестах и во flash-тесте).
 import pytest
 
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
-from calc_core.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 from calc_core.Utils.Errors import ConvergenceError
+from calc_core.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 
 # Известная двухфазная точка KRSNL (та же, что во flash-тесте): P=100 бар, T=110°C.
 P_TWO_PHASE_BAR = 100.0

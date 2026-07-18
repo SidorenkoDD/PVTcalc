@@ -15,6 +15,11 @@ import logging
 
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.Conditions import Conditions
+from calc_core.Utils.Validation import (
+    validate_composition_normalized,
+    validate_positive_pressure,
+    validate_temperature_celsius,
+)
 from calc_core.VLE.Flash import Flash
 from calc_core.VLE.FlashResult import FlashResult, PhaseState
 
@@ -42,6 +47,11 @@ def run_flash(composition: Composition, p_bar: float, t_celsius: float) -> Flash
         `pressure`, `temperature` (K), `vapor`/`liquid` (`PhaseState`),
         `is_two_phase`.
     """
+    validate_positive_pressure(p_bar, name="P")
+    validate_temperature_celsius(t_celsius, name="T")
+    # Сохранённые инженерные составы часто округлены до 5-6 знаков; допускаем
+    # небольшой хвост и затем штатно нормализуем независимую рабочую копию.
+    validate_composition_normalized(composition.composition, tol=1e-4)
     conditions = Conditions(p_bar, t_celsius)
     logger.info("Флэш: P=%s бар, T=%s °C", p_bar, t_celsius)
     # ВАЖНО: Flash мутирует состав (перезаписывает T и пересчитывает a/b/c/d,
@@ -75,6 +85,7 @@ def snapshot_flash_result(result: FlashResult) -> dict:
 
     return {
         "is_two_phase": bool(result.is_two_phase),
+        "phase_type": result.phase_type,
         "pressure": _as_float(result.pressure),
         "temperature": _as_float(result.temperature),
         "vapor": phase(result.vapor),
@@ -95,4 +106,5 @@ def restore_flash_result(snap: dict) -> FlashResult:
         vapor=phase(snap.get("vapor", {})),
         liquid=phase(snap.get("liquid", {})),
         is_two_phase=bool(snap.get("is_two_phase")),
+        phase_type=snap.get("phase_type"),
     )

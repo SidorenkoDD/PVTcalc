@@ -46,7 +46,7 @@ def test_session_v2_workspaces_roundtrip(tmp_path):
     save_session(original, path)
     loaded = load_session(path)
 
-    assert loaded.version == 2
+    assert loaded.version == 3
     assert loaded.active_model_id == "KRSNL_PVTSIM"
     assert loaded.workspaces["KRSNL_PVTSIM"]["active_tab"] == "flash_1"
     assert loaded.workspaces["KRSNL_PVTSIM"]["flashes"][0]["P"] == 50.0
@@ -64,7 +64,7 @@ def test_session_migration_v1_to_v2(tmp_path):
         encoding="utf-8")
     loaded = load_session(str(path))
 
-    assert loaded.version == 2
+    assert loaded.version == 3
     ws = loaded.workspaces["KRSNL_PVTSIM"]
     assert ws["open_tabs"] == ["composition"]
     assert ws["flashes"][0]["P"] == 50.0

@@ -19,6 +19,7 @@ class FlashResult:
     vapor : PhaseState
     liquid : PhaseState
     is_two_phase : bool
+    phase_type: str | None = None
 
     @property
     def liquid_composition(self) -> Any:

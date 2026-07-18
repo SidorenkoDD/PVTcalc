@@ -125,9 +125,20 @@ def test_import_excel_with_header(tmp_path):
 def test_import_excel_no_header(tmp_path):
     x = tmp_path / "comp.xlsx"
     _write_xlsx(x, [["C1", 0.9], ["CO2", 0.1]], header=False)
-    res = svc.import_excel(str(x), header=False, sheet="ignored")
+    res = svc.import_excel(str(x), header=False, sheet="Sheet1")
     assert res["recognized"] == {"C1": 0.9, "CO2": 0.1}
     assert res["unrecognized"] == {}
+
+
+def test_import_excel_no_header_honors_selected_sheet(tmp_path):
+    x = tmp_path / "multi-no-header.xlsx"
+    with pd.ExcelWriter(x) as writer:
+        pd.DataFrame([["C1", 1.0]]).to_excel(
+            writer, sheet_name="first", index=False, header=False)
+        pd.DataFrame([["CO2", 1.0]]).to_excel(
+            writer, sheet_name="selected", index=False, header=False)
+    res = svc.import_excel(str(x), header=False, sheet="selected")
+    assert res["recognized"] == {"CO2": 1.0}
 
 
 def test_import_excel_bad_values_raise(tmp_path):
@@ -185,3 +196,18 @@ def test_delete_model(tmp_path):
     # повторное удаление / отсутствующая модель / нет файла
     assert svc.delete_model(db, "A") is False
     assert svc.delete_model(str(tmp_path / "нет.json"), "A") is False
+
+
+def test_repository_saves_edited_composition_and_preserves_metadata(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "A", "Original", "Field", "PREOS", 373.15, dict(_ZI))
+    repo = ModelRepository(db)
+    comp = repo.load_composition("A")
+    comp.composition["C1"] = 0.61
+    comp.normalize_composition()
+    repo.save_composition("A", comp, {"critical_temperature": "pedersen"})
+    raw = json.loads(Path(db).read_text(encoding="utf-8"))["A"]
+    assert raw["Model_name"] == "Original" and raw["Field"] == "Field"
+    assert raw["updated_at"]
+    assert raw["correlations"]["critical_temperature"] == "pedersen"
+    assert Path(db + ".bak").exists()

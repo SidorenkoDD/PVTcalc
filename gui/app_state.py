@@ -24,7 +24,6 @@ from enum import Enum, auto
 from typing import Optional
 
 from calc_core.Composition.Composition import Composition
-
 from gui.services import composition_service as comp_svc
 from gui.services.model_repository import ModelRepository, ModelSummary
 
@@ -72,6 +71,15 @@ class GraphNode:
     upstream: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class NodeRef:
+    """Стабильный адрес узла, не зависящий от активной вкладки/модели."""
+
+    model_id: str
+    variant_id: str
+    node_id: str
+
+
 @dataclass
 class Variant:
     """
@@ -117,6 +125,7 @@ class Model:
     eos: Optional[str] = None
     n_components: int = 0
     loaded: bool = False
+    dirty: bool = False
     variants: dict[str, Variant] = field(default_factory=dict)
     # полная сводка из репозитория (created_at/t_res/results_brief) — для Projects
     summary: Optional[ModelSummary] = None
@@ -138,6 +147,7 @@ class AppState:
         # (форма нового флюида — модальное окно поверх Projects, не экран)
         self.current_screen: str = "projects"
         self._listeners: list = []
+        self._dirty_listeners: list = []
 
     @property
     def db_path(self) -> str:
@@ -150,9 +160,25 @@ class AppState:
         """Регистрирует коллбэк без аргументов, вызываемый при изменении состояния."""
         self._listeners.append(callback)
 
+    def subscribe_dirty(self, callback) -> None:
+        """Подписывает коллбэк ``callback(model_id)`` на несохранённые правки."""
+        self._dirty_listeners.append(callback)
+
     def _notify(self) -> None:
         for cb in self._listeners:
             cb()
+
+    def notify(self) -> None:
+        """Публично сообщает View о пакетном изменении состояния."""
+        self._notify()
+
+    def _mark_dirty(self) -> None:
+        model = self.active_model
+        if model is None:
+            return
+        model.dirty = True
+        for cb in self._dirty_listeners:
+            cb(model.model_id)
 
     # --- undo / redo (снимки состояния активного варианта) --------------
     #
@@ -165,11 +191,29 @@ class AppState:
 
     @staticmethod
     def _snapshot_variant(variant: "Variant") -> dict:
+        # Результаты расчётов считаются неизменяемыми и разделяются между
+        # снимками. Копируем только редактируемые метаданные узлов — иначе
+        # 40 undo-снимков тяжёлой огибающей занимали бы сотни мегабайт.
+        nodes = {
+            nid: GraphNode(
+                node_id=node.node_id,
+                kind=node.kind,
+                title=node.title,
+                status=node.status,
+                params=copy.deepcopy(node.params),
+                result=node.result,
+                error=node.error,
+                upstream=list(node.upstream),
+            )
+            for nid, node in variant.nodes.items()
+        }
         return {
-            "nodes": copy.deepcopy(variant.nodes),
+            "nodes": nodes,
             "open": list(variant.open_node_ids),
             "active": variant.active_node_id,
             "flash_seq": variant.flash_seq,
+            "exp_seq": variant.exp_seq,
+            "env_seq": variant.env_seq,
             "composition": copy.deepcopy(variant.composition),
         }
 
@@ -179,6 +223,8 @@ class AppState:
         variant.open_node_ids = list(snap["open"])
         variant.active_node_id = snap["active"]
         variant.flash_seq = snap["flash_seq"]
+        variant.exp_seq = snap["exp_seq"]
+        variant.env_seq = snap["env_seq"]
         variant.composition = snap["composition"]
 
     def _push_undo(self) -> None:
@@ -204,6 +250,7 @@ class AppState:
             return
         v.redo_stack.append(self._snapshot_variant(v))
         self._restore_variant(v, v.undo_stack.pop())
+        self._mark_dirty()
         self._notify()
 
     def redo(self) -> None:
@@ -212,6 +259,7 @@ class AppState:
             return
         v.undo_stack.append(self._snapshot_variant(v))
         self._restore_variant(v, v.redo_stack.pop())
+        self._mark_dirty()
         self._notify()
 
     def clear_history(self) -> None:
@@ -241,6 +289,7 @@ class AppState:
             if prev is not None and prev.loaded:
                 model.loaded = True
                 model.variants = prev.variants
+                model.dirty = prev.dirty
             self.models[s.model_id] = model
         logger.info("Список моделей обновлён: %d шт.", len(self.models))
         self._notify()
@@ -262,7 +311,8 @@ class AppState:
                 status=NodeStatus.FRESH,
                 params={
                     "eos": composition.eos_name.value,
-                    "correlations": comp_svc.default_correlations(),
+                    "correlations": (self._repo.load_correlations(model_id)
+                                     or comp_svc.default_correlations()),
                 },
             )
             model.variants["base"] = base
@@ -321,7 +371,7 @@ class AppState:
         if variant is not None and node_id in variant.open_node_ids:
             variant.active_node_id = node_id
 
-    def close_node(self, node_id: str) -> None:
+    def close_node(self, node_id: str, *, notify: bool = True) -> None:
         """Закрывает вкладку узла; активной становится соседняя (или ни одной)."""
         variant = self.active_variant
         if variant is None or node_id not in variant.open_node_ids:
@@ -334,7 +384,8 @@ class AppState:
                     idx, len(variant.open_node_ids) - 1)]
             else:
                 variant.active_node_id = None
-        self._notify()
+        if notify:
+            self._notify()
 
     # --- команды корневого узла «Состав» --------------------------------
     #
@@ -358,6 +409,7 @@ class AppState:
         comp_svc.set_eos(composition, eos_value)
         node.params["eos"] = eos_value
         self._invalidate_flash()
+        self._mark_dirty()
         self._notify()
 
     def set_correlation(self, property_name: str, method: str) -> None:
@@ -369,6 +421,7 @@ class AppState:
         node.params.setdefault("correlations", comp_svc.default_correlations())
         node.params["correlations"][property_name] = method
         node.status = NodeStatus.STALE
+        self._mark_dirty()
         self._notify()
 
     def recalculate_composition(self) -> None:
@@ -387,6 +440,7 @@ class AppState:
             node.status = NodeStatus.FRESH
             node.error = None
             self._invalidate_flash()
+            self._mark_dirty()
         except Exception as exc:  # noqa: BLE001 — донести ошибку до UI
             node.status = NodeStatus.STALE
             node.error = str(exc)
@@ -396,10 +450,16 @@ class AppState:
     def edit_zi(self, component: str, value: float) -> None:
         """Immediate-правка мольной доли (без перерисовки)."""
         composition = self.active_composition
-        if composition is not None:
+        variant = self.active_variant
+        if composition is not None and variant is not None:
             self._push_undo()
-            comp_svc.edit_zi(composition, component, value)
+            try:
+                comp_svc.edit_zi(composition, component, value)
+            except Exception:
+                variant.undo_stack.pop()
+                raise
             self._invalidate_flash()
+            self._mark_dirty()
 
     def normalize_composition(self) -> None:
         """Нормировка мольных долей + перерисовка (значения в полях меняются)."""
@@ -408,24 +468,63 @@ class AppState:
             self._push_undo()
             comp_svc.normalize(composition)
             self._invalidate_flash()
+            self._mark_dirty()
             self._notify()
 
     def edit_component_property(self, component: str, property_name: str,
                                value: float) -> None:
         """Immediate-правка свойства компонента (без перерисовки)."""
         composition = self.active_composition
-        if composition is not None:
+        variant = self.active_variant
+        if composition is not None and variant is not None:
             self._push_undo()
-            comp_svc.edit_property(composition, component, property_name, value)
+            try:
+                comp_svc.edit_property(composition, component, property_name, value)
+            except Exception:
+                variant.undo_stack.pop()
+                raise
             self._invalidate_flash()
+            self._mark_dirty()
 
     def edit_bip(self, comp1: str, comp2: str, value: float) -> None:
         """Immediate-правка BIP пары компонент (без перерисовки)."""
         composition = self.active_composition
-        if composition is not None:
+        variant = self.active_variant
+        if composition is not None and variant is not None:
             self._push_undo()
-            comp_svc.edit_bip(composition, comp1, comp2, value)
+            try:
+                comp_svc.edit_bip(composition, comp1, comp2, value)
+            except Exception:
+                variant.undo_stack.pop()
+                raise
             self._invalidate_flash()
+            self._mark_dirty()
+
+    def save_model(self, model_id: Optional[str] = None) -> None:
+        """Сохраняет загруженную модель и сбрасывает её dirty-флаг."""
+        mid = model_id or self.active_model_id
+        model = self.models.get(mid) if mid else None
+        if model is None or not model.loaded:
+            return
+        variant = model.variants.get("base")
+        if variant is None or variant.composition is None:
+            return
+        assert mid is not None
+        comp_node = variant.nodes.get("composition")
+        correlations = (comp_node.params.get("correlations", {})
+                        if comp_node is not None else {})
+        self._repo.save_composition(mid, variant.composition, correlations)
+        model.dirty = False
+        self._notify()
+
+    def save_all_dirty(self) -> list[str]:
+        """Сохраняет все загруженные изменённые модели; возвращает их id."""
+        saved: list[str] = []
+        for mid, model in list(self.models.items()):
+            if model.loaded and model.dirty:
+                self.save_model(mid)
+                saved.append(mid)
+        return saved
 
     # --- узлы «Флэш» (история расчётов) ----------------------------------
     #
@@ -435,6 +534,28 @@ class AppState:
     def node_by_id(self, node_id: str) -> Optional[GraphNode]:
         variant = self.active_variant
         return None if variant is None else variant.nodes.get(node_id)
+
+    def node_ref(self, node_id: str) -> Optional[NodeRef]:
+        """Возвращает стабильный адрес узла активного варианта."""
+        if (self.active_model_id is None or self.active_variant_id is None
+                or self.node_by_id(node_id) is None):
+            return None
+        return NodeRef(self.active_model_id, self.active_variant_id, node_id)
+
+    def node_by_ref(self, ref: NodeRef) -> Optional[GraphNode]:
+        """Находит узел по полному адресу, не меняя активную модель."""
+        model = self.models.get(ref.model_id)
+        variant = model.variants.get(ref.variant_id) if model else None
+        return variant.nodes.get(ref.node_id) if variant else None
+
+    def composition_by_ref(self, ref: NodeRef) -> Optional[Composition]:
+        """Возвращает состав варианта, которому принадлежит ``ref``."""
+        model = self.models.get(ref.model_id)
+        variant = model.variants.get(ref.variant_id) if model else None
+        return variant.composition if variant else None
+
+    def _resolve_node(self, node: str | NodeRef) -> Optional[GraphNode]:
+        return self.node_by_ref(node) if isinstance(node, NodeRef) else self.node_by_id(node)
 
     def new_flash_run(self, p: Optional[float] = None,
                       t: Optional[float] = None) -> Optional[str]:
@@ -595,37 +716,50 @@ class AppState:
             node.params["P"] = float(p)
             node.params["T"] = float(t)
 
+    def update_node_params(self, node_id: str | NodeRef, params: dict,
+                           *, notify: bool = True) -> None:
+        """Обновляет параметры узла через state-инварианты, а не из View."""
+        node = self._resolve_node(node_id)
+        if node is None:
+            return
+        self._push_undo()
+        node.params.update(params)
+        if node.result is not None and node.status is NodeStatus.FRESH:
+            node.status = NodeStatus.STALE
+        if notify:
+            self._notify()
+
     # --- обобщённые переходы статуса узла-расчёта (флэш/эксперимент) -----
 
-    def set_node_running(self, node_id: str) -> None:
+    def set_node_running(self, node_id: str | NodeRef) -> None:
         """Переводит узел-расчёт в `RUNNING` и перерисовывает."""
-        node = self.node_by_id(node_id)
+        node = self._resolve_node(node_id)
         if node is not None:
             node.status = NodeStatus.RUNNING
             node.error = None
             self._notify()
 
-    def set_node_result(self, node_id: str, result: object) -> None:
+    def set_node_result(self, node_id: str | NodeRef, result: object) -> None:
         """Сохраняет результат, узел → `FRESH`, перерисовка."""
-        node = self.node_by_id(node_id)
+        node = self._resolve_node(node_id)
         if node is not None:
             node.result = result
             node.status = NodeStatus.FRESH
             node.error = None
             self._notify()
 
-    def set_node_error(self, node_id: str, message: str) -> None:
+    def set_node_error(self, node_id: str | NodeRef, message: str) -> None:
         """Сохраняет ошибку, узел → `STALE`, перерисовка."""
-        node = self.node_by_id(node_id)
+        node = self._resolve_node(node_id)
         if node is not None:
             node.result = None
             node.status = NodeStatus.STALE
             node.error = message
             self._notify()
 
-    def reset_node(self, node_id: str) -> None:
+    def reset_node(self, node_id: str | NodeRef) -> None:
         """Сбрасывает узел в `EMPTY` (например, при отмене), перерисовка."""
-        node = self.node_by_id(node_id)
+        node = self._resolve_node(node_id)
         if node is not None:
             node.status = NodeStatus.EMPTY
             node.error = None

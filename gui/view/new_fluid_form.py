@@ -202,9 +202,10 @@ class NewFluidForm:
         model_id = dpg.get_value(self._ids["model_id"]).strip()
         if not model_id and name:
             model_id = proj_svc.suggest_model_id(name, db_path)
-        zi = {k: v for k, v in self._collect_zi().items() if v and v > 0}
+        zi_all = self._collect_zi()
+        zi = {k: v for k, v in zi_all.items() if v and v > 0}
 
-        errors = proj_svc.validate_new_model(model_id, name, zi, db_path)
+        errors = proj_svc.validate_new_model(model_id, name, zi_all, db_path)
         if errors:
             self._show_errors(errors)
             self._set_status("Fix the form errors and try again.")

@@ -161,7 +161,7 @@ class ExperimentsFacade:
         ------
         InputValidationError
             Если давления <= 0 или температуры (пластовая/ступеней) ниже абсолютного нуля.
-        LenthMissMatchError
+        LengthMismatchError
             Если `pressure_arr_bar` и `temperature_arr_c` разной длины
             (поднимается изнутри `SeparatorTest.calculate()`).
         """

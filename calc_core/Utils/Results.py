@@ -78,5 +78,5 @@ class ResultStore:
         fpath : str
         """
         Path(fpath).parent.mkdir(parents=True, exist_ok=True)
-        with open(fpath, 'rb') as f:
+        with open(fpath, 'wb') as f:
             pickle.dump(self._results, f)

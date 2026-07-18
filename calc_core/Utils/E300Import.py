@@ -15,6 +15,7 @@ MW в г/моль; конверсий нет.
 """
 
 import logging
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +94,20 @@ def parse_e300(path: str) -> dict:
     if "CNAMES" not in blocks or "ZI" not in blocks:
         raise ValueError("E300 deck must contain CNAMES and ZI blocks")
 
+    warnings: list[str] = []
     names = [ln.split()[0] for ln in blocks["CNAMES"]]
+    if not names or len(set(names)) != len(names):
+        raise ValueError("CNAMES must contain unique component names")
+    if blocks.get("NCOMPS"):
+        ncomps = int(_floats(blocks["NCOMPS"])[0])
+        if ncomps != len(names):
+            raise ValueError(f"NCOMPS ({ncomps}) does not match CNAMES ({len(names)})")
     zi_vals = _floats(blocks["ZI"])
     if len(zi_vals) != len(names):
         raise ValueError(
             f"ZI count ({len(zi_vals)}) does not match CNAMES ({len(names)})")
+    if any(not math.isfinite(v) or v < 0.0 for v in zi_vals) or sum(zi_vals) <= 0.0:
+        raise ValueError("ZI values must be finite, non-negative and have a positive sum")
     zi = {n: v for n, v in zip(names, zi_vals)}
 
     props: dict[str, dict] = {}
@@ -108,22 +118,31 @@ def parse_e300(path: str) -> dict:
         if len(vals) != len(names):
             logger.warning("E300 %s: %d значений при %d компонентах — пропущено",
                            kw, len(vals), len(names))
+            warnings.append(f"{kw}: {len(vals)} values for {len(names)} components; block skipped")
+            continue
+        if any(not math.isfinite(v) for v in vals):
+            warnings.append(f"{kw}: non-finite values; block skipped")
             continue
         props[data_key] = {n: v for n, v in zip(names, vals)}
 
     # BIC -> симметричная матрица BIP (нижний треугольник: строка i -> j<i)
     bip = {ci: {cj: 0.0 for cj in names} for ci in names}
     if "BIC" in blocks:
+        if len(blocks["BIC"]) < max(0, len(names) - 1):
+            warnings.append("BIC: incomplete lower-triangle matrix; missing values set to 0")
         for i, ln in enumerate(blocks["BIC"], start=1):
             if i >= len(names):
                 break
             row = [float(t) for t in ln.replace(",", " ").split()]
+            if len(row) != i:
+                warnings.append(f"BIC row {i + 1}: expected {i} values, got {len(row)}")
             for j, val in enumerate(row):
-                if j < i:
+                if j < i and math.isfinite(val):
                     bip[names[i]][names[j]] = val
                     bip[names[j]][names[i]] = val
 
     eos = blocks["EOS"][0].split()[0].upper() if blocks.get("EOS") else None
     logger.info("E300-дек разобран: %d компонентов, EOS=%s, свойств=%d",
                 len(names), eos, len(props))
-    return {"eos": eos, "names": names, "zi": zi, "props": props, "bip": bip}
+    return {"eos": eos, "names": names, "zi": zi, "props": props,
+            "bip": bip, "warnings": warnings}

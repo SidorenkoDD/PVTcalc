@@ -16,11 +16,14 @@ docs/GUI.md, заметка 2026-07-16).
 
 import json
 import logging
+import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from calc_core.Composition.Composition import Composition
+from calc_core.Utils.AtomicFile import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -105,3 +108,43 @@ class ModelRepository:
         composition = getattr(db, model_id)
         logger.info("Состав модели '%s' загружен", model_id)
         return composition
+
+    def load_correlations(self, model_id: str) -> Optional[dict]:
+        """Возвращает сохранённый выбор корреляций C7+ модели, если он есть."""
+        if not self._db_path.exists():
+            return None
+        with open(self._db_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        rec = raw.get(model_id)
+        if not isinstance(rec, dict):
+            return None
+        value = rec.get("correlations")
+        return dict(value) if isinstance(value, dict) else None
+
+    def save_composition(self, model_id: str, composition: Composition,
+                         correlations: Optional[dict] = None) -> None:
+        """Атомарно сохраняет отредактированный состав, сохраняя метаданные.
+
+        Перед записью создаётся совместимый с прежним поведением ``.bak``.
+        ``created_at`` и история результатов не сбрасываются; меняется только
+        редактируемая часть модели и ``updated_at``.
+        """
+        if not self._db_path.exists():
+            raise FileNotFoundError(f"Файл моделей не найден: {self._db_path}")
+        with open(self._db_path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict) or model_id not in raw:
+            raise KeyError(f"Модель '{model_id}' не найдена в {self._db_path}")
+        rec = raw[model_id]
+        if not isinstance(rec, dict):
+            raise ValueError(f"Запись модели '{model_id}' имеет неверный формат")
+
+        shutil.copy2(self._db_path, str(self._db_path) + ".bak")
+        rec["composition"] = dict(composition.composition)
+        rec["composition_data"] = composition.composition_data
+        rec["eos"] = composition.eos_name.value
+        rec["T_res"] = float(composition.T)
+        rec["correlations"] = dict(correlations or {})
+        rec["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        atomic_write_json(self._db_path, raw, default=str)
+        logger.info("Модель '%s' сохранена в %s", model_id, self._db_path)

@@ -125,6 +125,8 @@ class Flash:
                 self.phase_stability_object.liquid_eos, self.conditions.p, self.conditions.t
             )
             self.one_phase_stability_props = self.one_phase_stability_props_object.calc_all_properties()
+            from calc_core.PhaseStability.PhaseIdentificator import PhaseIdentificator
+            phase_type = PhaseIdentificator(self).identify_phase()
 
             # ТРЮК: Мы присваиваем весь состав "жидкости" (доля 1.0), 
             # а "пару" даем долю 0.0 и тот же состав. 
@@ -133,5 +135,6 @@ class Flash:
             return FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
                 vapor=PhaseState(mole_fraction=0.0, composition=self.composition.composition, properties={}),
                 liquid=PhaseState(mole_fraction=1.0, composition=self.composition.composition, properties=self.one_phase_stability_props),
-                is_two_phase=False
+                is_two_phase=False,
+                phase_type=phase_type,
             )

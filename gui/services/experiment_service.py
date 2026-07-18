@@ -17,6 +17,10 @@ import pandas as pd
 
 from calc_core.Composition.Composition import Composition
 from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
+from calc_core.Utils.Validation import (
+    validate_positive_pressure,
+    validate_temperature_celsius,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,15 +101,27 @@ def run_experiment(composition: Composition, kind: str, params: dict) -> dict:
     model = CompositionalModel(comp)
     pressures = [float(p) for p in params["pressures"]]
     t_c = float(params["T_c"])
+    if len(pressures) < 2:
+        raise ValueError("At least two pressure stages are required")
+    validate_positive_pressure(pressures, name="pressures")
+    if any(a <= b for a, b in zip(pressures, pressures[1:])):
+        raise ValueError("Pressure stages must be strictly descending")
+    validate_temperature_celsius(t_c, name="T_c")
     logger.info("Эксперимент %s: %d ступеней, T=%s°C", kind, len(pressures), t_c)
 
     if kind == "cce":
         # facade.cce ждёт температуру в K (см. его докстринг)
         df = model.experiments.cce(pressures, t_c + 273.15)
     elif kind == "dle":
+        validate_positive_pressure(float(params["P_res"]), name="P_res")
         df = model.experiments.dle(pressures, float(params["P_res"]), t_c)
     else:  # separator
         stage_temps = [float(t) for t in params["stage_temps_c"]]
+        if len(stage_temps) != len(pressures):
+            raise ValueError("Stage temperature count must match pressure count")
+        for stage_t in stage_temps:
+            validate_temperature_celsius(stage_t, name="stage temperature")
+        validate_positive_pressure(float(params["P_res"]), name="P_res")
         df = model.experiments.separator(pressures, stage_temps,
                                          float(params["P_res"]), t_c)
 

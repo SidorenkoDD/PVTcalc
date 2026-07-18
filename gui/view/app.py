@@ -15,13 +15,13 @@
 """
 
 import logging
-import threading
 import time
 from pathlib import Path
 
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import AppState, NodeKind, NodeStatus
+from gui.calculation_coordinator import CalculationCoordinator
 from gui.services import composition_service as comp_svc
 from gui.services import experiment_service as exp_svc
 from gui.services import export_service as exp_out_svc
@@ -32,6 +32,7 @@ from gui.services import settings_service as settings_svc
 from gui.session import SessionState, save_session
 from gui.view.new_fluid_form import NewFluidForm
 from gui.view.theme import build_light_theme
+from gui.workspace_codec import restore_workspace, snapshot_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +84,8 @@ class PVTcalcApp:
         self._expanded_cats: set[str] = set()
         # выбор узлов для сравнения (Ctrl+клик в дереве)
         self._compare_selection: set[str] = set()
-        # активная фоновая задача флэша (расчёт в отдельном потоке)
-        self._active_job: dict | None = None
+        # фреймворк-независимый координатор фоновых расчётов
+        self._jobs = CalculationCoordinator()
         # id таб-бара и вкладок рабочей области (захватываем при отрисовке,
         # чтобы не плодить фиксированные алиасы при пересоздании)
         self._tabbar_id: int | None = None
@@ -108,6 +109,9 @@ class PVTcalcApp:
         # окно настроек (константы/условия/критерии сходимости)
         self._settings_win: int | None = None
         self._settings_ids: dict = {}
+        # debounce автосохранения модели/сессии (номер последнего поколения)
+        self._model_save_generation: int = 0
+        self._session_save_generation: int = 0
         # модели, чей workspace уже восстановлен из сессии в этом запуске
         self._restored_models: set[str] = set()
         # стек открытых модальных окон (для закрытия по Esc, верхнее первым)
@@ -123,6 +127,9 @@ class PVTcalcApp:
         self._excel_sheet_id: int | None = None
         self._excel_header_id: int | None = None
         self._excel_preview_group: int | None = None
+        # импорт E300: обязательный предпросмотр до изменения базы
+        self._e300_path: str | None = None
+        self._e300_win: int | None = None
         # форма создания нового флюида — модальное окно
         self._new_fluid_win: int | None = None
         self._new_fluid_form = NewFluidForm(
@@ -132,6 +139,8 @@ class PVTcalcApp:
             set_status=self._set_status,
         )
         state.subscribe(self._render)
+        state.subscribe(self._schedule_session_autosave)
+        state.subscribe_dirty(self._schedule_model_autosave)
 
     # --- жизненный цикл --------------------------------------------------
 
@@ -153,6 +162,7 @@ class PVTcalcApp:
 
         dpg.start_dearpygui()
 
+        self._save_dirty_models()
         self._persist_session()
         dpg.destroy_context()
 
@@ -161,6 +171,8 @@ class PVTcalcApp:
     def _build_menu(self) -> None:
         with dpg.viewport_menu_bar():
             with dpg.menu(label="Project"):
+                dpg.add_menu_item(label="Save model   (Ctrl+S)",
+                                  callback=lambda: self._on_save_model())
                 dpg.add_menu_item(label="Projects home",
                                   callback=self._on_back_to_projects)
                 dpg.add_menu_item(label="Refresh models",
@@ -183,6 +195,7 @@ class PVTcalcApp:
             dpg.add_key_press_handler(dpg.mvKey_Delete, callback=self._on_key_delete)
             dpg.add_key_press_handler(dpg.mvKey_Z, callback=self._on_key_z)
             dpg.add_key_press_handler(dpg.mvKey_Y, callback=self._on_key_y)
+            dpg.add_key_press_handler(dpg.mvKey_S, callback=self._on_key_s)
             dpg.add_key_press_handler(dpg.mvKey_Return, callback=self._on_key_enter)
             npad = getattr(dpg, "mvKey_NumPadEnter", None) or getattr(
                 dpg, "mvKey_KeyPadEnter", None)
@@ -270,6 +283,10 @@ class PVTcalcApp:
         if self._ctrl_down():
             self._do_redo()
 
+    def _on_key_s(self, sender, app_data) -> None:
+        if self._ctrl_down():
+            self._on_save_model()
+
     def _on_key_enter(self, sender, app_data) -> None:
         # Enter на странице Projects открывает выбранную модель (не при модалке)
         if self._state.current_screen != "projects" or self._has_open_modal():
@@ -291,6 +308,52 @@ class PVTcalcApp:
             self._set_status("Redo.")
         else:
             self._set_status("Nothing to redo.")
+
+    def _on_save_model(self) -> None:
+        model = self._state.active_model
+        if model is None or not model.loaded:
+            self._set_status("No loaded model to save.")
+            return
+        try:
+            self._state.save_model(model.model_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось сохранить модель %s", model.model_id)
+            self._set_status(f"Save failed: {exc}")
+            return
+        self._set_status(f"Model '{model.model_id}' saved.")
+
+    def _save_dirty_models(self) -> None:
+        """Сохраняет все dirty-модели; используется debounce и shutdown."""
+        try:
+            saved = self._state.save_all_dirty()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Автосохранение моделей не удалось")
+            self._set_status(f"Autosave failed: {exc}")
+            return
+        if saved:
+            self._set_status("Autosaved: " + ", ".join(saved))
+
+    def _schedule_model_autosave(self, model_id: str) -> None:
+        """Debounce сохранения правок состава примерно на одну секунду."""
+        self._model_save_generation += 1
+        generation = self._model_save_generation
+
+        def save_if_latest(*_args) -> None:
+            if generation == self._model_save_generation:
+                self._save_dirty_models()
+
+        dpg.set_frame_callback(dpg.get_frame_count() + 60, save_if_latest)
+
+    def _schedule_session_autosave(self) -> None:
+        """Debounce снимка UI-сессии после изменений состояния."""
+        self._session_save_generation += 1
+        generation = self._session_save_generation
+
+        def save_if_latest(*_args) -> None:
+            if generation == self._session_save_generation:
+                self._persist_session()
+
+        dpg.set_frame_callback(dpg.get_frame_count() + 60, save_if_latest)
 
     def _build_layout(self) -> None:
         """
@@ -389,7 +452,7 @@ class PVTcalcApp:
                 s = model.summary
                 with dpg.table_row():
                     sel = dpg.add_selectable(
-                        label=model.title, span_columns=True,
+                        label=model.title + ("  *" if model.dirty else ""), span_columns=True,
                         default_value=(model.model_id == self._selected_project),
                         user_data=model.model_id, callback=self._on_project_click)
                     self._proj_row_ids[model.model_id] = sel
@@ -448,7 +511,7 @@ class PVTcalcApp:
             self._set_status(f"Selected '{mid}' (double-click or Enter to open).")
 
     def _open_project(self, mid: str) -> None:
-        if self._active_job is not None:
+        if self._jobs.busy:
             self._set_status("Calculation in progress - wait or cancel first.")
             return
         try:
@@ -459,7 +522,7 @@ class PVTcalcApp:
             return
         self._expanded_models.add(mid)
         self._restore_workspace(mid)
-        self._state._notify()
+        self._state.notify()
         self._set_status(f"Model '{mid}' opened.")
 
     # --- контекстное меню модели (просмотр состава / удаление) -------------
@@ -543,7 +606,7 @@ class PVTcalcApp:
         self._set_status(f"Model '{mid}' deleted.")
 
     def _on_back_to_projects(self, sender=None, app_data=None, user_data=None) -> None:
-        if self._active_job is not None:
+        if self._jobs.busy:
             self._set_status("Calculation in progress - wait or cancel first.")
             return
         self._state.show_projects()
@@ -614,11 +677,54 @@ class PVTcalcApp:
         if not path:
             return
         try:
-            res = proj_svc.import_e300(self._state.db_path, path)
+            preview = proj_svc.preview_e300(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Предпросмотр E300 не удался")
+            self._set_status(f"E300 preview failed: {exc}")
+            return
+        self._e300_path = path
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label="Import Eclipse 300", modal=True, no_resize=True,
+                        width=620, height=390,
+                        pos=(max(0, w // 2 - 310), max(0, h // 2 - 195))) as win:
+            self._e300_win = self._track_modal(win)
+            dpg.add_text(f"File: {Path(path).name}")
+            dpg.add_text(f"Deck EOS: {preview['deck_eos'] or '-'}")
+            dpg.add_text(f"Recognized components: {len(preview['recognized'])}")
+            dpg.add_text(f"Composition sum: {preview['total_zi']:.8g}")
+            if preview["unrecognized"]:
+                warn = dpg.add_text(
+                    "Unrecognized components will be skipped:\n"
+                    + ", ".join(preview["unrecognized"])
+                    + f"\nSkipped mole fraction: {preview['skipped_zi']:.8g}",
+                    wrap=580)
+                dpg.bind_item_theme(warn, self._theme_stale())
+            for warning in preview["warnings"]:
+                item = dpg.add_text("Warning: " + warning, wrap=580)
+                dpg.bind_item_theme(item, self._theme_stale())
+            dpg.add_spacer(height=8)
+            dpg.add_text("Import creates a new model. Review warnings before continuing.")
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Import", width=140,
+                               callback=self._on_e300_import_confirm)
+                dpg.add_button(label="Cancel", width=120,
+                               callback=lambda: dpg.delete_item(win))
+
+    def _on_e300_import_confirm(self, sender=None, app_data=None, user_data=None) -> None:
+        path = self._e300_path
+        if not path:
+            return
+        try:
+            res = proj_svc.import_e300(
+                self._state.db_path, path, allow_unrecognized=True)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Импорт E300 не удался")
             self._set_status(f"E300 import failed: {exc}")
             return
+        if self._e300_win and dpg.does_item_exist(self._e300_win):
+            dpg.delete_item(self._e300_win)
+        self._e300_win = None
+        self._e300_path = None
         self._state.refresh_model_list()
         mid = res["model_id"]
         self._restored_models.add(mid)     # свежая модель, восстанавливать нечего
@@ -673,13 +779,14 @@ class PVTcalcApp:
 
     def _render_excel_preview(self, *args) -> None:
         grp = self._excel_preview_group
-        if grp is None or not dpg.does_item_exist(grp):
+        path = self._excel_path
+        if grp is None or path is None or not dpg.does_item_exist(grp):
             return
         dpg.delete_item(grp, children_only=True)
         sheet = dpg.get_value(self._excel_sheet_id)
         header = bool(dpg.get_value(self._excel_header_id))
         try:
-            prev = proj_svc.excel_preview(self._excel_path, sheet, header)
+            prev = proj_svc.excel_preview(path, sheet, header)
         except Exception as exc:  # noqa: BLE001
             msg = dpg.add_text(f"Cannot preview this sheet: {exc}", parent=grp)
             dpg.bind_item_theme(msg, self._theme_stale())
@@ -698,10 +805,14 @@ class PVTcalcApp:
                         dpg.add_text(v)
 
     def _on_excel_load(self, sender=None, app_data=None, user_data=None) -> None:
+        path = self._excel_path
+        if path is None:
+            self._set_status("Excel import path is missing.")
+            return
         sheet = dpg.get_value(self._excel_sheet_id)
         header = bool(dpg.get_value(self._excel_header_id))
         try:
-            res = proj_svc.import_excel(self._excel_path, header, sheet)
+            res = proj_svc.import_excel(path, header, sheet)
         except Exception as exc:  # noqa: BLE001 — нечисловые значения/типы
             logger.exception("Импорт Excel не удался")
             self._set_status(f"Excel import failed: {exc}")
@@ -712,7 +823,7 @@ class PVTcalcApp:
         if self._excel_win and dpg.does_item_exist(self._excel_win):
             dpg.delete_item(self._excel_win)
         self._new_fluid_form.set_prefill(
-            res["recognized"], name=Path(self._excel_path).stem,
+            res["recognized"], name=Path(path).stem,
             unrecognized=res["unrecognized"])
         # Открыть форму на СЛЕДУЮЩЕМ кадре: новая modal-модалка, созданная в
         # том же кадре, где закрыли предыдущую (Excel-предпросмотр), у ImGui
@@ -899,7 +1010,8 @@ class PVTcalcApp:
         expanded = model.model_id in self._expanded_models
         arrow = "v " if expanded else "> "
         dpg.add_selectable(
-            label=f"{arrow}{model.title}  [{model.n_components}c, {model.eos}]",
+            label=(f"{arrow}{model.title}{'  *' if model.dirty else ''}  "
+                   f"[{model.n_components}c, {model.eos}]"),
             parent=_MODEL_TREE, default_value=True,
             user_data=model.model_id, callback=self._on_model_row,
         )
@@ -1043,8 +1155,11 @@ class PVTcalcApp:
         mid = user_data
         if mid != self._state.active_model_id:
             self._state.set_active_model(mid)
+        variant = self._state.active_variant
+        if variant is None:
+            return
         members = [m for m in self._compare_selection
-                   if m in self._state.active_variant.nodes]
+                   if m in variant.nodes]
         self._state.open_compare(members)
 
     def _on_new_flash(self, sender, app_data, user_data) -> None:
@@ -1279,12 +1394,7 @@ class PVTcalcApp:
                     or not dpg.get_item_configuration(tab_id).get("show", True)):
                 closed.append(nid)
         for nid in closed:
-            idx = variant.open_node_ids.index(nid)
-            variant.open_node_ids.remove(nid)
-            if variant.active_node_id == nid:
-                variant.active_node_id = (
-                    variant.open_node_ids[min(idx, len(variant.open_node_ids) - 1)]
-                    if variant.open_node_ids else None)
+            self._state.close_node(nid, notify=False)
         return bool(closed)
 
     def _tab_label(self, node) -> str:
@@ -1325,7 +1435,10 @@ class PVTcalcApp:
         if node.status is NodeStatus.RUNNING:
             core = f"{self._g(p)}/{self._g(t)} - running"
         elif node.result is not None:
-            phase = "2-phase" if node.result.is_two_phase else "1-phase"
+            if node.result.is_two_phase:
+                phase = "2-phase"
+            else:
+                phase = f"1-phase {node.result.phase_type or 'unresolved'}"
             suffix = "" if node.status is NodeStatus.FRESH else " (stale)"
             core = f"{self._g(p)} bar / {self._g(t)} C - {phase}{suffix}"
         else:
@@ -1455,12 +1568,26 @@ class PVTcalcApp:
         self._set_status(f"Correlation {user_data} = '{app_data}' (press Recalculate).")
 
     def _on_zi_edited(self, sender, app_data, user_data) -> None:
-        self._state.edit_zi(user_data, app_data)
+        try:
+            self._state.edit_zi(user_data, app_data)
+        except ValueError as exc:
+            composition = self._state.active_composition
+            if composition is not None:
+                dpg.set_value(sender, composition.composition[user_data])
+            self._set_status(f"Invalid mole fraction: {exc}")
+            return
         self._set_status(f"zi[{user_data}] = {app_data:.5f} (not normalized).")
 
     def _on_property_edited(self, sender, app_data, user_data) -> None:
         name, key = user_data
-        self._state.edit_component_property(name, key, app_data)
+        try:
+            self._state.edit_component_property(name, key, app_data)
+        except ValueError as exc:
+            composition = self._state.active_composition
+            if composition is not None:
+                dpg.set_value(sender, composition.composition_data[key][name])
+            self._set_status(f"Invalid property: {exc}")
+            return
         self._set_status(f"{key}[{name}] = {app_data:.5g}.")
 
     def _on_bip_cell_edited(self, sender, app_data, user_data) -> None:
@@ -1469,7 +1596,13 @@ class PVTcalcApp:
         if composition is None:
             return
         names = list(composition.composition.keys())
-        self._state.edit_bip(names[i], names[j], app_data)
+        try:
+            self._state.edit_bip(names[i], names[j], app_data)
+        except ValueError as exc:
+            value = comp_svc.get_bip(composition, names[i], names[j])
+            dpg.set_value(sender, value)
+            self._set_status(f"Invalid BIP: {exc}")
+            return
         mirror = self._bip_ids.get((j, i))
         if mirror is not None and dpg.does_item_exist(mirror):
             dpg.set_value(mirror, app_data)
@@ -1552,7 +1685,10 @@ class PVTcalcApp:
                          parent=parent)
             return
 
-        names = list((xi or yi).keys())
+        phase_composition = xi if xi else yi
+        if phase_composition is None:
+            return
+        names = list(phase_composition.keys())
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, height=-1, freeze_rows=1):
@@ -1667,7 +1803,7 @@ class PVTcalcApp:
         self._state.set_flash_params(nid, p, t)
 
     def _on_flash_run(self, sender, app_data, user_data) -> None:
-        if self._active_job is not None:
+        if self._jobs.busy:
             self._set_status("Another flash is already running.")
             return
         nid = user_data
@@ -1678,20 +1814,12 @@ class PVTcalcApp:
         p, t = self._flash_pt(nid)
         self._state.set_flash_params(nid, p, t)
 
-        holder = {"result": None, "error": None, "done": threading.Event()}
-        self._active_job = {"holder": holder, "cancelled": False, "node_id": nid}
-        self._state.set_flash_running(nid)
-
-        def worker() -> None:
-            try:
-                holder["result"] = flash_service.run_flash(composition, p, t)
-            except Exception as exc:  # noqa: BLE001
-                holder["error"] = str(exc)
-                logger.exception("Флэш-расчёт не удался")
-            finally:
-                holder["done"].set()
-
-        threading.Thread(target=worker, daemon=True).start()
+        ref = self._state.node_ref(nid)
+        if ref is None:
+            return
+        self._jobs.start(ref, "flash",
+                         lambda: flash_service.run_flash(composition, p, t))
+        self._state.set_flash_running(ref)
         self._set_status(f"Flash running at P={p:.3f} bar, T={t:.2f} C...")
         self._arm_flash_poll()
 
@@ -1699,27 +1827,27 @@ class PVTcalcApp:
         dpg.set_frame_callback(dpg.get_frame_count() + 1, self._poll_flash_job)
 
     def _poll_flash_job(self, sender=None, app_data=None) -> None:
-        job = self._active_job
+        job = self._jobs.active
         if job is None:
             return
-        if not job["holder"]["done"].is_set():
+        if not job.done.is_set():
             self._arm_flash_poll()
             return
-        self._active_job = None
-        nid = job["node_id"]
-        if job["cancelled"]:
-            self._state.reset_flash(nid)
-            self._set_status("Flash cancelled.")
-        elif job["holder"]["error"]:
-            self._state.set_flash_error(nid, job["holder"]["error"])
-            self._set_status("Flash failed.")
+        job = self._jobs.take_finished()
+        if job is None:
+            return
+        if job.cancelled:
+            self._state.reset_node(job.node_ref)
+            self._set_status(f"{job.label.capitalize()} cancelled.")
+        elif job.error:
+            self._state.set_node_error(job.node_ref, job.error)
+            self._set_status(f"{job.label.capitalize()} failed.")
         else:
-            self._state.set_flash_result(nid, job["holder"]["result"])
-            self._set_status("Flash done.")
+            self._state.set_node_result(job.node_ref, job.result)
+            self._set_status(f"{job.label.capitalize()} done.")
 
     def _on_flash_cancel(self, sender, app_data, user_data) -> None:
-        if self._active_job is not None:
-            self._active_job["cancelled"] = True
+        if self._jobs.cancel():
             self._set_status("Cancelling flash (result will be discarded)...")
 
     # ==================================================================
@@ -1881,7 +2009,7 @@ class PVTcalcApp:
         nid = user_data
         col = app_data
         node = self._state.node_by_id(nid)
-        if not col or node is None or node.result is None:
+        if not col or node is None or not isinstance(node.result, dict):
             return
         extra = node.params.setdefault("extra_charts", [])
         if col not in extra and col not in node.result.get("charts", []):
@@ -1892,7 +2020,7 @@ class PVTcalcApp:
         self._set_status(f"Added chart: {col}")
 
     def _on_experiment_run(self, sender, app_data, user_data) -> None:
-        if self._active_job is not None:
+        if self._jobs.busy:
             self._set_status("Another calculation is already running.")
             return
         nid = user_data
@@ -1918,23 +2046,15 @@ class PVTcalcApp:
         except (ValueError, KeyError) as exc:
             self._state.set_node_error(nid, f"Invalid input: {exc}")
             return
-        node.params.update(params)
+        self._state.update_node_params(nid, params, notify=False)
         kind = node.params["kind"]
 
-        holder = {"result": None, "error": None, "done": threading.Event()}
-        self._active_job = {"holder": holder, "cancelled": False, "node_id": nid}
-        self._state.set_node_running(nid)
-
-        def worker() -> None:
-            try:
-                holder["result"] = exp_svc.run_experiment(composition, kind, params)
-            except Exception as exc:  # noqa: BLE001
-                holder["error"] = str(exc)
-                logger.exception("Эксперимент %s не удался", kind)
-            finally:
-                holder["done"].set()
-
-        threading.Thread(target=worker, daemon=True).start()
+        ref = self._state.node_ref(nid)
+        if ref is None:
+            return
+        self._jobs.start(ref, kind,
+                         lambda: exp_svc.run_experiment(composition, kind, params))
+        self._state.set_node_running(ref)
         self._set_status(f"{kind.upper()} running...")
         self._arm_flash_poll()
 
@@ -2082,8 +2202,9 @@ class PVTcalcApp:
         composition = self._state.active_composition
         if composition is None:
             return
-        if node_id is not None and self._state.node_by_id(node_id) is not None:
-            params = dict(self._state.node_by_id(node_id).params)
+        node = self._state.node_by_id(node_id) if node_id is not None else None
+        if node is not None:
+            params = dict(node.params)
             title = "Phase envelope - edit & run"
         else:
             node_id = None
@@ -2161,7 +2282,7 @@ class PVTcalcApp:
             dpg.configure_item(ids["_grid_grp"], show=(method == "grid"))
 
     def _on_envelope_dialog_run(self, sender, app_data, user_data) -> None:
-        if self._active_job is not None:
+        if self._jobs.busy:
             self._set_status("Another calculation is already running.")
             return
         composition = self._state.active_composition
@@ -2171,8 +2292,11 @@ class PVTcalcApp:
         node_id = self._env_dialog_node
         method = _env_method_from_label(dpg.get_value(ids["method"]))
         # стартуем от полного набора параметров (сохраняем поля второго метода)
-        base = (pe_svc.default_envelope_params(composition) if node_id is None
-                else dict(self._state.node_by_id(node_id).params))
+        node = self._state.node_by_id(node_id) if node_id is not None else None
+        if node_id is not None and node is None:
+            node_id = None
+        base = (pe_svc.default_envelope_params(composition) if node is None
+                else dict(node.params))
         params = dict(base)
         params["method"] = method
         try:
@@ -2203,7 +2327,8 @@ class PVTcalcApp:
         if node_id is None:
             node_id = self._state.new_envelope(params)
         else:
-            self._state.node_by_id(node_id).params.update(params)
+            self._state.update_node_params(node_id, params, notify=False)
+        assert node_id is not None
 
         if dpg.does_item_exist(self._env_dialog_win):
             dpg.delete_item(self._env_dialog_win)
@@ -2217,20 +2342,12 @@ class PVTcalcApp:
             return
         params = dict(node.params)
 
-        holder = {"result": None, "error": None, "done": threading.Event()}
-        self._active_job = {"holder": holder, "cancelled": False, "node_id": nid}
-        self._state.set_node_running(nid)
-
-        def worker() -> None:
-            try:
-                holder["result"] = pe_svc.run_envelope(composition, params)
-            except Exception as exc:  # noqa: BLE001
-                holder["error"] = str(exc)
-                logger.exception("Расчёт фазовой огибающей не удался")
-            finally:
-                holder["done"].set()
-
-        threading.Thread(target=worker, daemon=True).start()
+        ref = self._state.node_ref(nid)
+        if ref is None:
+            return
+        self._jobs.start(ref, "phase envelope",
+                         lambda: pe_svc.run_envelope(composition, params))
+        self._state.set_node_running(ref)
         self._set_status("Phase envelope running...")
         self._arm_flash_poll()
 
@@ -2281,7 +2398,7 @@ class PVTcalcApp:
     def _restore_workspace(self, model_id: str) -> None:
         """
         Лениво восстанавливает workspace модели из `session.workspaces[mid]`
-        (флэши/эксперименты/вкладки). Повторный вызов для той же модели —
+        (узлы/результаты/вкладки/сравнение). Повторный вызов для той же модели —
         no-op (guard `_restored_models`). Модель должна быть активной.
         """
         if model_id in self._restored_models:
@@ -2292,80 +2409,27 @@ class PVTcalcApp:
         if variant is None or not ws:
             return
 
-        # воссоздать флэш-узлы в исходном порядке (id flash_1, flash_2, … совпадут)
-        for f in ws.get("flashes", []):
-            nid = self._state.new_flash_run(f.get("P"), f.get("T"))
-            snap = f.get("result")
-            if nid and snap:
-                try:
-                    self._state.set_flash_result(
-                        nid, flash_service.restore_flash_result(snap))
-                except Exception:  # noqa: BLE001
-                    logger.warning("Не удалось восстановить результат флэша")
+        restore_workspace(variant, ws)
 
-        # воссоздать эксперименты (id exp_1, exp_2, … совпадут с сохранёнными)
-        for e in ws.get("experiments", []):
-            params = e.get("params", {})
-            nid = self._state.new_experiment(
-                e.get("kind"), {k: v for k, v in params.items() if k != "kind"})
-            if nid and e.get("result"):
-                self._state.set_node_result(nid, e["result"])
-
-        # воссоздать фазовые огибающие (id env_1, env_2, … совпадут)
-        for e in ws.get("envelopes", []):
-            nid = self._state.new_envelope(e.get("params", {}))
-            if nid and e.get("result"):
-                self._state.set_node_result(nid, e["result"])
-
-        # восстановить открытые вкладки / активную
-        open_tabs = ws.get("open_tabs")
-        if open_tabs is not None:
-            variant.open_node_ids = [n for n in open_tabs if n in variant.nodes]
-        active_tab = ws.get("active_tab")
-        if active_tab and active_tab in variant.nodes:
-            variant.active_node_id = active_tab
-        elif variant.open_node_ids:
-            variant.active_node_id = variant.open_node_ids[-1]
-
-        # развернуть модель и категорию флэшей в дереве
+        # Развернуть только реально заполненные категории восстановленного дерева.
         self._expanded_models.add(model_id)
-        self._expanded_cats.add(f"{model_id}:flash")
+        if variant.flash_runs():
+            self._expanded_cats.add(f"{model_id}:flash")
+        if variant.experiment_runs():
+            self._expanded_cats.add(f"{model_id}:exp")
+            for node in variant.experiment_runs():
+                kind = str(node.params.get("kind", "")).lower()
+                if kind:
+                    self._expanded_cats.add(f"{model_id}:exp:{kind}")
+        if variant.envelope_runs():
+            self._expanded_cats.add(f"{model_id}:env")
 
         self._state.clear_history()  # восстановление не откатываем
 
     @staticmethod
     def _workspace_snapshot(variant) -> dict:
-        """Сериализуемый снимок workspace варианта для сессии v2."""
-        flashes: list = []
-        for run in variant.flash_runs():
-            item = {"P": run.params.get("P"), "T": run.params.get("T"),
-                    "result": None}
-            if run.result is not None and run.status is NodeStatus.FRESH:
-                try:
-                    item["result"] = flash_service.snapshot_flash_result(run.result)
-                except Exception:  # noqa: BLE001
-                    logger.warning("Не удалось сериализовать результат флэша")
-            flashes.append(item)
-        experiments: list = []
-        for run in variant.experiment_runs():
-            experiments.append({
-                "kind": run.params.get("kind"),
-                "params": dict(run.params),
-                "result": run.result if run.status is NodeStatus.FRESH else None,
-            })
-        envelopes: list = []
-        for run in variant.envelope_runs():
-            envelopes.append({
-                "params": dict(run.params),
-                "result": run.result if run.status is NodeStatus.FRESH else None,
-            })
-        return {
-            "open_tabs": list(variant.open_node_ids),
-            "active_tab": variant.active_node_id,
-            "flashes": flashes,
-            "experiments": experiments,
-            "envelopes": envelopes,
-        }
+        """Совместимый wrapper над framework-independent codec workspace."""
+        return snapshot_workspace(variant)
 
     def _persist_session(self) -> None:
         self._session.active_model_id = self._state.active_model_id

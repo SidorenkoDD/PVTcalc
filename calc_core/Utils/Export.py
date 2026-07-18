@@ -10,9 +10,11 @@
 
 import json
 import logging
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+from calc_core.Utils.AtomicFile import atomic_write_json
 # from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
 # from calc_core.Utils.Results import ResultStore
 
@@ -45,7 +47,8 @@ class ModelJSONDB:
                eos: Any,
                results: Optional[Any] = None, # Сделали Optional, так как может быть None
                field: str = None,
-               t_res: Optional[float] = None):
+               t_res: Optional[float] = None,
+               correlations: Optional[Dict[str, Any]] = None):
         """Кладёт модель в оперативную память 'базы'.
 
         `t_res` — пластовая температура, K (опционально). Если задана —
@@ -69,24 +72,27 @@ class ModelJSONDB:
 
         # Если model_id уже существует, он будет обновлен (перезаписан).
         # Если нет — будет создан новый.
+        previous = self._db.get(model_id, {})
+        now = datetime.now().isoformat()
         record = {
             "Model_name": name,
             "Field": field,
             "composition": composition,
             "composition_data": composition_data,
             "eos": eos,
-            "created_at": datetime.now().isoformat(),
-            "results": res_serialized
+            "created_at": previous.get("created_at", now),
+            "updated_at": now,
+            "results": res_serialized,
         }
         if t_res is not None:
             record["T_res"] = float(t_res)
+        if correlations is not None:
+            record["correlations"] = correlations
         self._db[model_id] = record
 
     def save(self):
-        """Записывает все накопленные модели в файл."""
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.filepath, "w", encoding="utf-8") as f:
-            json.dump(self._db, f, indent=2, default=str, ensure_ascii=False)
+        """Атомарно записывает все накопленные модели в файл."""
+        atomic_write_json(self.filepath, self._db, default=str)
 
     def load(self):
         """Загружает файл в текущее содержимое. Если файла нет, оставляет self._db пустым."""
@@ -110,8 +116,9 @@ class ModelJSONDB:
     def export_and_save(self, model_id: str, name: str, composition: Dict[str, Any],
                         composition_data: Dict[str, Any], eos: Any,
                         results: Optional[Any] = None, field: str = None,
-                        t_res: Optional[float] = None):
+                        t_res: Optional[float] = None,
+                        correlations: Optional[Dict[str, Any]] = None):
         """Добавляет модель в память и сразу сохраняет на диск."""
         self.export(model_id, name, composition, composition_data, eos, results,
-                    field, t_res)
+                    field, t_res, correlations)
         self.save()
