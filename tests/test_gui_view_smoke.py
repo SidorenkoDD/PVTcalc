@@ -27,6 +27,17 @@ def _text_values(root: int | str) -> list[str]:
     return values
 
 
+def _has_label(root: int | str, label: str) -> bool:
+    pending: list[int | str] = [root]
+    while pending:
+        item = pending.pop()
+        for children in dpg.get_item_children(item).values():
+            pending.extend(children)
+            if any(dpg.get_item_label(child) == label for child in children):
+                return True
+    return False
+
+
 def test_projects_renders_corrupt_store_diagnostic(tmp_path):
     path = tmp_path / "models.json"
     path.write_text('{"broken":', encoding="utf-8")
@@ -39,6 +50,7 @@ def test_projects_renders_corrupt_store_diagnostic(tmp_path):
         texts = _text_values(_PROJECTS_CONTENT)
         assert any("Models database could not be read" in text for text in texts)
         assert any("строка 1, столбец 11" in text for text in texts)
+        assert _has_label(_PROJECTS_CONTENT, "Refresh models")
     finally:
         dpg.destroy_context()
 

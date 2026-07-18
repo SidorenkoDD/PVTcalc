@@ -68,10 +68,14 @@ class ProjectsViewMixin(ContextBoundView):
                 wrap=920,
             )
             dpg.bind_item_theme(warning, self._theme_stale())
-            dpg.add_text(
-                "Restore or correct models.json, then restart the application.",
-                parent=parent,
-            )
+            with dpg.group(horizontal=True, parent=parent):
+                dpg.add_text(
+                    "Restore or correct models.json, then refresh the list.",
+                )
+                dpg.add_button(
+                    label="Refresh models",
+                    callback=lambda: self._state.refresh_model_list(),
+                )
             dpg.add_separator(parent=parent)
 
         # строка «продолжить последнюю сессию»
