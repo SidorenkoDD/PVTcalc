@@ -71,14 +71,20 @@ def _restore_result(kind: NodeKind, snap):
 def _legacy_nodes(ws: dict) -> list[dict]:
     """Преобразует workspace v2 в общий список узлов v3."""
     out: list[dict] = []
-    for i, item in enumerate(ws.get("flashes", []), start=1):
+    flashes = ws.get("flashes", [])
+    if not isinstance(flashes, list):
+        flashes = []
+    for i, item in enumerate((x for x in flashes if isinstance(x, dict)), start=1):
         out.append({
             "node_id": f"flash_{i}", "kind": "FLASH", "title": "Flash",
             "params": {"P": item.get("P"), "T": item.get("T"),
                        **({"label": item["label"]} if item.get("label") else {})},
             "result": item.get("result"), "upstream": ["composition"],
         })
-    for i, item in enumerate(ws.get("experiments", []), start=1):
+    experiments = ws.get("experiments", [])
+    if not isinstance(experiments, list):
+        experiments = []
+    for i, item in enumerate((x for x in experiments if isinstance(x, dict)), start=1):
         params = dict(item.get("params", {}))
         params.setdefault("kind", item.get("kind"))
         out.append({
@@ -87,7 +93,10 @@ def _legacy_nodes(ws: dict) -> list[dict]:
             "params": params, "result": item.get("result"),
             "upstream": ["composition"],
         })
-    for i, item in enumerate(ws.get("envelopes", []), start=1):
+    envelopes = ws.get("envelopes", [])
+    if not isinstance(envelopes, list):
+        envelopes = []
+    for i, item in enumerate((x for x in envelopes if isinstance(x, dict)), start=1):
         out.append({
             "node_id": f"env_{i}", "kind": "PHASE_ENVELOPE",
             "title": "Phase envelope", "params": dict(item.get("params", {})),
@@ -98,12 +107,18 @@ def _legacy_nodes(ws: dict) -> list[dict]:
 
 def restore_workspace(variant: Variant, ws: dict) -> None:
     """Восстанавливает workspace v2/v3 в уже загруженный ``variant``."""
+    if not isinstance(ws, dict):
+        logger.warning("Пропущен workspace с неверной структурой: %r", type(ws).__name__)
+        return
     raw_records = ws.get("nodes")
     records: list[dict] = raw_records if isinstance(raw_records, list) else _legacy_nodes(ws)
     for rec in records:
+        if not isinstance(rec, dict):
+            logger.warning("Пропущена запись узла неверного типа: %r", type(rec).__name__)
+            continue
         try:
             kind = NodeKind[str(rec.get("kind"))]
-        except KeyError:
+        except (KeyError, TypeError):
             logger.warning("Неизвестный тип узла в сессии: %s", rec.get("kind"))
             continue
         if kind is NodeKind.COMPOSITION:
@@ -116,26 +131,44 @@ def restore_workspace(variant: Variant, ws: dict) -> None:
         except Exception:  # noqa: BLE001
             logger.warning("Не удалось восстановить результат узла %s", node_id)
             result = None
+        raw_params = rec.get("params")
+        params = dict(raw_params) if isinstance(raw_params, dict) else {}
+        raw_upstream = rec.get("upstream")
+        upstream = [item for item in raw_upstream if isinstance(item, str)] \
+            if isinstance(raw_upstream, list) else []
+        error = rec.get("error")
         variant.nodes[node_id] = GraphNode(
             node_id=node_id,
             kind=kind,
             title=str(rec.get("title") or kind.name.title()),
             status=_status(rec.get("status"), has_result=result is not None),
-            params=dict(rec.get("params") or {}),
+            params=params,
             result=result,
-            error=rec.get("error"),
-            upstream=list(rec.get("upstream") or []),
+            error=error if isinstance(error, str) else None,
+            upstream=upstream,
         )
 
     seq = ws.get("sequences") or {}
-    variant.flash_seq = max(int(seq.get("flash", 0)), _max_suffix(variant, "flash_"))
-    variant.exp_seq = max(int(seq.get("experiment", 0)), _max_suffix(variant, "exp_"))
-    variant.env_seq = max(int(seq.get("envelope", 0)), _max_suffix(variant, "env_"))
+    if not isinstance(seq, dict):
+        seq = {}
+
+    def sequence(value) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        try:
+            return max(0, int(value))
+        except (ValueError, OverflowError):
+            return 0
+
+    variant.flash_seq = max(sequence(seq.get("flash")), _max_suffix(variant, "flash_"))
+    variant.exp_seq = max(sequence(seq.get("experiment")), _max_suffix(variant, "exp_"))
+    variant.env_seq = max(sequence(seq.get("envelope")), _max_suffix(variant, "env_"))
     open_tabs = ws.get("open_tabs")
-    if open_tabs is not None:
-        variant.open_node_ids = [nid for nid in open_tabs if nid in variant.nodes]
+    if isinstance(open_tabs, list):
+        variant.open_node_ids = [nid for nid in open_tabs
+                                 if isinstance(nid, str) and nid in variant.nodes]
     active = ws.get("active_tab")
-    variant.active_node_id = (active if active in variant.nodes else
+    variant.active_node_id = (active if isinstance(active, str) and active in variant.nodes else
                               (variant.open_node_ids[-1] if variant.open_node_ids else None))
 
 

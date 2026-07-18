@@ -117,3 +117,24 @@ def test_node_status_update_keeps_other_workspace_tabs_intact():
         assert state.node_by_id(flash_id).status.name == "RUNNING"
     finally:
         dpg.destroy_context()
+
+
+def test_projects_open_survives_malformed_saved_workspace():
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    session = SessionState(workspaces={
+        "KRSNL_PVTSIM": {
+            "nodes": [None, {"kind": "UNKNOWN"}],
+            "sequences": {"flash": "bad"},
+            "open_tabs": [None],
+        },
+    })
+    app = PVTcalcApp(state, session)
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        assert state.current_screen == "workspace"
+        assert state.active_model_id == "KRSNL_PVTSIM"
+    finally:
+        dpg.destroy_context()

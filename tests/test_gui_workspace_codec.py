@@ -41,3 +41,29 @@ def test_workspace_v2_is_migrated_in_memory():
     restore_workspace(variant, ws)
     assert variant.flash_seq == 1
     assert variant.nodes["flash_1"].params["label"] == "old"
+
+
+def test_malformed_workspace_records_are_skipped_or_sanitized():
+    variant = Variant("base", "Base")
+    variant.nodes["composition"] = GraphNode(
+        "composition", NodeKind.COMPOSITION, "Composition", NodeStatus.FRESH)
+    ws = {
+        "nodes": [
+            None,
+            {"kind": "UNKNOWN", "node_id": "bad"},
+            {"kind": "FLASH", "node_id": "flash_2", "status": "RUNNING",
+             "params": ["bad"], "upstream": "composition"},
+        ],
+        "sequences": {"flash": "bad", "experiment": float("inf")},
+        "open_tabs": [None, "flash_2", ["bad"]],
+        "active_tab": ["bad"],
+    }
+
+    restore_workspace(variant, ws)
+
+    assert variant.flash_seq == 2
+    assert variant.nodes["flash_2"].status is NodeStatus.STALE
+    assert variant.nodes["flash_2"].params == {}
+    assert variant.nodes["flash_2"].upstream == []
+    assert variant.open_node_ids == ["flash_2"]
+    assert variant.active_node_id == "flash_2"

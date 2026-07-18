@@ -66,9 +66,40 @@ def load_session(path: str = DEFAULT_SESSION_PATH) -> SessionState:
     try:
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
-        state = SessionState(**{k: data[k] for k in data
-                                if k in SessionState.__annotations__})
-    except (json.JSONDecodeError, TypeError) as exc:
+        if not isinstance(data, dict):
+            raise TypeError("корень сессии должен быть JSON-объектом")
+
+        def optional_str(value):
+            return value if isinstance(value, str) else None
+
+        def window_size(value, default: int) -> int:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return default
+            return max(320, min(10000, int(value)))
+
+        raw_workspaces = data.get("workspaces")
+        workspaces = None
+        if isinstance(raw_workspaces, dict):
+            workspaces = {
+                key: value for key, value in raw_workspaces.items()
+                if isinstance(key, str) and isinstance(value, dict)
+            }
+        state = SessionState(
+            version=3,
+            active_model_id=optional_str(data.get("active_model_id")),
+            window_width=window_size(data.get("window_width"), 1280),
+            window_height=window_size(data.get("window_height"), 800),
+            workspaces=workspaces,
+            open_tabs=(data.get("open_tabs")
+                       if isinstance(data.get("open_tabs"), list) else None),
+            active_tab=optional_str(data.get("active_tab")),
+            flashes=(data.get("flashes")
+                     if isinstance(data.get("flashes"), list) else None),
+            experiments=(data.get("experiments")
+                         if isinstance(data.get("experiments"), list) else None),
+            saved_at=optional_str(data.get("saved_at")),
+        )
+    except (json.JSONDecodeError, TypeError, ValueError, OverflowError) as exc:
         logger.warning("Сессия %s повреждена (%s), беру значения по умолчанию", p, exc)
         return SessionState()
 

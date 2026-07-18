@@ -96,3 +96,28 @@ def test_session_load_ignores_unknown_keys(tmp_path):
     loaded = load_session(str(path))
     assert loaded.active_model_id == "X"
     assert not hasattr(loaded, "bogus_key")
+
+
+def test_session_invalid_shapes_are_normalized(tmp_path):
+    path = tmp_path / "session.json"
+    path.write_text(
+        '{"active_model_id": 42, "window_width": -10, '
+        '"window_height": 50000, "workspaces": ["bad"]}',
+        encoding="utf-8",
+    )
+
+    loaded = load_session(str(path))
+
+    assert loaded.active_model_id is None
+    assert loaded.window_width == 320
+    assert loaded.window_height == 10000
+    assert loaded.workspaces is None
+
+
+def test_session_non_object_root_falls_back(tmp_path):
+    path = tmp_path / "session.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    loaded = load_session(str(path))
+
+    assert loaded == SessionState()
