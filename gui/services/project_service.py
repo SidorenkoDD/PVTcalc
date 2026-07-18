@@ -13,6 +13,8 @@
 import logging
 import math
 import re
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -102,6 +104,102 @@ def suggest_model_id(name: str, db_path: str = "models.json") -> str:
         candidate = f"{slug}_{n}"
         n += 1
     return candidate
+
+
+def _normalized_model_name(value: object) -> str:
+    """Сравнивает отображаемые имена без различий регистра/лишних пробелов."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _unique_copy_name(source_name: object, records: dict) -> str:
+    """Возвращает удобное имя копии: ``Name (copy)``, затем ``(copy 2)``."""
+    base = " ".join(str(source_name or "").split()) or "Unnamed model"
+    existing = {_normalized_model_name(rec.get("Model_name"))
+                for rec in records.values() if isinstance(rec, dict)}
+    candidate = f"{base} (copy)"
+    number = 2
+    while _normalized_model_name(candidate) in existing:
+        candidate = f"{base} (copy {number})"
+        number += 1
+    return candidate
+
+
+def suggest_duplicate_name(model_id: str, db_path: str = "models.json") -> str:
+    """Предлагает уникальное отображаемое имя копии модели."""
+    records = read_model_store(db_path)
+    source = records.get(model_id)
+    if not isinstance(source, dict):
+        raise KeyError(f"Model '{model_id}' not found in the database.")
+    return _unique_copy_name(source.get("Model_name") or model_id, records)
+
+
+def _unique_id_for_name(name: str, existing: set[str]) -> str:
+    """Строит валидный уникальный model_id без повторного чтения файла."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name.strip()).strip("_").upper()
+    if not slug or not slug[0].isalpha():
+        slug = "MODEL" + ("_" + slug if slug else "")
+    candidate, number = slug, 2
+    while candidate in existing:
+        candidate = f"{slug}_{number}"
+        number += 1
+    return candidate
+
+
+def duplicate_model(db_path: str, source_id: str, *, new_id: str | None = None,
+                    new_name: str | None = None) -> str:
+    """Создаёт независимую копию записи модели с новым id и именем.
+
+    Копируются состав, EOS, пластовая температура, поле и корреляции. История
+    сохранённых расчётов и GUI-workspace намеренно не копируются: после форка
+    они могут относиться к исходной версии и вводить в заблуждение.
+    Операция выполняется атомарно; перед записью повторно проверяются id и имя,
+    поэтому параллельное создание не сможет затереть другую модель.
+    """
+    result_id: str | None = None
+
+    def clone(records) -> None:
+        nonlocal result_id
+        source = records.get(source_id)
+        if not isinstance(source, dict):
+            raise KeyError(f"Model '{source_id}' not found in the database.")
+
+        name = (new_name if new_name is not None
+                else _unique_copy_name(source.get("Model_name") or source_id,
+                                       records)).strip()
+        if not name:
+            raise ValueError("Model name is empty.")
+        normalized = _normalized_model_name(name)
+        for model_key, record in records.items():
+            if (model_key != source_id and isinstance(record, dict)
+                    and _normalized_model_name(record.get("Model_name")) == normalized):
+                raise ValueError(f"Model name '{name}' already exists.")
+            if model_key == source_id and _normalized_model_name(
+                    record.get("Model_name")) == normalized:
+                raise ValueError("Copy name must differ from the source model.")
+
+        candidate_id = (new_id if new_id is not None
+                        else _unique_id_for_name(name, set(records))).strip()
+        if not candidate_id or not candidate_id.isidentifier():
+            raise ValueError("Model id must be a valid identifier (letters/digits/_).")
+        if candidate_id in records:
+            raise ValueError(f"Model id '{candidate_id}' already exists.")
+
+        now = datetime.now().isoformat(timespec="seconds")
+        # Не тянем в память потенциально огромную историю результатов, которую
+        # всё равно сбрасываем у новой модели.
+        copy_record = deepcopy({key: value for key, value in source.items()
+                                if key != "results"})
+        copy_record["Model_name"] = name
+        copy_record["created_at"] = now
+        copy_record["updated_at"] = now
+        copy_record["results"] = []
+        records[candidate_id] = copy_record
+        result_id = candidate_id
+
+    update_model_store(db_path, clone)
+    assert result_id is not None
+    logger.info("Модель '%s' скопирована как '%s'", source_id, result_id)
+    return result_id
 
 
 def validate_new_model(model_id: str, name: str, zi: dict,

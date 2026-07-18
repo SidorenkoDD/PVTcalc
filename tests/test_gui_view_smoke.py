@@ -71,10 +71,14 @@ def test_dpg_context_builds_and_renders_projects():
         assert dpg.does_item_exist(_PRIMARY)
         assert dpg.does_item_exist(_PROJECTS_CONTENT)
         assert state.models
+        model_id = next(iter(state.models))
+        app._on_duplicate_model_confirm(None, None, model_id)
+        assert app._duplicate_win is not None
+        assert _has_label(app._duplicate_win, "Model name")
+        app._close_duplicate_modal()
 
         # Реально собрать вкладки каждого вынесенного view-модуля. Расчёты не
         # запускаются: smoke проверяет DPG wiring/callback construction.
-        model_id = next(iter(state.models))
         app._open_project(model_id)
         assert dpg.does_item_exist(_WORKSPACE)
         state.open_node("composition")

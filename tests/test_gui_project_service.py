@@ -48,6 +48,36 @@ def test_suggest_model_id_slug_and_unique(tmp_path):
     assert svc.suggest_model_id("нефть", str(db)).startswith("MODEL")
 
 
+def test_duplicate_model_uses_unique_name_and_resets_results(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "A", "Original", "Field", "PREOS", 373.15, dict(_ZI))
+    svc.create_model(db, "B", "Original (copy)", None, "PREOS", 373.15, dict(_ZI))
+
+    from calc_core.Utils.ModelStore import update_model_store
+
+    def add_result(records):
+        records["A"]["results"] = [{"module": "Flash", "data": {"x": 1}}]
+
+    update_model_store(db, add_result)
+    copy_id = svc.duplicate_model(db, "A")
+    data = json.loads(Path(db).read_text(encoding="utf-8"))
+    assert copy_id in data and copy_id not in {"A", "B"}
+    assert data[copy_id]["Model_name"] == "Original (copy 2)"
+    assert data[copy_id]["composition"] == data["A"]["composition"]
+    assert data[copy_id]["correlations"] == data["A"]["correlations"]
+    assert data[copy_id]["results"] == []
+    assert data[copy_id]["created_at"] != data["A"]["created_at"]
+
+
+def test_duplicate_model_rejects_existing_id_or_name(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "A", "Original", None, "PREOS", 373.15, dict(_ZI))
+    with pytest.raises(ValueError, match="name"):
+        svc.duplicate_model(db, "A", new_id="C", new_name=" original ")
+    with pytest.raises(ValueError, match="id"):
+        svc.duplicate_model(db, "A", new_id="A", new_name="Another")
+
+
 def test_validate_new_model_errors(tmp_path):
     db = tmp_path / "m.json"
     db.write_text(

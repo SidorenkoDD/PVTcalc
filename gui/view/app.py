@@ -122,6 +122,9 @@ class PVTcalcApp(
         self._e300_win: int | None = None
         # форма создания нового флюида — модальное окно
         self._new_fluid_win: int | None = None
+        # модальное окно копирования модели из Projects
+        self._duplicate_win: int | None = None
+        self._duplicate_ids: dict[str, int] = {}
         self._new_fluid_form = NewFluidForm(
             get_db_path=lambda: self._state.db_path,
             on_created=self._on_fluid_created,

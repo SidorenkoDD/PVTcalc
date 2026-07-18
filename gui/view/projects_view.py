@@ -49,6 +49,8 @@ class ProjectsViewMixin(ContextBoundView):
     _excel_preview_group: int | None
     _e300_path: str | None
     _e300_win: int | None
+    _duplicate_win: int | None
+    _duplicate_ids: dict[str, int]
 
     def _render_projects(self) -> None:
         if not dpg.does_item_exist(_PROJECTS_CONTENT):
@@ -189,6 +191,8 @@ class ProjectsViewMixin(ContextBoundView):
                               callback=self._on_open_model)
             dpg.add_menu_item(label="View composition (read-only)",
                               user_data=model_id, callback=self._on_view_composition)
+            dpg.add_menu_item(label="Duplicate model...", user_data=model_id,
+                              callback=self._on_duplicate_model_confirm)
             dpg.add_menu_item(label="Delete model...", user_data=model_id,
                               callback=self._on_delete_model_confirm)
 
@@ -236,6 +240,89 @@ class ProjectsViewMixin(ContextBoundView):
                                callback=self._on_delete_model_do)
                 dpg.add_button(label="Cancel", width=120,
                                callback=lambda: dpg.delete_item(win))
+
+    def _on_duplicate_model_confirm(self, sender, app_data, user_data) -> None:
+        """Открывает форму копирования с безопасными уникальными defaults."""
+        mid = str(user_data)
+        try:
+            name = proj_svc.suggest_duplicate_name(mid, self._state.db_path)
+            model_id = proj_svc.suggest_model_id(name, self._state.db_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось подготовить копирование модели %s", mid)
+            self._set_status(f"Duplicate failed: {exc}")
+            return
+
+        if self._duplicate_win and dpg.does_item_exist(self._duplicate_win):
+            dpg.delete_item(self._duplicate_win)
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label="Duplicate model", modal=True, no_resize=True,
+                        width=540, height=260,
+                        pos=(max(0, w // 2 - 270), max(0, h // 2 - 130))) as win:
+            self._duplicate_win = self._track_modal(win)
+            dpg.add_text(f"Create an independent copy of '{mid}'.")
+            dpg.add_text("Stored calculations and GUI tabs are not copied.")
+            source = self._state.models.get(mid)
+            source_dirty = source is not None and source.dirty
+            if source_dirty:
+                warning = dpg.add_text(
+                    "Source has unsaved changes. The next action will save "
+                    "them before creating the copy.")
+                dpg.bind_item_theme(warning, self._theme_stale())
+            dpg.add_spacer(height=6)
+            self._duplicate_ids = {
+                "name": dpg.add_input_text(label="Model name", width=430,
+                                            default_value=name),
+                "id": dpg.add_input_text(label="Model id", width=430,
+                                          default_value=model_id),
+            }
+            dpg.add_spacer(height=6)
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label=("Save source & duplicate" if source_dirty
+                           else "Duplicate"),
+                    width=190, user_data=(mid, win, source_dirty),
+                    callback=self._on_duplicate_model_do)
+                dpg.add_button(label="Cancel", width=130,
+                               callback=lambda: self._close_duplicate_modal(win))
+
+    def _close_duplicate_modal(self, win: int | None = None) -> None:
+        target = win or self._duplicate_win
+        if target is not None and dpg.does_item_exist(target):
+            dpg.delete_item(target)
+        if target == self._duplicate_win:
+            self._duplicate_win = None
+            self._duplicate_ids = {}
+
+    def _on_duplicate_model_do(self, sender, app_data, user_data) -> None:
+        mid, win, save_source = user_data
+        source = self._state.models.get(mid)
+        if save_source and source is not None and source.dirty:
+            try:
+                self._state.save_model(mid)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Не удалось сохранить модель перед копированием %s", mid)
+                self._set_status(f"Save before duplicate failed: {exc}")
+                return
+        source = self._state.models.get(mid)
+        if source is not None and source.dirty:
+            self._set_status(
+                f"Save model '{mid}' before duplicating to include unsaved edits.")
+            return
+        ids = self._duplicate_ids
+        try:
+            name = str(dpg.get_value(ids["name"])).strip()
+            model_id = str(dpg.get_value(ids["id"])).strip()
+            new_id = proj_svc.duplicate_model(
+                self._state.db_path, mid, new_id=model_id, new_name=name)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось скопировать модель %s", mid)
+            self._set_status(f"Duplicate failed: {exc}")
+            return
+        self._close_duplicate_modal(win)
+        self._selected_project = new_id
+        self._state.refresh_model_list()
+        self._set_status(
+            f"Model '{new_id}' created. Double-click it to open the copy.")
 
     def _on_delete_model_do(self, sender, app_data, user_data) -> None:
         mid, win = user_data
