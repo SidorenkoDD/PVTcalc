@@ -106,7 +106,8 @@ def validate_model_record(model_id: str, record: object) -> ModelRecord:
     correlations = record.get("correlations")
     if correlations is not None and not isinstance(correlations, dict):
         raise _validation_error(model_id, "correlations должен быть объектом")
-    for key in ("Model_name", "Field", "eos", "created_at", "updated_at"):
+    for key in ("Model_name", "Field", "eos", "project_id", "created_at",
+                "updated_at"):
         value = record.get(key)
         if value is not None and not isinstance(value, str):
             raise _validation_error(model_id, f"{key} должен быть строкой")

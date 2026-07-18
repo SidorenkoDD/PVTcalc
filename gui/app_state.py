@@ -142,6 +142,7 @@ class Model:
 
     model_id: str
     title: str
+    project_id: str = ""
     field_name: Optional[str] = None
     eos: Optional[str] = None
     n_components: int = 0
@@ -164,6 +165,7 @@ class AppState:
         self.models: dict[str, Model] = {}
         self.model_list_error: str | None = None
         self.active_model_id: Optional[str] = None
+        self.active_project_id: Optional[str] = None
         self.active_variant_id: Optional[str] = None
         # текущий экран: "projects" (стартовый) | "workspace"
         # (форма нового флюида — модальное окно поверх Projects, не экран)
@@ -311,6 +313,7 @@ class AppState:
             # баннер; запись намеренно не пытаемся "починить" автоматически.
             self.models = {}
             self.active_model_id = None
+            self.active_project_id = None
             self.active_variant_id = None
             self.model_list_error = str(exc)
             logger.error("Не удалось обновить список моделей: %s", exc)
@@ -325,6 +328,7 @@ class AppState:
             model = Model(
                 model_id=s.model_id,
                 title=s.title,
+                project_id=s.project_id or s.model_id,
                 field_name=s.field_name,
                 eos=s.eos,
                 n_components=s.n_components,
@@ -337,7 +341,10 @@ class AppState:
             self.models[s.model_id] = model
         if self.active_model_id not in self.models:
             self.active_model_id = None
+            self.active_project_id = None
             self.active_variant_id = None
+        elif self.active_model_id is not None:
+            self.active_project_id = self.models[self.active_model_id].project_id
         logger.info("Список моделей обновлён: %d шт.", len(self.models))
         self._notify(StateChange(StateChangeKind.MODEL_LIST))
 
@@ -375,12 +382,14 @@ class AppState:
         """
         return self._repo.load_composition(model_id)
 
-    def set_active_model(self, model_id: str) -> None:
+    def set_active_model(self, model_id: str, *, notify: bool = True) -> None:
         """Делает модель активной (лениво загрузив состав). Вкладки не трогает."""
         self._ensure_loaded(model_id)
         self.active_model_id = model_id
+        self.active_project_id = self.models[model_id].project_id
         self.active_variant_id = "base"
-        self._notify(StateChange(StateChangeKind.WORKSPACE))
+        if notify:
+            self._notify(StateChange(StateChangeKind.WORKSPACE))
 
     # обратная совместимость со старым именем
     open_model = set_active_model
@@ -396,6 +405,7 @@ class AppState:
         """Открывает модель в рабочем пространстве (Projects → workspace)."""
         self._ensure_loaded(model_id)
         self.active_model_id = model_id
+        self.active_project_id = self.models[model_id].project_id
         self.active_variant_id = "base"
         self.current_screen = "workspace"
         if notify:

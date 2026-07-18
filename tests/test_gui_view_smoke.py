@@ -1,14 +1,17 @@
 """Headless-smoke реального DearPyGui View без показа окна."""
 
+import shutil
 from pathlib import Path
 
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import AppState
+from gui.services import project_service as proj_svc
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState
 from gui.view.app import _PRIMARY, _PROJECTS_CONTENT, _WORKSPACE, PVTcalcApp
 from gui.view.contracts import ViewHost
+from gui.view.workspace_view import _MODEL_TREE
 
 MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
 
@@ -72,17 +75,26 @@ def test_dpg_context_builds_and_renders_projects():
         assert dpg.does_item_exist(_PROJECTS_CONTENT)
         assert state.models
         model_id = next(iter(state.models))
-        app._on_duplicate_model_confirm(None, None, model_id)
-        assert app._duplicate_win is not None
-        assert _has_label(app._duplicate_win, "Model name")
-        app._close_duplicate_modal()
 
         # Реально собрать вкладки каждого вынесенного view-модуля. Расчёты не
         # запускаются: smoke проверяет DPG wiring/callback construction.
         app._open_project(model_id)
         assert dpg.does_item_exist(_WORKSPACE)
+        assert any(text.startswith("Models in project")
+                   for text in _text_values(_MODEL_TREE))
+        root_labels = [
+            dpg.get_item_label(child)
+            for children in dpg.get_item_children(_MODEL_TREE).values()
+            for child in children
+            if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
+        ]
+        assert any(state.models[model_id].title in label for label in root_labels)
         state.open_node("composition")
         assert "composition" in app._tab_ids
+        app._on_duplicate_model_confirm(None, None, model_id)
+        assert app._duplicate_win is not None
+        assert _has_label(app._duplicate_win, "Model name")
+        app._close_duplicate_modal()
 
         flash_id = state.new_flash_run(100.0, 50.0)
         experiment_id = state.new_experiment("dle", {"pressures": [200.0, 100.0]})
@@ -94,6 +106,29 @@ def test_dpg_context_builds_and_renders_projects():
         assert app._settings_ids
         assert all(dpg.get_item_configuration(wid)["readonly"]
                    for wid in app._settings_ids.values())
+    finally:
+        dpg.destroy_context()
+
+
+def test_workspace_tree_groups_duplicate_models_by_project(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        labels = [
+            dpg.get_item_label(child)
+            for children in dpg.get_item_children(_MODEL_TREE).values()
+            for child in children
+            if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
+        ]
+        assert any(state.models["KRSNL_PVTSIM"].title in label for label in labels)
+        assert any(state.models[copy_id].title in label for label in labels)
     finally:
         dpg.destroy_context()
 

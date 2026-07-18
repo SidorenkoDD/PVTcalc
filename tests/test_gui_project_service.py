@@ -65,6 +65,7 @@ def test_duplicate_model_uses_unique_name_and_resets_results(tmp_path):
     assert data[copy_id]["Model_name"] == "Original (copy 2)"
     assert data[copy_id]["composition"] == data["A"]["composition"]
     assert data[copy_id]["correlations"] == data["A"]["correlations"]
+    assert data[copy_id]["project_id"] == "A"
     assert data[copy_id]["results"] == []
     assert data[copy_id]["created_at"] != data["A"]["created_at"]
 

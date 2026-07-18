@@ -190,6 +190,9 @@ def duplicate_model(db_path: str, source_id: str, *, new_id: str | None = None,
         copy_record = deepcopy({key: value for key, value in source.items()
                                 if key != "results"})
         copy_record["Model_name"] = name
+        project_id = source.get("project_id")
+        copy_record["project_id"] = (project_id if isinstance(project_id, str)
+                                      and project_id else source_id)
         copy_record["created_at"] = now
         copy_record["updated_at"] = now
         copy_record["results"] = []

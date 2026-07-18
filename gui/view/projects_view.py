@@ -181,7 +181,7 @@ class ProjectsViewMixin(ContextBoundView):
         self._state.notify(StateChange(StateChangeKind.NAVIGATION))
         self._set_status(f"Model '{mid}' opened.")
 
-    # --- контекстное меню модели (просмотр состава / удаление) -------------
+    # --- контекстное меню модели на стартовом Projects ---------------------
 
     def _attach_project_context_menu(self, item_id, model_id: str) -> None:
         with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
@@ -191,8 +191,6 @@ class ProjectsViewMixin(ContextBoundView):
                               callback=self._on_open_model)
             dpg.add_menu_item(label="View composition (read-only)",
                               user_data=model_id, callback=self._on_view_composition)
-            dpg.add_menu_item(label="Duplicate model...", user_data=model_id,
-                              callback=self._on_duplicate_model_confirm)
             dpg.add_menu_item(label="Delete model...", user_data=model_id,
                               callback=self._on_delete_model_confirm)
 
@@ -321,8 +319,12 @@ class ProjectsViewMixin(ContextBoundView):
         self._close_duplicate_modal(win)
         self._selected_project = new_id
         self._state.refresh_model_list()
+        self._restored_models.add(new_id)
+        self._expanded_models.add(new_id)
+        self._state.enter_model(new_id, notify=False)
+        self._state.notify(StateChange(StateChangeKind.NAVIGATION))
         self._set_status(
-            f"Model '{new_id}' created. Double-click it to open the copy.")
+            f"Model '{new_id}' duplicated in the current project.")
 
     def _on_delete_model_do(self, sender, app_data, user_data) -> None:
         mid, win = user_data

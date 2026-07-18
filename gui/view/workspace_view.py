@@ -2,7 +2,7 @@
 
 import dearpygui.dearpygui as dpg
 
-from gui.app_state import NodeKind, NodeStatus
+from gui.app_state import NodeKind, NodeStatus, StateChange, StateChangeKind
 from gui.services import experiment_service as exp_svc
 from gui.view.contracts import ContextBoundView
 
@@ -28,25 +28,35 @@ class WorkspaceViewMixin(ContextBoundView):
     _lab_data_controls: dict[str, tuple[int, int, int]]
 
     def _render_tree(self) -> None:
-        """Дерево показывает ТОЛЬКО активную модель (выбор — на Projects)."""
+        """Показывает модели текущего проекта и узлы активной модели."""
         if not dpg.does_item_exist(_MODEL_TREE):
             return
         dpg.delete_item(_MODEL_TREE, children_only=True)
 
-        model = self._state.active_model
-        if model is None:
-            dpg.add_text("No model selected.", parent=_MODEL_TREE)
+        project_id = self._state.active_project_id
+        models = [model for model in self._state.models.values()
+                  if project_id is None or model.project_id == project_id]
+        if not models:
+            dpg.add_text("No models in this project.", parent=_MODEL_TREE)
             return
-        expanded = model.model_id in self._expanded_models
-        arrow = "v " if expanded else "> "
-        dpg.add_selectable(
-            label=(f"{arrow}{model.title}{'  *' if model.dirty else ''}  "
-                   f"[{model.n_components}c, {model.eos}]"),
-            parent=_MODEL_TREE, default_value=True,
-            user_data=model.model_id, callback=self._on_model_row,
-        )
-        if expanded and model.loaded:
-            self._render_model_children(model)
+        dpg.add_text("Models in project" +
+                     (f" ({project_id})" if project_id else ""),
+                     parent=_MODEL_TREE)
+        for model in models:
+            expanded = model.model_id in self._expanded_models
+            arrow = "v " if expanded else "> "
+            sel = dpg.add_selectable(
+                label=(f"{arrow}{model.title}{'  *' if model.dirty else ''}  "
+                       f"[{model.n_components}c, {model.eos}]"),
+                parent=_MODEL_TREE,
+                default_value=(model.model_id == self._state.active_model_id),
+                user_data=model.model_id, callback=self._on_model_row,
+            )
+            self._attach_model_context_menu(sel, model.model_id)
+            # Раскрываем узлы только уже загруженной моделью; клик по корню
+            # неактивной модели сначала делает её активной и лениво загружает.
+            if expanded and model.loaded and model.model_id == self._state.active_model_id:
+                self._render_model_children(model)
 
     def _render_model_children(self, model) -> None:
         variant = model.variants.get("base")
@@ -142,9 +152,22 @@ class WorkspaceViewMixin(ContextBoundView):
 
     # --- обработчики дерева ----------------------------------------------
 
+    def _attach_model_context_menu(self, item_id, model_id: str) -> None:
+        """Контекстные действия корневого узла модели в рабочем дереве."""
+        with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
+            dpg.add_text(model_id)
+            dpg.add_separator()
+            dpg.add_menu_item(label="Duplicate model...", user_data=model_id,
+                              callback=self._on_duplicate_model_confirm)
+
     def _on_model_row(self, sender, app_data, user_data) -> None:
-        # модель уже активна (единственная в дереве) — только разворот
         mid = user_data
+        if mid != self._state.active_model_id:
+            self._expanded_models.add(mid)
+            self._state.set_active_model(mid, notify=False)
+            self._restore_workspace(mid)
+            self._state.notify(StateChange(StateChangeKind.NAVIGATION))
+            return
         if mid in self._expanded_models:
             self._expanded_models.discard(mid)
         else:

@@ -37,6 +37,7 @@ class ModelSummary:
     n_components: int
     created_at: Optional[str] = None
     t_res: Optional[float] = None
+    project_id: Optional[str] = None
     # лёгкий срез results из models.json (без data): [{"module", "timestamp"}]
     results_brief: tuple = ()
 
@@ -80,6 +81,9 @@ class ModelRepository:
                 for r in rec.get("results", []) if isinstance(r, dict)
             )
             t_res = rec.get("T_res")
+            project_id = rec.get("project_id")
+            if not isinstance(project_id, str) or not project_id:
+                project_id = model_id
             summaries.append(
                 ModelSummary(
                     model_id=model_id,
@@ -89,6 +93,7 @@ class ModelRepository:
                     n_components=len(rec.get("composition", {})),
                     created_at=rec.get("created_at"),
                     t_res=float(t_res) if t_res is not None else None,
+                    project_id=project_id,
                     results_brief=results_brief,
                 )
             )
