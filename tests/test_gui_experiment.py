@@ -96,16 +96,19 @@ def test_lab_data_rows_are_typed_and_editable(state):
     state.add_lab_data_row(nid, columns)
     state.set_lab_data_value(nid, 0, 0, 250.0)
     state.set_lab_data_value(nid, 0, 1, 1.23)
+    state.append_lab_data_rows(nid, columns, [[200.0, 1.1], [150.0]])
     node = state.node_by_id(nid)
     assert node.params["lab_data"] == {
         "schema_version": 1,
         "columns": columns,
-        "rows": [[250.0, 1.23, None, None, None]],
+        "rows": [[250.0, 1.23, None, None, None],
+                 [200.0, 1.1, None, None, None],
+                 [150.0, None, None, None, None]],
     }
 
     state.add_lab_data_row(nid, columns)
     state.remove_lab_data_row(nid)
-    assert len(node.params["lab_data"]["rows"]) == 1
+    assert len(node.params["lab_data"]["rows"]) == 3
     state.clear_lab_data(nid)
     assert node.params["lab_data"]["rows"] == []
 

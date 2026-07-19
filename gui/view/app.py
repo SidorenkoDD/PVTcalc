@@ -29,6 +29,7 @@ from gui.view.experiment_view import ExperimentViewMixin
 from gui.view.flash_view import FlashViewMixin
 from gui.view.new_fluid_form import NewFluidForm
 from gui.view.projects_view import ProjectsViewMixin
+from gui.view.table_clipboard import table_to_tsv
 from gui.view.theme import build_light_theme
 from gui.view.workspace_view import WorkspaceViewMixin
 from gui.workspace_codec import restore_workspace, snapshot_workspace
@@ -479,6 +480,18 @@ class PVTcalcApp(
     def _set_status(self, text: str) -> None:
         if dpg.does_item_exist(_STATUS_BAR):
             dpg.set_value(_STATUS_BAR, text)
+
+    def _copy_table(self, columns, rows, label: str = "Table") -> None:
+        """Кладёт read-only таблицу в буфер в формате TSV для Excel."""
+        try:
+            text = table_to_tsv(columns, rows)
+            dpg.set_clipboard_text(text)
+        except Exception as exc:  # noqa: BLE001 — системный clipboard может быть недоступен
+            self._set_status(f"Could not copy {label.lower()}: {exc}")
+            return
+        count = max(0, len(rows)) if hasattr(rows, "__len__") else ""
+        suffix = f" ({count} row(s))" if count != "" else ""
+        self._set_status(f"{label} copied to clipboard{suffix}.")
 
     # ==================================================================
     #  Сессия

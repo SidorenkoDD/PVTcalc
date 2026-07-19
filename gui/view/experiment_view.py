@@ -5,6 +5,7 @@ import math
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
+from gui.services import clipboard_service
 from gui.services import experiment_service as exp_svc
 from gui.view.contracts import ContextBoundView
 
@@ -16,6 +17,7 @@ class ExperimentViewMixin(ContextBoundView):
     _exp_chart_holder: dict[str, int]
     _lab_data_holder: dict[str, int]
     _lab_data_controls: dict[str, tuple[int, int, int]]
+    _lab_focus_theme_id: int | str | None
 
     def _render_experiment_tab(self, parent, node) -> None:
         nid = node.node_id
@@ -112,6 +114,9 @@ class ExperimentViewMixin(ContextBoundView):
             with dpg.group(horizontal=True, parent=header):
                 dpg.add_button(label="Add point", user_data=node.node_id,
                                callback=self._on_lab_add_row)
+                dpg.add_button(label="Paste from Excel",
+                               user_data=node.node_id,
+                               callback=self._on_lab_paste)
                 remove_id = dpg.add_button(
                     label="Remove last", user_data=node.node_id,
                     callback=self._on_lab_remove_row, enabled=bool(rows))
@@ -123,6 +128,8 @@ class ExperimentViewMixin(ContextBoundView):
                     remove_id, clear_id, count_id)
             holder = dpg.add_group(parent=header)
             self._lab_data_holder[node.node_id] = holder
+            dpg.add_text("Excel paste: tab-separated columns; a header row is detected automatically. "
+                         "The focused cell is highlighted.", parent=header)
             self._render_lab_data_table(node, holder, columns, rows)
 
     def _render_lab_data_table(self, node, holder, columns, rows) -> None:
@@ -143,12 +150,20 @@ class ExperimentViewMixin(ContextBoundView):
                 with dpg.table_row():
                     dpg.add_text(str(row_index + 1))
                     for column_index, value in enumerate(row):
-                        dpg.add_input_text(
+                        cell_id = dpg.add_input_text(
                             default_value="" if value is None else self._g(value),
                             width=115,
                             user_data=(node.node_id, row_index, column_index),
                             callback=self._on_lab_cell,
                         )
+                        with dpg.item_handler_registry() as registry:
+                            dpg.add_item_focus_handler(
+                                callback=self._on_lab_cell_focus,
+                                user_data=cell_id,
+                                event_type=(dpg.mvEventType_Enter
+                                            | dpg.mvEventType_Leave),
+                            )
+                        dpg.bind_item_handler_registry(cell_id, registry)
 
     def _rebuild_lab_data_table(self, node_id: str) -> None:
         node = self._state.node_by_id(node_id)
@@ -173,6 +188,27 @@ class ExperimentViewMixin(ContextBoundView):
         self._rebuild_lab_data_table(user_data)
         self._rebuild_exp_chart_grid(user_data)
         self._schedule_session_autosave()
+
+    def _on_lab_paste(self, sender, app_data, user_data) -> None:
+        try:
+            text = dpg.get_clipboard_text() or ""
+        except Exception as exc:  # noqa: BLE001 — clipboard недоступен в headless
+            self._set_status(f"Could not read clipboard: {exc}")
+            return
+        node = self._state.node_by_id(user_data)
+        if node is None:
+            return
+        columns = self._lab_columns(node)
+        rows, had_header = clipboard_service.parse_lab_clipboard(text, columns)
+        if not rows:
+            self._set_status("Clipboard has no numeric lab data.")
+            return
+        self._state.append_lab_data_rows(user_data, columns, rows)
+        self._rebuild_lab_data_table(user_data)
+        self._rebuild_exp_chart_grid(user_data)
+        self._schedule_session_autosave()
+        header_note = " with header" if had_header else ""
+        self._set_status(f"Pasted {len(rows)} lab point(s){header_note} from clipboard.")
 
     def _on_lab_remove_row(self, sender, app_data, user_data) -> None:
         self._state.remove_lab_data_row(user_data)
@@ -200,22 +236,48 @@ class ExperimentViewMixin(ContextBoundView):
                 self._set_status(f"Invalid lab value: {exc}")
                 return
         self._state.set_lab_data_value(node_id, row, column, value)
+        self._on_lab_cell_focus(sender, None, sender)
         self._rebuild_exp_chart_grid(node_id)
         self._schedule_session_autosave()
+
+    def _lab_focus_theme(self):
+        theme_id = getattr(self, "_lab_focus_theme_id", None)
+        if theme_id is None:
+            with dpg.theme() as theme_id:
+                with dpg.theme_component(dpg.mvInputText):
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (255, 244, 180))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, (255, 232, 130))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, (255, 220, 100))
+                    dpg.add_theme_color(dpg.mvThemeCol_InputTextCursor, (30, 30, 30))
+            self._lab_focus_theme_id = theme_id
+        return theme_id
+
+    def _on_lab_cell_focus(self, sender, app_data, user_data) -> None:
+        cell_id = user_data
+        if not dpg.does_item_exist(cell_id):
+            return
+        if dpg.is_item_focused(cell_id):
+            dpg.bind_item_theme(cell_id, self._lab_focus_theme())
+        else:
+            dpg.bind_item_theme(cell_id, 0)
 
     def _render_exp_table(self, result, parent, cols) -> None:
         allcols = result["columns"]
         idxs = [(c, allcols.index(c)) for c in cols if c in allcols]
+        rows = [[self._fmt(row[i]) for _, i in idxs] for row in result["rows"]]
+        dpg.add_button(label="Copy table", parent=parent,
+                       callback=lambda: self._copy_table(
+                           [c for c, _ in idxs], rows, "Experiment results"))
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, scrollX=True, height=-1,
                        freeze_rows=1, freeze_columns=1):
             for c, _ in idxs:
                 dpg.add_table_column(label=c)
-            for row in result["rows"]:
+            for row in rows:
                 with dpg.table_row():
-                    for _, i in idxs:
-                        dpg.add_text(self._fmt(row[i]))
+                    for value in row:
+                        dpg.add_text(value)
 
     def _render_exp_composition(self, result, parent) -> None:
         stages = result.get("stages", [])
@@ -236,20 +298,29 @@ class ExperimentViewMixin(ContextBoundView):
         if not names:
             dpg.add_text(f"No {phase} composition.", parent=parent)
             return
+        columns = ["Component"] + [f"{self._g(st.get('pressure'))} bar"
+                                   for st in stages]
+        rows = []
+        for name in names:
+            row = [name]
+            for st in stages:
+                d = st.get(phase)
+                row.append(self._fmt(d.get(name) if isinstance(d, dict) else None))
+            rows.append(row)
+        dpg.add_button(label="Copy table", parent=parent,
+                       callback=lambda: self._copy_table(
+                           columns, rows, f"{phase.capitalize()} composition"))
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, scrollX=True, height=-1,
                        freeze_rows=1, freeze_columns=1):
             dpg.add_table_column(label="Component")
-            for st in stages:
-                dpg.add_table_column(label=f"{self._g(st.get('pressure'))} bar")
-            for name in names:
+            for column in columns[1:]:
+                dpg.add_table_column(label=column)
+            for row in rows:
                 with dpg.table_row():
-                    dpg.add_text(name)
-                    for st in stages:
-                        d = st.get(phase)
-                        dpg.add_text(self._fmt(d.get(name) if isinstance(d, dict)
-                                               else None))
+                    for value in row:
+                        dpg.add_text(value)
 
     def _render_exp_chart(self, result, parent, nid) -> None:
         node = self._state.node_by_id(nid)

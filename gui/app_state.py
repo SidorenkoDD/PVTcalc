@@ -830,6 +830,23 @@ class AppState:
         if isinstance(rows, list):
             rows.append([None] * len(columns))
 
+    def append_lab_data_rows(self, node_id: str, columns: list[str],
+                             new_rows: list[list[float | None]]) -> None:
+        """Добавляет несколько валидированных строк фактических данных."""
+        node = self._lab_node(node_id)
+        if node is None or not columns or not new_rows:
+            return
+        data = node.params.get("lab_data")
+        if not isinstance(data, dict) or data.get("columns") != columns:
+            data = {"schema_version": 1, "columns": list(columns), "rows": []}
+            node.params["lab_data"] = data
+        rows = data.setdefault("rows", [])
+        if isinstance(rows, list):
+            rows.extend([
+                (row[:len(columns)] + [None] * len(columns))[:len(columns)]
+                for row in new_rows
+            ])
+
     def remove_lab_data_row(self, node_id: str) -> None:
         """Удаляет последнюю строку фактических данных."""
         node = self._lab_node(node_id)

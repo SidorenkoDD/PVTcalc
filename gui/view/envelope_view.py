@@ -126,16 +126,20 @@ class EnvelopeViewMixin(ContextBoundView):
         if not cols:
             dpg.add_text("No data.", parent=parent)
             return
+        formatted_rows = [[self._fmt(value) for value in row] for row in rows]
+        dpg.add_button(label="Copy table", parent=parent,
+                       callback=lambda: self._copy_table(
+                           cols, formatted_rows, "Phase envelope data"))
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, scrollX=True, height=-1,
                        freeze_rows=1, freeze_columns=1):
             for c in cols:
                 dpg.add_table_column(label=c)
-            for row in rows:
+            for row in formatted_rows:
                 with dpg.table_row():
-                    for v in row:
-                        dpg.add_text(self._fmt(v))
+                    for value in row:
+                        dpg.add_text(value)
 
     # --- всплывающее окно параметров огибающей ----------------------------
 

@@ -63,6 +63,9 @@ class ContextBoundView:
     def _track_modal(self, win: int) -> int:
         raise NotImplementedError
 
+    def _copy_table(self, columns, rows, label: str = "Table") -> None:
+        raise NotImplementedError
+
     def _fmt(self, value: object) -> str:
         raise NotImplementedError
 

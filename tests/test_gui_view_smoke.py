@@ -254,6 +254,8 @@ def test_experiment_lab_data_and_chart_grid_render():
         app._render_node_content(nid)
 
         assert _has_label(_WORKSPACE, "Lab Data (measured)")
+        assert _has_label(_WORKSPACE, "Paste from Excel")
+        assert _has_label(_WORKSPACE, "Copy table")
         assert _has_label(_WORKSPACE, "Bo vs pressure")
         assert _has_label(_WORKSPACE, "vapor_density vs pressure")
         assert len([item for item in dpg.get_item_children(

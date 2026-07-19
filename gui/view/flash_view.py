@@ -60,21 +60,27 @@ class FlashViewMixin(ContextBoundView):
 
     def _render_flash_main(self, result, parent) -> None:
         """Основные свойства фаз (доли, M, объём, плотность, Z, вязкость)."""
+        rows = [["Phase mole fraction", self._fmt(result.vapor.mole_fraction),
+                 self._fmt(result.liquid.mole_fraction)]]
+        rows.extend([
+            [label, self._fmt(result.vapor.properties.get(key)),
+             self._fmt(result.liquid.properties.get(key))]
+            for key, label in flash_service.PHASE_PROPERTY_ROWS
+        ])
+        dpg.add_button(label="Copy table", parent=parent,
+                       callback=lambda: self._copy_table(
+                           ["Property", "Vapor", "Liquid"], rows,
+                           "Flash results"))
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, height=-1, freeze_rows=1):
             dpg.add_table_column(label="Property")
             dpg.add_table_column(label="Vapor")
             dpg.add_table_column(label="Liquid")
-            with dpg.table_row():
-                dpg.add_text("Phase mole fraction")
-                dpg.add_text(self._fmt(result.vapor.mole_fraction))
-                dpg.add_text(self._fmt(result.liquid.mole_fraction))
-            for key, label in flash_service.PHASE_PROPERTY_ROWS:
+            for row in rows:
                 with dpg.table_row():
-                    dpg.add_text(label)
-                    dpg.add_text(self._fmt(result.vapor.properties.get(key)))
-                    dpg.add_text(self._fmt(result.liquid.properties.get(key)))
+                    for value in row:
+                        dpg.add_text(value)
 
     def _render_flash_composition(self, result, parent) -> None:
         """Состав каждой фазы (yi/xi) и константы равновесия K = yi/xi."""
@@ -89,6 +95,16 @@ class FlashViewMixin(ContextBoundView):
         if phase_composition is None:
             return
         names = list(phase_composition.keys())
+        rows = []
+        for name in names:
+            y = yi.get(name) if yi else None
+            x = xi.get(name) if xi else None
+            k = (y / x) if (y is not None and x not in (None, 0.0)) else None
+            rows.append([name, self._fmt(y), self._fmt(x), self._fmt(k)])
+        dpg.add_button(label="Copy table", parent=parent,
+                       callback=lambda: self._copy_table(
+                           ["Component", "Vapor yi", "Liquid xi", "K = yi/xi"],
+                           rows, "Flash composition"))
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, height=-1, freeze_rows=1):
@@ -96,15 +112,10 @@ class FlashViewMixin(ContextBoundView):
             dpg.add_table_column(label="Vapor yi")
             dpg.add_table_column(label="Liquid xi")
             dpg.add_table_column(label="K = yi/xi")
-            for name in names:
-                y = yi.get(name) if yi else None
-                x = xi.get(name) if xi else None
-                k = (y / x) if (y is not None and x not in (None, 0.0)) else None
+            for row in rows:
                 with dpg.table_row():
-                    dpg.add_text(name)
-                    dpg.add_text(self._fmt(y))
-                    dpg.add_text(self._fmt(x))
-                    dpg.add_text(self._fmt(k))
+                    for value in row:
+                        dpg.add_text(value)
 
     # ==================================================================
     #  Вкладка Compare (таблица сравнения + плитка панелей)
@@ -136,6 +147,17 @@ class FlashViewMixin(ContextBoundView):
         return f"{self._g(node.params.get('P'))}/{self._g(node.params.get('T'))}"
 
     def _compare_phase_table(self, members, headers, phase, parent) -> None:
+        rows = [["Phase mole fraction"] + [
+            self._fmt(getattr(member.result, phase).mole_fraction)
+            for member in members]]
+        rows.extend([
+            [label] + [self._fmt(getattr(member.result, phase).properties.get(key))
+                       for member in members]
+            for key, label in flash_service.PHASE_PROPERTY_ROWS
+        ])
+        dpg.add_button(label="Copy table", parent=parent,
+                       callback=lambda: self._copy_table(
+                           ["Property"] + headers, rows, "Comparison"))
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, scrollX=True, height=-1,
@@ -143,15 +165,10 @@ class FlashViewMixin(ContextBoundView):
             dpg.add_table_column(label="Property")
             for h in headers:
                 dpg.add_table_column(label=h)
-            with dpg.table_row():
-                dpg.add_text("Phase mole fraction")
-                for m in members:
-                    dpg.add_text(self._fmt(getattr(m.result, phase).mole_fraction))
-            for key, label in flash_service.PHASE_PROPERTY_ROWS:
+            for row in rows:
                 with dpg.table_row():
-                    dpg.add_text(label)
-                    for m in members:
-                        dpg.add_text(self._fmt(getattr(m.result, phase).properties.get(key)))
+                    for value in row:
+                        dpg.add_text(value)
 
     def _compare_k_table(self, members, headers, parent) -> None:
         # набор компонентов — из первого участника с известным составом жидкости
@@ -165,6 +182,21 @@ class FlashViewMixin(ContextBoundView):
             dpg.add_text("Phase compositions are not available for these results.",
                          parent=parent)
             return
+        rows = []
+        for name in names:
+            row = [name]
+            for member in members:
+                yi = member.result.vapor.composition
+                xi = member.result.liquid.composition
+                y = yi.get(name) if isinstance(yi, dict) else None
+                x = xi.get(name) if isinstance(xi, dict) else None
+                row.append(self._fmt((y / x) if (y is not None
+                                  and x not in (None, 0.0)) else None))
+            rows.append(row)
+        dpg.add_button(label="Copy table", parent=parent,
+                       callback=lambda: self._copy_table(
+                           ["Component (K=yi/xi)"] + headers, rows,
+                           "K-value comparison"))
         with dpg.table(parent=parent, header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, scrollX=True, height=-1,
@@ -172,16 +204,10 @@ class FlashViewMixin(ContextBoundView):
             dpg.add_table_column(label="Component (K=yi/xi)")
             for h in headers:
                 dpg.add_table_column(label=h)
-            for name in names:
+            for row in rows:
                 with dpg.table_row():
-                    dpg.add_text(name)
-                    for m in members:
-                        yi = m.result.vapor.composition
-                        xi = m.result.liquid.composition
-                        y = yi.get(name) if isinstance(yi, dict) else None
-                        x = xi.get(name) if isinstance(xi, dict) else None
-                        k = (y / x) if (y is not None and x not in (None, 0.0)) else None
-                        dpg.add_text(self._fmt(k))
+                    for value in row:
+                        dpg.add_text(value)
 
     def _compare_panels(self, members, headers, parent) -> None:
         with dpg.group(horizontal=True, parent=parent):
