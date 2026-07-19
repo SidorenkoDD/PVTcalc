@@ -113,6 +113,22 @@ def test_lab_data_rows_are_typed_and_editable(state):
     assert node.params["lab_data"]["rows"] == []
 
 
+def test_paste_lab_data_rows_starts_at_cell_and_extends_table(state):
+    nid = state.new_experiment("dle", {"pressures": [400, 200]})
+    columns = exp_svc.EXPERIMENT_TYPES["dle"]["lab_columns"]
+    state.append_lab_data_rows(nid, columns, [[400.0, 1.4]])
+
+    state.paste_lab_data_rows(
+        nid, columns, start_row=0,
+        new_rows=[[None, 1.3], [None, 1.2], [None, 1.1]])
+
+    assert state.node_by_id(nid).params["lab_data"]["rows"] == [
+        [400.0, 1.3, None, None, None],
+        [None, 1.2, None, None, None],
+        [None, 1.1, None, None, None],
+    ]
+
+
 def test_composition_change_invalidates_experiment(state):
     nid = state.new_experiment("dle", {"pressures": [400, 200], "T_c": 90.0})
     state.set_node_result(nid, {"columns": ["pressure"], "rows": [[1.0]],

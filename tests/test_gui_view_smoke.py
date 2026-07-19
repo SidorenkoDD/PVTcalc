@@ -9,7 +9,13 @@ from gui.app_state import AppState
 from gui.services import project_service as proj_svc
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState
-from gui.view.app import _PRIMARY, _PROJECTS_CONTENT, _WORKSPACE, PVTcalcApp
+from gui.view.app import (
+    _PRIMARY,
+    _PROJECTS_CONTENT,
+    _STATUS_BAR,
+    _WORKSPACE,
+    PVTcalcApp,
+)
 from gui.view.contracts import ViewHost
 from gui.view.workspace_view import _MODEL_TREE
 
@@ -261,6 +267,32 @@ def test_experiment_lab_data_and_chart_grid_render():
         assert len([item for item in dpg.get_item_children(
             app._exp_chart_holder[nid], 1)
             if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]) == 2
+    finally:
+        dpg.destroy_context()
+
+
+def test_lab_paste_empty_clipboard_is_safe_and_column_is_vertical(monkeypatch):
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        state.enter_model(next(iter(state.models)))
+        state.open_node("composition")
+        nid = state.new_experiment("dle", {"pressures": [400.0, 200.0]})
+        app._render_node_content(nid)
+
+        monkeypatch.setattr(dpg, "get_clipboard_text", lambda: "")
+        app._on_lab_paste(None, None, nid)
+        assert dpg.get_value(_STATUS_BAR).startswith("Clipboard is empty")
+
+        monkeypatch.setattr(dpg, "get_clipboard_text",
+                            lambda: "350\n300\n250")
+        app._lab_active_cell = (nid, 0, 0)
+        app._on_lab_paste(None, None, nid)
+        rows = state.node_by_id(nid).params["lab_data"]["rows"]
+        assert [row[0] for row in rows] == [350.0, 300.0, 250.0]
     finally:
         dpg.destroy_context()
 

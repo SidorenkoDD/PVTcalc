@@ -18,6 +18,7 @@ class ExperimentViewMixin(ContextBoundView):
     _lab_data_holder: dict[str, int]
     _lab_data_controls: dict[str, tuple[int, int, int]]
     _lab_focus_theme_id: int | str | None
+    _lab_active_cell: tuple[str, int, int] | None
 
     def _render_experiment_tab(self, parent, node) -> None:
         nid = node.node_id
@@ -159,7 +160,8 @@ class ExperimentViewMixin(ContextBoundView):
                         with dpg.item_handler_registry() as registry:
                             dpg.add_item_focus_handler(
                                 callback=self._on_lab_cell_focus,
-                                user_data=cell_id,
+                                 user_data=(cell_id, node.node_id,
+                                            row_index, column_index),
                                 event_type=(dpg.mvEventType_Enter
                                             | dpg.mvEventType_Leave),
                             )
@@ -195,20 +197,35 @@ class ExperimentViewMixin(ContextBoundView):
         except Exception as exc:  # noqa: BLE001 — clipboard недоступен в headless
             self._set_status(f"Could not read clipboard: {exc}")
             return
-        node = self._state.node_by_id(user_data)
-        if node is None:
-            return
-        columns = self._lab_columns(node)
-        rows, had_header = clipboard_service.parse_lab_clipboard(text, columns)
-        if not rows:
-            self._set_status("Clipboard has no numeric lab data.")
-            return
-        self._state.append_lab_data_rows(user_data, columns, rows)
-        self._rebuild_lab_data_table(user_data)
-        self._rebuild_exp_chart_grid(user_data)
-        self._schedule_session_autosave()
-        header_note = " with header" if had_header else ""
-        self._set_status(f"Pasted {len(rows)} lab point(s){header_note} from clipboard.")
+        try:
+            if not str(text).strip():
+                self._set_status(
+                    "Clipboard is empty. Copy an Excel column or table first.")
+                return
+            node = self._state.node_by_id(user_data)
+            if node is None:
+                return
+            columns = self._lab_columns(node)
+            active = getattr(self, "_lab_active_cell", None)
+            active_column = 0
+            start_row = len(self._lab_rows(node, columns))
+            if active is not None and active[0] == user_data:
+                active_column = max(0, min(active[2], len(columns) - 1))
+                start_row = max(0, min(active[1], start_row))
+            rows, had_header = clipboard_service.parse_lab_clipboard(
+                str(text), columns, start_column=active_column)
+            if not rows:
+                self._set_status("Clipboard has no numeric lab data.")
+                return
+            self._state.paste_lab_data_rows(user_data, columns, start_row, rows)
+            self._rebuild_lab_data_table(user_data)
+            self._rebuild_exp_chart_grid(user_data)
+            self._schedule_session_autosave()
+            header_note = " with header" if had_header else ""
+            self._set_status(
+                f"Pasted {len(rows)} lab point(s){header_note} from clipboard.")
+        except Exception as exc:  # noqa: BLE001 — callback must not crash the app
+            self._set_status(f"Paste failed: {exc}")
 
     def _on_lab_remove_row(self, sender, app_data, user_data) -> None:
         self._state.remove_lab_data_row(user_data)
@@ -224,6 +241,7 @@ class ExperimentViewMixin(ContextBoundView):
 
     def _on_lab_cell(self, sender, app_data, user_data) -> None:
         node_id, row, column = user_data
+        self._lab_active_cell = (node_id, row, column)
         raw = str(app_data).strip()
         if not raw:
             value = None
@@ -236,7 +254,7 @@ class ExperimentViewMixin(ContextBoundView):
                 self._set_status(f"Invalid lab value: {exc}")
                 return
         self._state.set_lab_data_value(node_id, row, column, value)
-        self._on_lab_cell_focus(sender, None, sender)
+        self._on_lab_cell_focus(sender, None, (sender, node_id, row, column))
         self._rebuild_exp_chart_grid(node_id)
         self._schedule_session_autosave()
 
@@ -253,10 +271,17 @@ class ExperimentViewMixin(ContextBoundView):
         return theme_id
 
     def _on_lab_cell_focus(self, sender, app_data, user_data) -> None:
-        cell_id = user_data
+        if isinstance(user_data, tuple) and len(user_data) == 4:
+            cell_id, node_id, row, column = user_data
+        else:
+            cell_id = user_data
+            node_id = row = column = None
         if not dpg.does_item_exist(cell_id):
             return
         if dpg.is_item_focused(cell_id):
+            if (isinstance(node_id, str) and isinstance(row, int)
+                    and isinstance(column, int)):
+                self._lab_active_cell = (node_id, row, column)
             dpg.bind_item_theme(cell_id, self._lab_focus_theme())
         else:
             dpg.bind_item_theme(cell_id, 0)

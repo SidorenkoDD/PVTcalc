@@ -22,7 +22,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, cast
 
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.ModelStore import ModelStoreError
@@ -846,6 +846,45 @@ class AppState:
                 (row[:len(columns)] + [None] * len(columns))[:len(columns)]
                 for row in new_rows
             ])
+
+    def paste_lab_data_rows(
+        self,
+        node_id: str,
+        columns: list[str],
+        start_row: int,
+        new_rows: list[list[float | None]],
+    ) -> None:
+        """Writes pasted points from a cell, extending the table as needed.
+
+        ``None`` values are left untouched so a partial clipboard table does
+        not erase measurements in other columns.  This makes a one-column
+        Excel paste land in the focused column while preserving the rest of
+        each existing point.
+        """
+        node = self._lab_node(node_id)
+        if node is None or not columns or not new_rows:
+            return
+        data = node.params.get("lab_data")
+        if not isinstance(data, dict) or data.get("columns") != columns:
+            data = {"schema_version": 1, "columns": list(columns), "rows": []}
+            node.params["lab_data"] = data
+        rows = cast(list[list[float | None]], data.setdefault("rows", []))
+        if not isinstance(rows, list):
+            rows = []
+            data["rows"] = rows
+        start_row = max(0, int(start_row))
+        while len(rows) < start_row + len(new_rows):
+            rows.append([None] * len(columns))
+        for row_offset, source_row in enumerate(new_rows):
+            target_row = rows[start_row + row_offset]
+            if not isinstance(target_row, list):
+                target_row = [None] * len(columns)
+                rows[start_row + row_offset] = target_row
+            normalized = (source_row[:len(columns)]
+                          + [None] * len(columns))[:len(columns)]
+            for column_index, value in enumerate(normalized):
+                if value is not None:
+                    target_row[column_index] = value
 
     def remove_lab_data_row(self, node_id: str) -> None:
         """Удаляет последнюю строку фактических данных."""

@@ -19,6 +19,14 @@ def test_parse_lab_clipboard_supports_positional_single_column():
     assert rows == [[100.0, None], [90.0, None]]
 
 
+def test_parse_lab_clipboard_accepts_flattened_column_and_target_column():
+    rows, had_header = parse_lab_clipboard(
+        "100, 90, 80", ["pressure", "Bo"], start_column=1)
+
+    assert had_header is False
+    assert rows == [[None, 100.0], [None, 90.0], [None, 80.0]]
+
+
 def test_table_to_tsv_is_excel_compatible_and_sanitizes_cells():
     assert table_to_tsv(["A", "B"], [[1, "two\tlines"], [None, 3]]) == (
         "A\tB\n1\ttwo lines\n\t3"
