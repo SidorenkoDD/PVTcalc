@@ -62,7 +62,25 @@ def test_krsnl_two_phase_below_p_sat(krsnl_composition):
 
 
 def test_przlm_single_phase(przlm_composition):
-    """PRRZLM_MDT_TEST, P=200 бар, T=100°C — второй состав, другая молекулярная масса/плотность."""
+    """PRRZLM_MDT_TEST, P=200 бар, T=100°C — второй состав, другая молекулярная масса/плотность.
+
+    Эталон обновлён 2026-07-19 по решению автора. Причина — не изменение кода:
+    запись PRRZLM_MDT_TEST в models.json была пересохранена через GUI
+    (updated_at 2026-07-19T14:56:28), и свойства C7+ пересчитались по
+    записанному набору корреляций (pedersen Tc / riazi daubert Pc). Изменились
+    critical_temperature/critical_pressure у 24 компонент (например,
+    C30 Tc: 872.53 -> 842.92 K) и, следом, коэффициенты EOS a/b/c/d и
+    peneloux_correction у всех 35. Автор подтвердил, что верны новые значения:
+    это честный пересчёт текущим кодом, тогда как старые лежали в базе с июня.
+
+    Проверено, что дело в данных, а не в коде: на версии models.json из HEAD
+    тест проходил со старым эталоном. `molecular_ weight` не изменился —
+    сам состав тот же, поехали только EOS-зависимые свойства.
+
+    ВНИМАНИЕ: эталон завязан на живой, редактируемый models.json в корне
+    репозитория — обычная работа в GUI может снова его сдвинуть. Отвязка
+    тестов на фикстуру-снапшот числится отдельной задачей в docs/BACKLOG.md.
+    """
     conditions = Conditions(200, 100)
     przlm_composition.T = conditions.t
 
@@ -72,7 +90,7 @@ def test_przlm_single_phase(przlm_composition):
     assert result.phase_type == "ambiguous"
     props = result.liquid.properties
     assert props["molecular_ weight"] == pytest.approx(162.37014542290848, rel=REL)
-    assert props["molar_volume"] == pytest.approx(233.81316561119255, rel=REL)
-    assert props["density"] == pytest.approx(0.6944439805109754, rel=REL)
-    assert props["z"] == pytest.approx(1.5072362357257434, rel=REL)
-    assert props["viscosity"] == pytest.approx(0.46505064148340114, rel=REL)
+    assert props["molar_volume"] == pytest.approx(223.02467067381173, rel=REL)
+    assert props["density"] == pytest.approx(0.7280367007486159, rel=REL)
+    assert props["z"] == pytest.approx(1.4376900642941304, rel=REL)
+    assert props["viscosity"] == pytest.approx(0.7167218269379607, rel=REL)
