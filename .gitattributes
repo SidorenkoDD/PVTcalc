@@ -1,0 +1,21 @@
+# Нормализация переводов строк: в репозитории всегда LF, в рабочем дереве —
+# как принято в ОС. Без этого Windows-checkout шумит предупреждениями
+# "LF will be replaced by CRLF" на каждом коммите models.json/ноутбука.
+* text=auto
+
+# Явно текстовые — чтобы diff и merge работали построчно
+*.py    text diff=python
+*.md    text
+*.json  text
+*.toml  text
+*.yml   text
+*.inc   text
+
+# Ноутбук — текст (JSON). Никакого merge=union: он склеил бы обе стороны
+# конфликта и выдал невалидный JSON. Конфликты в ноутбуке разрешаются руками.
+*.ipynb text
+
+# Бинарные артефакты
+*.whl   binary
+*.pyc   binary
+*.xlsx  binary

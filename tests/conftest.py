@@ -1,10 +1,15 @@
 """Общие fixtures для тестов PVTcalc."""
 
+from pathlib import Path
+
 import pytest
 
 from calc_core.Composition.Composition import Composition
 
-MODELS_JSON_PATH = "models.json"
+# Абсолютный путь от расположения самого conftest, а не относительный от cwd:
+# иначе fixtures резолвятся только при запуске pytest из корня репозитория
+# (`pytest tests/` из другой директории молча падал бы на поиске файла).
+MODELS_JSON_PATH = str(Path(__file__).resolve().parents[1] / "models.json")
 
 
 @pytest.fixture

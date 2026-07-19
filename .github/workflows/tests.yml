@@ -5,6 +5,26 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    # Статический анализ не зависит от версии Python — одна версия, без матрицы.
+    # Отдельной job'ой, а не шагом в pytest: линт должен падать самостоятельно,
+    # а не прятаться за упавшим тестом (и наоборот).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install package with dev dependencies
+        run: pip install -e ".[dev]"
+      - name: ruff
+        # Область — gui и tests: calc_core пока даёт ~100 замечаний
+        # (в основном I001/F401), их разбор — отдельная задача, см. docs/BACKLOG.md.
+        run: ruff check gui tests
+      - name: mypy
+        # Область задана в pyproject.toml (files = ["gui"]).
+        run: mypy gui
+
   pytest:
     runs-on: ubuntu-latest
     strategy:
@@ -19,4 +39,5 @@ jobs:
       - name: Install package with dev dependencies
         run: pip install -e ".[dev]"
       - name: Run pytest
+        # xvfb нужен headless-смоку реального DearPyGui (tests/test_gui_view_smoke.py)
         run: xvfb-run -a pytest -q

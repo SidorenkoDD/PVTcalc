@@ -14,3 +14,5 @@ gui_settings.json
 models.json.bak*
 models.json.lock
 *.tmp
+# Выгруженные деки Eclipse 300 (результат Export -> E300), а не исходники
+*.inc
