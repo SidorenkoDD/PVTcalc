@@ -119,7 +119,8 @@ class ExperimentViewMixin(ContextBoundView):
                                callback=self._on_lab_add_row)
                 dpg.add_button(label="Paste from Excel",
                                user_data=node.node_id,
-                               callback=self._on_lab_paste)
+                               callback=self._on_lab_paste,
+                               enabled=False)
                 remove_id = dpg.add_button(
                     label="Remove last", user_data=node.node_id,
                     callback=self._on_lab_remove_row, enabled=bool(rows))
