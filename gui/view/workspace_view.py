@@ -45,8 +45,9 @@ class WorkspaceViewMixin(ContextBoundView):
         for model in models:
             expanded = model.model_id in self._expanded_models
             arrow = "v " if expanded else "> "
+            active_mark = "● " if model.model_id == self._state.active_model_id else "  "
             sel = dpg.add_selectable(
-                label=(f"{arrow}{model.title}{'  *' if model.dirty else ''}  "
+                label=(f"{active_mark}{arrow}{model.title}{'  *' if model.dirty else ''}  "
                        f"[{model.n_components}c, {model.eos}]"),
                 parent=_MODEL_TREE,
                 default_value=(model.model_id == self._state.active_model_id),
@@ -164,11 +165,32 @@ class WorkspaceViewMixin(ContextBoundView):
             dpg.add_menu_item(label="View composition (read-only)",
                               user_data=model_id,
                               callback=self._on_view_composition)
+            dpg.add_menu_item(label="Save model", user_data=model_id,
+                              callback=self._on_save_tree_model,
+                              enabled=bool(model and model.loaded and model.dirty))
             dpg.add_menu_item(label="Duplicate model...", user_data=model_id,
                               callback=self._on_duplicate_model_confirm)
 
+    def _on_save_tree_model(self, sender, app_data, user_data) -> None:
+        """Сохраняет именно модель, из контекстного меню которой вызвано действие."""
+        model_id = str(user_data)
+        model = self._state.models.get(model_id)
+        if model is None or not model.loaded:
+            self._set_status("No loaded model to save.")
+            return
+        try:
+            self._state.save_model(model_id)
+        except Exception as exc:  # noqa: BLE001
+            self._set_status(f"Save failed: {exc}")
+            return
+        self._set_status(f"Model '{model_id}' saved.")
+
     def _on_model_row(self, sender, app_data, user_data) -> None:
-        mid = user_data
+        mid = str(user_data)
+        model = self._state.models.get(mid)
+        if model is None:
+            self._set_status(f"Model '{mid}' is no longer available.")
+            return
         # Один клик по корню всегда переключает его состояние раскрытия. Ранее
         # для неактивной модели первый клик только активировал её, а схлопывание
         # происходило лишь вторым кликом — это выглядело как запаздывающие
@@ -181,11 +203,20 @@ class WorkspaceViewMixin(ContextBoundView):
             self._state.set_active_model(mid, notify=False)
             self._restore_workspace(mid)
             self._state.notify(StateChange(StateChangeKind.NAVIGATION))
+            self._set_status(f"Active model: '{model.title}'.")
             return
         self._render_tree()
 
     def _on_cat_toggle(self, sender, app_data, user_data) -> None:
-        cat_key = user_data
+        cat_key = str(user_data)
+        model_id, separator, _category = cat_key.partition(":")
+        if separator and model_id in self._state.models:
+            if model_id != self._state.active_model_id:
+                self._state.set_active_model(model_id, notify=False)
+                self._restore_workspace(model_id)
+                self._state.notify(StateChange(StateChangeKind.NAVIGATION))
+                model = self._state.models[model_id]
+                self._set_status(f"Active model: '{model.title}'.")
         if cat_key in self._expanded_cats:
             self._expanded_cats.discard(cat_key)
         else:

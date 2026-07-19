@@ -95,6 +95,8 @@ def test_dpg_context_builds_and_renders_projects():
             if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
         ]
         assert any(state.models[model_id].title in label for label in root_labels)
+        assert any(label.startswith("● ") and state.models[model_id].title in label
+                   for label in root_labels)
         state.open_node("composition")
         assert "composition" in app._tab_ids
         app._on_duplicate_model_confirm(None, None, model_id)
@@ -168,6 +170,55 @@ def test_workspace_tree_keeps_multiple_models_expanded(tmp_path):
         app._on_model_row(None, None, copy_id)
         assert copy_id not in app._expanded_models
         assert "KRSNL_PVTSIM" in app._expanded_models
+    finally:
+        dpg.destroy_context()
+
+
+def test_tree_category_click_activates_its_model(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        app._on_model_row(None, None, copy_id)  # загрузить и раскрыть копию
+
+        # Оставляем обе модели раскрытыми, но активируем исходную перед кликом
+        # по категории копии — это повторяет реальное IDE-переключение.
+        app._state.set_active_model("KRSNL_PVTSIM", notify=False)
+        app._restore_workspace("KRSNL_PVTSIM")
+        app._render_tree()
+        app._on_cat_toggle(None, None, f"{copy_id}:flash")
+
+        assert state.active_model_id == copy_id
+        assert f"{copy_id}:flash" in app._expanded_cats
+        assert dpg.get_value(_STATUS_BAR).startswith("Active model:")
+    finally:
+        dpg.destroy_context()
+
+
+def test_model_tree_context_save_targets_requested_model(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        model = state.models["KRSNL_PVTSIM"]
+        model.dirty = True
+        app._render_tree()
+
+        app._on_save_tree_model(None, None, model.model_id)
+
+        assert model.dirty is False
+        assert dpg.get_value(_STATUS_BAR) == "Model 'KRSNL_PVTSIM' saved."
     finally:
         dpg.destroy_context()
 

@@ -263,13 +263,26 @@ class ProjectsViewMixin(ContextBoundView):
         project_id = str(user_data)
         project = self._state.projects.get(project_id)
         title = project.title if project else project_id
+        model_ids = set(project.model_ids) if project else {
+            mid for mid, model in self._state.models.items()
+            if model.project_id == project_id
+        }
+        dirty_count = sum(
+            1 for mid in model_ids
+            if (model := self._state.models.get(mid)) is not None and model.dirty
+        )
         w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
         with dpg.window(label="Delete project", modal=True, no_resize=True,
-                        width=500, height=160,
-                        pos=(max(0, w // 2 - 250), max(0, h // 2 - 80))) as win:
+                        width=500, height=(205 if dirty_count else 175),
+                        pos=(max(0, w // 2 - 250),
+                             max(0, h // 2 - (103 if dirty_count else 88)))) as win:
             self._track_modal(win)
             dpg.add_text(f"Delete project '{title}' and all its models?")
             dpg.add_text("All model records and saved calculation results will be removed.")
+            if dirty_count:
+                warning = dpg.add_text(
+                    f"Warning: {dirty_count} model(s) have unsaved changes.")
+                dpg.bind_item_theme(warning, self._theme_stale())
             dpg.add_text("This cannot be undone.")
             dpg.add_spacer(height=8)
             with dpg.group(horizontal=True):
