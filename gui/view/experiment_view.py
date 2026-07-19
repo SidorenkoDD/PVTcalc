@@ -570,15 +570,10 @@ class ExperimentViewMixin(ContextBoundView):
     def _on_exp_add_chart(self, sender, app_data, user_data) -> None:
         nid = user_data
         col = app_data
-        node = self._state.node_by_id(nid)
-        if not col or node is None or not isinstance(node.result, dict):
+        if not col:
             return
-        extra = node.params.get("extra_charts")
-        if not isinstance(extra, list):
-            extra = []
-            node.params["extra_charts"] = extra
-        if col not in extra and col not in node.result.get("charts", []):
-            extra.append(col)
+        if not self._state.add_experiment_chart(nid, col):
+            return
         self._rebuild_exp_chart_grid(nid)
         self._schedule_session_autosave()
         self._set_status(f"Added chart: {col}")

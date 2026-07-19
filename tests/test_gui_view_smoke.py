@@ -267,6 +267,13 @@ def test_experiment_lab_data_and_chart_grid_render():
         assert len([item for item in dpg.get_item_children(
             app._exp_chart_holder[nid], 1)
             if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]) == 2
+        chart_groups = [item for item in dpg.get_item_children(
+            app._exp_chart_holder[nid], 1)
+            if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]
+        app._rebuild_exp_chart_grid(nid)
+        assert len([item for item in dpg.get_item_children(
+            app._exp_chart_holder[nid], 1)
+            if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]) == len(chart_groups)
     finally:
         dpg.destroy_context()
 

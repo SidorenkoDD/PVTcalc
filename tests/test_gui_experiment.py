@@ -155,6 +155,20 @@ def test_lab_data_edits_support_undo_and_redo(state):
     ]
 
 
+def test_extra_experiment_chart_is_stateful_and_undoable(state):
+    nid = state.new_experiment("dle", {"pressures": [400, 200]})
+    node = state.node_by_id(nid)
+    node.result = {"charts": ["Bo"], "plot_all": ["Bo", "Rs"]}
+
+    assert state.add_experiment_chart(nid, "Bo") is False
+    assert state.add_experiment_chart(nid, "Rs") is True
+    assert state.node_by_id(nid).params["extra_charts"] == ["Rs"]
+    state.undo()
+    assert "extra_charts" not in state.node_by_id(nid).params
+    state.redo()
+    assert state.node_by_id(nid).params["extra_charts"] == ["Rs"]
+
+
 def test_composition_change_invalidates_experiment(state):
     nid = state.new_experiment("dle", {"pressures": [400, 200], "T_c": 90.0})
     state.set_node_result(nid, {"columns": ["pressure"], "rows": [[1.0]],

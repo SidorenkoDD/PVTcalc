@@ -948,6 +948,26 @@ class AppState:
         rows[row][column] = value
         self._mark_dirty()
 
+    def add_experiment_chart(self, node_id: str, column: str) -> bool:
+        """Adds a persisted extra result chart with undo support."""
+        node = self._lab_node(node_id)
+        if node is None or not isinstance(node.result, dict):
+            return False
+        if column not in node.result.get("plot_all", []):
+            return False
+        if column in node.result.get("charts", []):
+            return False
+        extra = node.params.get("extra_charts")
+        if isinstance(extra, list) and column in extra:
+            return False
+        self._push_undo()
+        if not isinstance(extra, list):
+            extra = []
+            node.params["extra_charts"] = extra
+        extra.append(column)
+        self._mark_dirty()
+        return True
+
     # --- обобщённые переходы статуса узла-расчёта (флэш/эксперимент) -----
 
     def set_node_running(self, node_id: str | NodeRef) -> None:
