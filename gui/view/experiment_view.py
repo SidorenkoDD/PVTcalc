@@ -374,6 +374,8 @@ class ExperimentViewMixin(ContextBoundView):
         self._schedule_session_autosave()
 
     def _on_lab_cell(self, sender, app_data, user_data) -> None:
+        if not dpg.does_item_exist(sender):
+            return
         node_id, row, column = user_data
         self._lab_active_cell = (node_id, row, column)
         raw = str(app_data).strip()
@@ -391,7 +393,10 @@ class ExperimentViewMixin(ContextBoundView):
             value = None
         else:
             try:
-                value = float(raw)
+                # Respect the decimal-comma locale used by Excel/Russian
+                # spreadsheets for ordinary one-cell manual edits.
+                scalar = raw.replace(",", ".") if raw.count(",") == 1 else raw
+                value = float(scalar)
                 if not math.isfinite(value):
                     raise ValueError("value must be finite")
             except ValueError as exc:

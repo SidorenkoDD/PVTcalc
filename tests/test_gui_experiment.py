@@ -129,6 +129,32 @@ def test_paste_lab_data_rows_starts_at_cell_and_extends_table(state):
     ]
 
 
+def test_lab_data_edits_support_undo_and_redo(state):
+    nid = state.new_experiment("dle", {"pressures": [400, 200]})
+    columns = exp_svc.EXPERIMENT_TYPES["dle"]["lab_columns"]
+
+    state.add_lab_data_row(nid, columns)
+    state.set_lab_data_value(nid, 0, 0, 350.0)
+    assert state.node_by_id(nid).params["lab_data"]["rows"][0][0] == 350.0
+
+    state.undo()
+    assert state.node_by_id(nid).params["lab_data"]["rows"][0][0] is None
+    state.redo()
+    assert state.node_by_id(nid).params["lab_data"]["rows"][0][0] == 350.0
+
+    state.paste_lab_data_rows(nid, columns, 0,
+                              [[400.0, 1.4], [300.0, 1.2]])
+    state.undo()
+    assert state.node_by_id(nid).params["lab_data"]["rows"] == [
+        [350.0, None, None, None, None],
+    ]
+    state.redo()
+    assert state.node_by_id(nid).params["lab_data"]["rows"][:2] == [
+        [400.0, 1.4, None, None, None],
+        [300.0, 1.2, None, None, None],
+    ]
+
+
 def test_composition_change_invalidates_experiment(state):
     nid = state.new_experiment("dle", {"pressures": [400, 200], "T_c": 90.0})
     state.set_node_result(nid, {"columns": ["pressure"], "rows": [[1.0]],
@@ -148,7 +174,10 @@ def test_undo_covers_new_experiment(state):
 def test_session_experiments_roundtrip(tmp_path):
     path = str(tmp_path / "s.json")
     exp = {"kind": "dle",
-           "params": {"kind": "dle", "pressures": [400, 200], "T_c": 90.0},
+           "params": {"kind": "dle", "pressures": [400, 200], "T_c": 90.0,
+                      "lab_data": {"schema_version": 1,
+                                   "columns": ["pressure", "Bo"],
+                                   "rows": [[400.0, 1.4]]}},
            "result": {"columns": ["pressure", "Bo"], "rows": [[400, 1.4]],
                       "x": "pressure", "plot_y": ["Bo"]}}
     s = SessionState(active_model_id="KRSNL_PVTSIM",
@@ -158,3 +187,4 @@ def test_session_experiments_roundtrip(tmp_path):
     ws = loaded.workspaces["KRSNL_PVTSIM"]
     assert ws["experiments"][0]["kind"] == "dle"
     assert ws["experiments"][0]["result"]["plot_y"] == ["Bo"]
+    assert ws["experiments"][0]["params"]["lab_data"]["rows"] == [[400.0, 1.4]]

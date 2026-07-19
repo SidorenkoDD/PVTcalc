@@ -22,7 +22,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, cast
+from typing import Optional
 
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.ModelStore import ModelStoreError
@@ -817,18 +817,37 @@ class AppState:
         node = self.node_by_id(node_id)
         return node if node is not None and node.kind is NodeKind.EXPERIMENT else None
 
-    def add_lab_data_row(self, node_id: str, columns: list[str]) -> None:
-        """Добавляет пустую строку фактических данных без пересборки View."""
-        node = self._lab_node(node_id)
-        if node is None or not columns:
-            return
+    @staticmethod
+    def _ensure_lab_rows(
+        node: GraphNode,
+        columns: list[str],
+    ) -> list[list[float | None]]:
+        """Returns a rectangular, schema-compatible measured-data table."""
         data = node.params.get("lab_data")
         if not isinstance(data, dict) or data.get("columns") != columns:
             data = {"schema_version": 1, "columns": list(columns), "rows": []}
             node.params["lab_data"] = data
-        rows = data.setdefault("rows", [])
-        if isinstance(rows, list):
-            rows.append([None] * len(columns))
+        raw_rows = data.get("rows")
+        rows: list[list[float | None]] = []
+        if isinstance(raw_rows, list):
+            for raw_row in raw_rows:
+                if isinstance(raw_row, list):
+                    rows.append((raw_row[:len(columns)] + [None] * len(columns))
+                                [:len(columns)])
+                else:
+                    rows.append([None] * len(columns))
+        data["rows"] = rows
+        return rows
+
+    def add_lab_data_row(self, node_id: str, columns: list[str]) -> None:
+        """Добавляет пустую строку фактических данных с поддержкой undo."""
+        node = self._lab_node(node_id)
+        if node is None or not columns:
+            return
+        self._push_undo()
+        rows = self._ensure_lab_rows(node, columns)
+        rows.append([None] * len(columns))
+        self._mark_dirty()
 
     def append_lab_data_rows(self, node_id: str, columns: list[str],
                              new_rows: list[list[float | None]]) -> None:
@@ -836,16 +855,13 @@ class AppState:
         node = self._lab_node(node_id)
         if node is None or not columns or not new_rows:
             return
-        data = node.params.get("lab_data")
-        if not isinstance(data, dict) or data.get("columns") != columns:
-            data = {"schema_version": 1, "columns": list(columns), "rows": []}
-            node.params["lab_data"] = data
-        rows = data.setdefault("rows", [])
-        if isinstance(rows, list):
-            rows.extend([
-                (row[:len(columns)] + [None] * len(columns))[:len(columns)]
-                for row in new_rows
-            ])
+        self._push_undo()
+        rows = self._ensure_lab_rows(node, columns)
+        rows.extend([
+            (row[:len(columns)] + [None] * len(columns))[:len(columns)]
+            for row in new_rows
+        ])
+        self._mark_dirty()
 
     def paste_lab_data_rows(
         self,
@@ -864,14 +880,8 @@ class AppState:
         node = self._lab_node(node_id)
         if node is None or not columns or not new_rows:
             return
-        data = node.params.get("lab_data")
-        if not isinstance(data, dict) or data.get("columns") != columns:
-            data = {"schema_version": 1, "columns": list(columns), "rows": []}
-            node.params["lab_data"] = data
-        rows = cast(list[list[float | None]], data.setdefault("rows", []))
-        if not isinstance(rows, list):
-            rows = []
-            data["rows"] = rows
+        self._push_undo()
+        rows = self._ensure_lab_rows(node, columns)
         start_row = max(0, int(start_row))
         while len(rows) < start_row + len(new_rows):
             rows.append([None] * len(columns))
@@ -885,6 +895,7 @@ class AppState:
             for column_index, value in enumerate(normalized):
                 if value is not None:
                     target_row[column_index] = value
+        self._mark_dirty()
 
     def remove_lab_data_row(self, node_id: str) -> None:
         """Удаляет последнюю строку фактических данных."""
@@ -892,9 +903,15 @@ class AppState:
         if node is None:
             return
         data = node.params.get("lab_data")
-        rows = data.get("rows") if isinstance(data, dict) else None
-        if isinstance(rows, list) and rows:
+        columns = data.get("columns") if isinstance(data, dict) else None
+        if (not isinstance(columns, list)
+                or not all(isinstance(column, str) for column in columns)):
+            return
+        rows = self._ensure_lab_rows(node, columns)
+        if rows:
+            self._push_undo()
             rows.pop()
+            self._mark_dirty()
 
     def clear_lab_data(self, node_id: str) -> None:
         """Очищает точки, сохраняя выбранную схему колонок."""
@@ -902,8 +919,12 @@ class AppState:
         if node is None:
             return
         data = node.params.get("lab_data")
-        if isinstance(data, dict):
+        if not isinstance(data, dict) or not isinstance(data.get("rows"), list):
+            return
+        if data["rows"]:
+            self._push_undo()
             data["rows"] = []
+            self._mark_dirty()
 
     def set_lab_data_value(self, node_id: str, row: int, column: int,
                            value: float | None) -> None:
@@ -912,12 +933,20 @@ class AppState:
         if node is None:
             return
         data = node.params.get("lab_data")
-        rows = data.get("rows") if isinstance(data, dict) else None
-        if (not isinstance(rows, list) or row < 0 or row >= len(rows)
-                or not isinstance(rows[row], list)
-                or column < 0 or column >= len(rows[row])):
+        if not isinstance(data, dict):
             return
+        columns = data.get("columns")
+        if not isinstance(columns, list) or not columns:
+            return
+        rows = self._ensure_lab_rows(node, list(columns))
+        if (row < 0 or row >= len(rows) or column < 0
+                or column >= len(rows[row])):
+            return
+        if rows[row][column] == value:
+            return
+        self._push_undo()
         rows[row][column] = value
+        self._mark_dirty()
 
     # --- обобщённые переходы статуса узла-расчёта (флэш/эксперимент) -----
 
