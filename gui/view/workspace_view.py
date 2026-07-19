@@ -15,7 +15,7 @@ class WorkspaceViewMixin(ContextBoundView):
 
     _expanded_models: set[str]
     _expanded_cats: set[str]
-    _compare_selection: set[str]
+    _compare_selection: set[tuple[str, str]]
     _tabbar_id: int | None
     _tab_ids: dict[str, int]
     _tab_content_ids: dict[str, int]
@@ -86,17 +86,19 @@ class WorkspaceViewMixin(ContextBoundView):
         )
         if cat_exp:
             for run in runs:
-                mark = "[*] " if run.node_id in self._compare_selection else ""
+                mark = ("[*] " if (model.model_id, run.node_id)
+                        in self._compare_selection else "")
                 sel = dpg.add_selectable(
                     label="      " + mark + self._flash_tree_label(run),
                     parent=_MODEL_TREE, default_value=(active_nid == run.node_id),
                     user_data=(model.model_id, run.node_id),
                     callback=self._on_tree_open_node,
                 )
-                self._attach_flash_context_menu(sel, run.node_id)
+                self._attach_flash_context_menu(sel, model.model_id, run.node_id)
             dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
                                user_data=model.model_id, callback=self._on_new_flash)
-            n_sel = sum(1 for m in self._compare_selection if m in variant.nodes)
+            n_sel = sum(1 for selected_mid, node_id in self._compare_selection
+                         if selected_mid == model.model_id and node_id in variant.nodes)
             if n_sel >= 2:
                 dpg.add_selectable(label=f"      = Compare ({n_sel})",
                                    parent=_MODEL_TREE, user_data=model.model_id,
@@ -127,7 +129,7 @@ class WorkspaceViewMixin(ContextBoundView):
                             default_value=(active_nid == run.node_id),
                             user_data=(mid, run.node_id),
                             callback=self._on_tree_open_node)
-                        self._attach_exp_context_menu(sel, run.node_id)
+                        self._attach_exp_context_menu(sel, mid, run.node_id)
                     dpg.add_selectable(label=f"        + New {lbl}",
                                        parent=_MODEL_TREE, user_data=(mid, kind),
                                        callback=self._on_new_experiment)
@@ -147,7 +149,7 @@ class WorkspaceViewMixin(ContextBoundView):
                     default_value=(active_nid == run.node_id),
                     user_data=(mid, run.node_id),
                     callback=self._on_tree_open_node)
-                self._attach_env_context_menu(sel, run.node_id)
+                self._attach_env_context_menu(sel, mid, run.node_id)
             dpg.add_selectable(label="      + New envelope", parent=_MODEL_TREE,
                                user_data=mid, callback=self._on_new_envelope)
 
@@ -197,20 +199,26 @@ class WorkspaceViewMixin(ContextBoundView):
         node = self._state.node_by_id(nid)
         # Ctrl+клик по флэшу — переключить участие в сравнении
         if self._ctrl_down() and node is not None and node.kind is NodeKind.FLASH:
-            self._toggle_compare(nid)
+            self._toggle_compare(mid, nid)
             return
         self._state.open_node(nid)
 
-    def _toggle_compare(self, node_id: str) -> None:
-        if node_id in self._compare_selection:
-            self._compare_selection.discard(node_id)
+    def _toggle_compare(self, model_id: str, node_id: str) -> None:
+        ref = (model_id, node_id)
+        if ref in self._compare_selection:
+            self._compare_selection.discard(ref)
         else:
-            self._compare_selection.add(node_id)
+            self._compare_selection.add(ref)
         self._render_tree()
         self._set_status(f"Compare selection: {len(self._compare_selection)} run(s).")
 
     def _on_toggle_compare(self, sender, app_data, user_data) -> None:
-        self._toggle_compare(user_data)
+        if isinstance(user_data, tuple) and len(user_data) == 2:
+            model_id, node_id = user_data
+        else:  # обратная совместимость старых callback-данных
+            model_id, node_id = self._state.active_model_id, user_data
+        if model_id is not None:
+            self._toggle_compare(str(model_id), str(node_id))
 
     def _on_open_compare(self, sender, app_data, user_data) -> None:
         mid = user_data
@@ -219,8 +227,8 @@ class WorkspaceViewMixin(ContextBoundView):
         variant = self._state.active_variant
         if variant is None:
             return
-        members = [m for m in self._compare_selection
-                   if m in variant.nodes]
+        members = [node_id for model_id, node_id in self._compare_selection
+                    if model_id == mid and node_id in variant.nodes]
         self._state.open_compare(members)
 
     def _on_new_flash(self, sender, app_data, user_data) -> None:
@@ -230,31 +238,53 @@ class WorkspaceViewMixin(ContextBoundView):
         self._state.new_flash_run()
         self._set_status("New flash tab opened - set P/T and Run.")
 
-    def _attach_flash_context_menu(self, item_id, node_id: str) -> None:
+    def _attach_flash_context_menu(self, item_id, model_id: str,
+                                   node_id: str) -> None:
         """Правый клик по листу флэша: переименовать / дублировать / удалить."""
         with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
             dpg.add_text("Flash run")
             dpg.add_separator()
             dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
-                               user_data=node_id, callback=self._on_flash_rename)
+                               user_data=(model_id, node_id),
+                               callback=self._on_flash_rename)
             dpg.add_button(label="Add / remove from compare", width=200,
-                           user_data=node_id, callback=self._on_toggle_compare)
-            dpg.add_button(label="Duplicate", width=200, user_data=node_id,
+                           user_data=(model_id, node_id),
+                           callback=self._on_toggle_compare)
+            dpg.add_button(label="Duplicate", width=200,
+                           user_data=(model_id, node_id),
                            callback=self._on_flash_duplicate)
-            dpg.add_button(label="Delete", width=200, user_data=node_id,
+            dpg.add_button(label="Delete", width=200,
+                           user_data=(model_id, node_id),
                            callback=self._on_flash_delete)
 
+    def _node_target(self, user_data) -> tuple[str | None, str]:
+        """Разбирает callback-адрес узла с обратной совместимостью."""
+        if isinstance(user_data, tuple) and len(user_data) == 2:
+            return str(user_data[0]), str(user_data[1])
+        return self._state.active_model_id, str(user_data)
+
+    def _activate_node_model(self, model_id: str | None) -> None:
+        if model_id and model_id != self._state.active_model_id:
+            self._state.set_active_model(model_id, notify=False)
+            self._restore_workspace(model_id)
+
     def _on_flash_rename(self, sender, app_data, user_data) -> None:
-        self._state.rename_node(user_data, app_data)
+        model_id, node_id = self._node_target(user_data)
+        self._activate_node_model(model_id)
+        self._state.rename_node(node_id, app_data)
         self._set_status(f"Flash renamed to '{app_data}'." if app_data.strip()
                          else "Flash label cleared.")
 
     def _on_flash_duplicate(self, sender, app_data, user_data) -> None:
-        self._state.duplicate_flash(user_data)
+        model_id, node_id = self._node_target(user_data)
+        self._activate_node_model(model_id)
+        self._state.duplicate_flash(node_id)
         self._set_status("Flash run duplicated.")
 
     def _on_flash_delete(self, sender, app_data, user_data) -> None:
-        self._state.delete_node(user_data)
+        model_id, node_id = self._node_target(user_data)
+        self._activate_node_model(model_id)
+        self._state.delete_node(node_id)
         self._set_status("Flash run deleted.")
 
     # --- эксперименты: дерево ---------------------------------------------
@@ -305,19 +335,25 @@ class WorkspaceViewMixin(ContextBoundView):
         self._expanded_cats.add(f"{mid}:exp:{kind}")
         self._set_status(f"New {kind.upper()} tab - set stages and Run.")
 
-    def _attach_exp_context_menu(self, item_id, node_id: str) -> None:
+    def _attach_exp_context_menu(self, item_id, model_id: str,
+                                 node_id: str) -> None:
         with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
             dpg.add_text("Experiment")
             dpg.add_separator()
             dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
-                               user_data=node_id, callback=self._on_flash_rename)
-            dpg.add_button(label="Duplicate", width=200, user_data=node_id,
+                               user_data=(model_id, node_id),
+                               callback=self._on_flash_rename)
+            dpg.add_button(label="Duplicate", width=200,
+                           user_data=(model_id, node_id),
                            callback=self._on_exp_duplicate)
-            dpg.add_button(label="Delete", width=200, user_data=node_id,
+            dpg.add_button(label="Delete", width=200,
+                           user_data=(model_id, node_id),
                            callback=self._on_flash_delete)
 
     def _on_exp_duplicate(self, sender, app_data, user_data) -> None:
-        node = self._state.node_by_id(user_data)
+        model_id, node_id = self._node_target(user_data)
+        self._activate_node_model(model_id)
+        node = self._state.node_by_id(node_id)
         if node is not None:
             defaults = {k: v for k, v in node.params.items()
                         if k not in ("kind", "label")}
@@ -348,19 +384,25 @@ class WorkspaceViewMixin(ContextBoundView):
         # параметры собираем во всплывающем окне; узел заводится по «Run»
         self._open_envelope_dialog(None)
 
-    def _attach_env_context_menu(self, item_id, node_id: str) -> None:
+    def _attach_env_context_menu(self, item_id, model_id: str,
+                                 node_id: str) -> None:
         with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
             dpg.add_text("Phase envelope")
             dpg.add_separator()
             dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
-                               user_data=node_id, callback=self._on_flash_rename)
-            dpg.add_button(label="Duplicate", width=200, user_data=node_id,
+                               user_data=(model_id, node_id),
+                               callback=self._on_flash_rename)
+            dpg.add_button(label="Duplicate", width=200,
+                           user_data=(model_id, node_id),
                            callback=self._on_env_duplicate)
-            dpg.add_button(label="Delete", width=200, user_data=node_id,
+            dpg.add_button(label="Delete", width=200,
+                           user_data=(model_id, node_id),
                            callback=self._on_flash_delete)
 
     def _on_env_duplicate(self, sender, app_data, user_data) -> None:
-        node = self._state.node_by_id(user_data)
+        model_id, node_id = self._node_target(user_data)
+        self._activate_node_model(model_id)
+        node = self._state.node_by_id(node_id)
         if node is not None:
             defaults = {k: v for k, v in node.params.items() if k != "label"}
             self._state.new_envelope(defaults)

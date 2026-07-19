@@ -166,6 +166,40 @@ def test_workspace_tree_keeps_multiple_models_expanded(tmp_path):
         dpg.destroy_context()
 
 
+def test_compare_selection_is_scoped_to_model(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        app._expanded_cats.update({"KRSNL_PVTSIM:flash", f"{copy_id}:flash"})
+
+        source_flash = state.new_flash_run(100.0, 50.0)
+        assert source_flash == "flash_1"
+        app._on_model_row(None, None, copy_id)
+        copy_flash = state.new_flash_run(100.0, 50.0)
+        assert copy_flash == "flash_1"
+
+        app._toggle_compare("KRSNL_PVTSIM", source_flash)
+        labels = [
+            dpg.get_item_label(child)
+            for children in dpg.get_item_children(_MODEL_TREE).values()
+            for child in children
+            if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
+        ]
+        starred = [label for label in labels if "[*]" in label]
+        assert len(starred) == 1
+        assert "100 bar / 50 C" in starred[0]
+        assert copy_flash == source_flash  # одинаковые локальные id — ключевой случай
+    finally:
+        dpg.destroy_context()
+
+
 def test_node_status_update_keeps_other_workspace_tabs_intact():
     state = AppState(ModelRepository(str(MODELS_JSON)))
     app = PVTcalcApp(state, SessionState())

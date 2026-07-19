@@ -71,7 +71,9 @@ class PVTcalcApp(
         self._expanded_models: set[str] = set()
         self._expanded_cats: set[str] = set()
         # выбор узлов для сравнения (Ctrl+клик в дереве)
-        self._compare_selection: set[str] = set()
+        # Полный адрес флэша: локальные node_id (например, flash_1) могут
+        # повторяться в разных моделях одного проекта.
+        self._compare_selection: set[tuple[str, str]] = set()
         # id таб-бара и вкладок рабочей области (захватываем при отрисовке,
         # чтобы не плодить фиксированные алиасы при пересоздании)
         self._tabbar_id: int | None = None
