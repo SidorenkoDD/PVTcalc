@@ -134,7 +134,8 @@ class ExperimentViewMixin(ContextBoundView):
             dpg.add_text(
                 "Excel paste: tab-separated columns; a header row is detected "
                 "automatically. Paste starts at the focused cell (or the first "
-                "cell); arrow keys move between cells.",
+                "cell); Ctrl+V and the button both support column paste; arrow "
+                "keys move between cells.",
                 parent=header,
             )
             self._render_lab_data_table(node, holder, columns, rows)
@@ -197,10 +198,12 @@ class ExperimentViewMixin(ContextBoundView):
                 (dpg.mvKey_Up, (-1, 0)),
                 (dpg.mvKey_Down, (1, 0)),
             ):
-                dpg.add_key_press_handler(
+                dpg.add_key_down_handler(
                     key=key, callback=self._on_lab_arrow_key,
                     user_data=delta,
                 )
+            dpg.add_key_press_handler(
+                key=dpg.mvKey_V, callback=self._on_lab_ctrl_v)
         self._lab_navigation_registry_id = registry
 
     def _on_lab_cell_click(self, sender, app_data, user_data) -> None:
@@ -219,10 +222,24 @@ class ExperimentViewMixin(ContextBoundView):
         if current_id is None or not dpg.does_item_exist(current_id):
             return
         try:
-            if dpg.get_focused_item() != current_id:
+            focused = dpg.get_focused_item()
+            lab_ids = set(self._lab_cell_ids.values())
+            # DearPyGui can briefly report no focused item while an InputText
+            # is handing focus to the next one.  Only reject an arrow from a
+            # definitely unrelated widget; this keeps a rapid key sequence
+            # moving through the grid instead of stopping after one cell.
+            if focused not in (0, None) and focused not in lab_ids:
                 return
         except Exception:  # pragma: no cover - defensive for headless DPG
-            return
+            focused = current_id
+        focused_active = next(
+            (key for key, value in self._lab_cell_ids.items()
+             if value == focused),
+            None,
+        )
+        if focused_active is not None:
+            active = focused_active
+            node_id, row, column = active
         row_delta, column_delta = user_data
         node = self._state.node_by_id(node_id)
         if node is None:
@@ -238,6 +255,33 @@ class ExperimentViewMixin(ContextBoundView):
         self._lab_active_cell = target
         dpg.focus_item(target_id)
         dpg.bind_item_theme(target_id, self._lab_focus_theme())
+
+    def _on_lab_ctrl_v(self, sender, app_data, user_data) -> None:
+        """Expands a native Ctrl+V directly in the focused Lab Data cell."""
+        try:
+            if not (dpg.is_key_down(dpg.mvKey_ModCtrl)
+                    or dpg.is_key_down(dpg.mvKey_LControl)
+                    or dpg.is_key_down(dpg.mvKey_RControl)):
+                return
+            focused = dpg.get_focused_item()
+            target = next(
+                (key for key, value in self._lab_cell_ids.items()
+                 if value == focused),
+                None,
+            )
+            if target is None:
+                return
+            node_id, row, column = target
+            self._lab_active_cell = target
+            # The native InputText paste may already have changed the widget
+            # value, but the clipboard remains the canonical range.  If its
+            # normal callback has rebuilt the table, ``target`` is no longer
+            # present and the method has already returned above.
+            self._paste_lab_text(
+                node_id, dpg.get_clipboard_text() or "",
+                start_row=row, start_column=column)
+        except Exception as exc:  # noqa: BLE001 — clipboard/input edge case
+            self._set_status(f"Paste failed: {exc}")
 
     def _rebuild_lab_data_table(self, node_id: str) -> None:
         node = self._state.node_by_id(node_id)
@@ -263,6 +307,48 @@ class ExperimentViewMixin(ContextBoundView):
         self._rebuild_exp_chart_grid(user_data)
         self._schedule_session_autosave()
 
+    def _paste_lab_text(
+        self,
+        node_id: str,
+        text: str,
+        *,
+        start_row: int | None = None,
+        start_column: int | None = None,
+    ) -> bool:
+        """Applies clipboard text to Lab Data and rebuilds its table."""
+        if not str(text).strip():
+            self._set_status(
+                "Clipboard is empty. Copy an Excel column or table first.")
+            return False
+        node = self._state.node_by_id(node_id)
+        if node is None:
+            return False
+        columns = self._lab_columns(node)
+        active = getattr(self, "_lab_active_cell", None)
+        if start_column is None:
+            start_column = 0
+            if active is not None and active[0] == node_id:
+                start_column = max(0, min(active[2], len(columns) - 1))
+        if start_row is None:
+            start_row = 0
+            if active is not None and active[0] == node_id:
+                row_count = len(self._lab_rows(node, columns))
+                start_row = max(0, min(active[1], row_count))
+        rows, had_header = clipboard_service.parse_lab_clipboard(
+            str(text), columns, start_column=start_column)
+        if not rows:
+            self._set_status("Clipboard has no numeric lab data.")
+            return False
+        self._state.paste_lab_data_rows(node_id, columns, start_row, rows)
+        self._lab_active_cell = (node_id, start_row, start_column)
+        self._rebuild_lab_data_table(node_id)
+        self._rebuild_exp_chart_grid(node_id)
+        self._schedule_session_autosave()
+        header_note = " with header" if had_header else ""
+        self._set_status(
+            f"Pasted {len(rows)} lab point(s){header_note} from clipboard.")
+        return True
+
     def _on_lab_paste(self, sender, app_data, user_data) -> None:
         try:
             text = dpg.get_clipboard_text() or ""
@@ -270,36 +356,7 @@ class ExperimentViewMixin(ContextBoundView):
             self._set_status(f"Could not read clipboard: {exc}")
             return
         try:
-            if not str(text).strip():
-                self._set_status(
-                    "Clipboard is empty. Copy an Excel column or table first.")
-                return
-            node = self._state.node_by_id(user_data)
-            if node is None:
-                return
-            columns = self._lab_columns(node)
-            active = getattr(self, "_lab_active_cell", None)
-            active_column = 0
-            # A paste without a selected cell starts at the first data cell;
-            # this fills an already-created empty table instead of silently
-            # appending another copy of the same number of rows.
-            start_row = 0
-            if active is not None and active[0] == user_data:
-                active_column = max(0, min(active[2], len(columns) - 1))
-                row_count = len(self._lab_rows(node, columns))
-                start_row = max(0, min(active[1], row_count))
-            rows, had_header = clipboard_service.parse_lab_clipboard(
-                str(text), columns, start_column=active_column)
-            if not rows:
-                self._set_status("Clipboard has no numeric lab data.")
-                return
-            self._state.paste_lab_data_rows(user_data, columns, start_row, rows)
-            self._rebuild_lab_data_table(user_data)
-            self._rebuild_exp_chart_grid(user_data)
-            self._schedule_session_autosave()
-            header_note = " with header" if had_header else ""
-            self._set_status(
-                f"Pasted {len(rows)} lab point(s){header_note} from clipboard.")
+            self._paste_lab_text(user_data, str(text))
         except Exception as exc:  # noqa: BLE001 — callback must not crash the app
             self._set_status(f"Paste failed: {exc}")
 
@@ -319,6 +376,16 @@ class ExperimentViewMixin(ContextBoundView):
         node_id, row, column = user_data
         self._lab_active_cell = (node_id, row, column)
         raw = str(app_data).strip()
+        multi_value_comma = raw.count(",") >= 2
+        if (any(separator in raw for separator in ("\n", "\r", "\t", ";"))
+                or ("," in raw and " " in raw) or multi_value_comma):
+            try:
+                if self._paste_lab_text(node_id, raw, start_row=row,
+                                        start_column=column):
+                    return
+            except Exception as exc:  # noqa: BLE001 — pasted text in one cell
+                self._set_status(f"Paste failed: {exc}")
+                return
         if not raw:
             value = None
         else:

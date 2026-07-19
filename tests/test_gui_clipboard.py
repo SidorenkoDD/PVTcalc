@@ -27,6 +27,14 @@ def test_parse_lab_clipboard_accepts_flattened_column_and_target_column():
     assert rows == [[None, 100.0], [None, 90.0], [None, 80.0]]
 
 
+def test_parse_lab_clipboard_accepts_flattened_column_without_spaces():
+    rows, had_header = parse_lab_clipboard(
+        "300,212,5.5,1.6", ["pressure", "Bo"])
+
+    assert had_header is False
+    assert rows == [[300.0, None], [212.0, None], [5.5, None], [1.6, None]]
+
+
 def test_table_to_tsv_is_excel_compatible_and_sanitizes_cells():
     assert table_to_tsv(["A", "B"], [[1, "two\tlines"], [None, 3]]) == (
         "A\tB\n1\ttwo lines\n\t3"

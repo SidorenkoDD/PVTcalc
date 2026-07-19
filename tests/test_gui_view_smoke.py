@@ -307,6 +307,40 @@ def test_lab_paste_empty_clipboard_is_safe_and_column_is_vertical(monkeypatch):
         app._on_lab_arrow_key(None, None, (1, 0))
         assert focused == [next_id]
         assert app._lab_active_cell == (nid, 2, 0)
+        second_id = app._lab_cell_ids[(nid, 3, 0)]
+        monkeypatch.setattr(dpg, "get_focused_item", lambda: next_id)
+        app._on_lab_arrow_key(None, None, (1, 0))
+        assert focused == [next_id, second_id]
+        assert app._lab_active_cell == (nid, 3, 0)
+
+        # Native Ctrl+V into an InputText first arrives as one app_data value;
+        # it must be expanded into rows instead of remaining in that cell.
+        state.clear_lab_data(nid)
+        for _ in range(4):
+            state.add_lab_data_row(nid, columns)
+        app._rebuild_lab_data_table(nid)
+        cell_id = app._lab_cell_ids[(nid, 0, 0)]
+        app._on_lab_cell(cell_id, "310,280,250,220",
+                         (nid, 0, 0))
+        rows = state.node_by_id(nid).params["lab_data"]["rows"]
+        assert [row[0] for row in rows] == [310.0, 280.0, 250.0, 220.0]
+
+        # Ctrl+V is also handled before InputText can collapse the clipboard
+        # range into one widget value.
+        state.clear_lab_data(nid)
+        for _ in range(4):
+            state.add_lab_data_row(nid, columns)
+        app._rebuild_lab_data_table(nid)
+        current_id = app._lab_cell_ids[(nid, 0, 0)]
+        monkeypatch.setattr(dpg, "get_focused_item", lambda: current_id)
+        monkeypatch.setattr(dpg, "get_value", lambda item: "")
+        monkeypatch.setattr(dpg, "is_key_down",
+                            lambda key: key == dpg.mvKey_ModCtrl)
+        monkeypatch.setattr(dpg, "get_clipboard_text",
+                            lambda: "315,285,255,225")
+        app._on_lab_ctrl_v(None, None, None)
+        rows = state.node_by_id(nid).params["lab_data"]["rows"]
+        assert [row[0] for row in rows] == [315.0, 285.0, 255.0, 225.0]
     finally:
         dpg.destroy_context()
 

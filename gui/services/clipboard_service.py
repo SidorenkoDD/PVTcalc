@@ -11,7 +11,8 @@ def _header_key(value: object) -> str:
 
 
 def _number(value: object) -> float | None:
-    text = str(value).strip().replace("\u00a0", "")
+    text = (str(value).strip().replace("\u00a0", "")
+            .lstrip("\ufeff\u200b"))
     if not text:
         return None
     # Excel locale variants: 1,23; 1.234,56; and 1,234.56.
