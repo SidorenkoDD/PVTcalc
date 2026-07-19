@@ -19,6 +19,8 @@ class ExperimentViewMixin(ContextBoundView):
     _lab_data_controls: dict[str, tuple[int, int, int]]
     _lab_focus_theme_id: int | str | None
     _lab_active_cell: tuple[str, int, int] | None
+    _lab_cell_ids: dict[tuple[str, int, int], int]
+    _lab_navigation_registry_id: int | None
 
     def _render_experiment_tab(self, parent, node) -> None:
         nid = node.node_id
@@ -129,11 +131,20 @@ class ExperimentViewMixin(ContextBoundView):
                     remove_id, clear_id, count_id)
             holder = dpg.add_group(parent=header)
             self._lab_data_holder[node.node_id] = holder
-            dpg.add_text("Excel paste: tab-separated columns; a header row is detected automatically. "
-                         "The focused cell is highlighted.", parent=header)
+            dpg.add_text(
+                "Excel paste: tab-separated columns; a header row is detected "
+                "automatically. Paste starts at the focused cell (or the first "
+                "cell); arrow keys move between cells.",
+                parent=header,
+            )
             self._render_lab_data_table(node, holder, columns, rows)
 
     def _render_lab_data_table(self, node, holder, columns, rows) -> None:
+        self._ensure_lab_navigation_handlers()
+        self._lab_cell_ids = {
+            key: cell_id for key, cell_id in self._lab_cell_ids.items()
+            if key[0] != node.node_id
+        }
         if dpg.does_item_exist(holder):
             dpg.delete_item(holder, children_only=True)
         if not rows:
@@ -157,7 +168,15 @@ class ExperimentViewMixin(ContextBoundView):
                             user_data=(node.node_id, row_index, column_index),
                             callback=self._on_lab_cell,
                         )
+                        self._lab_cell_ids[(node.node_id, row_index,
+                                            column_index)] = cell_id
                         with dpg.item_handler_registry() as registry:
+                            dpg.add_item_clicked_handler(
+                                button=dpg.mvMouseButton_Left,
+                                callback=self._on_lab_cell_click,
+                                user_data=(node.node_id, row_index,
+                                           column_index),
+                            )
                             dpg.add_item_focus_handler(
                                 callback=self._on_lab_cell_focus,
                                  user_data=(cell_id, node.node_id,
@@ -166,6 +185,59 @@ class ExperimentViewMixin(ContextBoundView):
                                             | dpg.mvEventType_Leave),
                             )
                         dpg.bind_item_handler_registry(cell_id, registry)
+
+    def _ensure_lab_navigation_handlers(self) -> None:
+        """Creates one global arrow-key registry for all Lab Data cells."""
+        if getattr(self, "_lab_navigation_registry_id", None) is not None:
+            return
+        with dpg.handler_registry() as registry:
+            for key, delta in (
+                (dpg.mvKey_Left, (0, -1)),
+                (dpg.mvKey_Right, (0, 1)),
+                (dpg.mvKey_Up, (-1, 0)),
+                (dpg.mvKey_Down, (1, 0)),
+            ):
+                dpg.add_key_press_handler(
+                    key=key, callback=self._on_lab_arrow_key,
+                    user_data=delta,
+                )
+        self._lab_navigation_registry_id = registry
+
+    def _on_lab_cell_click(self, sender, app_data, user_data) -> None:
+        node_id, row, column = user_data
+        self._lab_active_cell = (node_id, row, column)
+        if dpg.does_item_exist(sender):
+            dpg.bind_item_theme(sender, self._lab_focus_theme())
+
+    def _on_lab_arrow_key(self, sender, app_data, user_data) -> None:
+        """Moves focus between measured-data cells with the arrow keys."""
+        active = getattr(self, "_lab_active_cell", None)
+        if active is None:
+            return
+        node_id, row, column = active
+        current_id = self._lab_cell_ids.get(active)
+        if current_id is None or not dpg.does_item_exist(current_id):
+            return
+        try:
+            if dpg.get_focused_item() != current_id:
+                return
+        except Exception:  # pragma: no cover - defensive for headless DPG
+            return
+        row_delta, column_delta = user_data
+        node = self._state.node_by_id(node_id)
+        if node is None:
+            return
+        rows = self._lab_rows(node, self._lab_columns(node))
+        target = (node_id, row + row_delta, column + column_delta)
+        if (target[1] < 0 or target[1] >= len(rows)
+                or target[2] < 0 or target[2] >= len(self._lab_columns(node))):
+            return
+        target_id = self._lab_cell_ids.get(target)
+        if target_id is None or not dpg.does_item_exist(target_id):
+            return
+        self._lab_active_cell = target
+        dpg.focus_item(target_id)
+        dpg.bind_item_theme(target_id, self._lab_focus_theme())
 
     def _rebuild_lab_data_table(self, node_id: str) -> None:
         node = self._state.node_by_id(node_id)
@@ -208,10 +280,14 @@ class ExperimentViewMixin(ContextBoundView):
             columns = self._lab_columns(node)
             active = getattr(self, "_lab_active_cell", None)
             active_column = 0
-            start_row = len(self._lab_rows(node, columns))
+            # A paste without a selected cell starts at the first data cell;
+            # this fills an already-created empty table instead of silently
+            # appending another copy of the same number of rows.
+            start_row = 0
             if active is not None and active[0] == user_data:
                 active_column = max(0, min(active[2], len(columns) - 1))
-                start_row = max(0, min(active[1], start_row))
+                row_count = len(self._lab_rows(node, columns))
+                start_row = max(0, min(active[1], row_count))
             rows, had_header = clipboard_service.parse_lab_clipboard(
                 str(text), columns, start_column=active_column)
             if not rows:

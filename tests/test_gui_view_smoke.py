@@ -281,6 +281,9 @@ def test_lab_paste_empty_clipboard_is_safe_and_column_is_vertical(monkeypatch):
         state.enter_model(next(iter(state.models)))
         state.open_node("composition")
         nid = state.new_experiment("dle", {"pressures": [400.0, 200.0]})
+        columns = ["pressure", "Bo", "Rs", "liquid_density", "vapor_density"]
+        for _ in range(4):
+            state.add_lab_data_row(nid, columns)
         app._render_node_content(nid)
 
         monkeypatch.setattr(dpg, "get_clipboard_text", lambda: "")
@@ -288,11 +291,22 @@ def test_lab_paste_empty_clipboard_is_safe_and_column_is_vertical(monkeypatch):
         assert dpg.get_value(_STATUS_BAR).startswith("Clipboard is empty")
 
         monkeypatch.setattr(dpg, "get_clipboard_text",
-                            lambda: "350\n300\n250")
-        app._lab_active_cell = (nid, 0, 0)
+                            lambda: "350\n300\n250\n200")
         app._on_lab_paste(None, None, nid)
         rows = state.node_by_id(nid).params["lab_data"]["rows"]
-        assert [row[0] for row in rows] == [350.0, 300.0, 250.0]
+        assert [row[0] for row in rows] == [350.0, 300.0, 250.0, 200.0]
+        assert len(app._lab_cell_ids) == 20
+        assert app._lab_navigation_registry_id is not None
+
+        current_id = app._lab_cell_ids[(nid, 1, 0)]
+        next_id = app._lab_cell_ids[(nid, 2, 0)]
+        monkeypatch.setattr(dpg, "get_focused_item", lambda: current_id)
+        focused: list[int] = []
+        monkeypatch.setattr(dpg, "focus_item", focused.append)
+        app._lab_active_cell = (nid, 1, 0)
+        app._on_lab_arrow_key(None, None, (1, 0))
+        assert focused == [next_id]
+        assert app._lab_active_cell == (nid, 2, 0)
     finally:
         dpg.destroy_context()
 
