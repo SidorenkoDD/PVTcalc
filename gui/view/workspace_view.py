@@ -45,7 +45,9 @@ class WorkspaceViewMixin(ContextBoundView):
         for model in models:
             expanded = model.model_id in self._expanded_models
             arrow = "v " if expanded else "> "
-            active_mark = "● " if model.model_id == self._state.active_model_id else "  "
+            # ASCII-маркер не зависит от шрифта DPG: Unicode `●` в некоторых
+            # окружениях отображался как знак вопроса.
+            active_mark = "[A] " if model.model_id == self._state.active_model_id else "    "
             sel = dpg.add_selectable(
                 label=(f"{active_mark}{arrow}{model.title}{'  *' if model.dirty else ''}  "
                        f"[{model.n_components}c, {model.eos}]"),

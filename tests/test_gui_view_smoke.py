@@ -107,7 +107,7 @@ def test_dpg_context_builds_and_renders_projects():
             if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
         ]
         assert any(state.models[model_id].title in label for label in root_labels)
-        assert any(label.startswith("● ") and state.models[model_id].title in label
+        assert any(label.startswith("[A] ") and state.models[model_id].title in label
                    for label in root_labels)
         state.open_node("composition")
         assert "composition" in app._tab_ids
