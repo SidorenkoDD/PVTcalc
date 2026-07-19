@@ -37,14 +37,26 @@ def _text_values(root: int | str) -> list[str]:
 
 
 def _has_label(root: int | str, label: str) -> bool:
+    return _item_by_label(root, label) is not None
+
+
+def _item_by_label(root: int | str, label: str) -> int | None:
+    """Первый виджет под ``root`` с подписью ``label`` (или None).
+
+    В отличие от `_has_label` возвращает сам id — чтобы проверять не только
+    наличие виджета, но и его конфигурацию (например, enabled у кнопки).
+    """
     pending: list[int | str] = [root]
     while pending:
         item = pending.pop()
+        if not dpg.does_item_exist(item):
+            continue
         for children in dpg.get_item_children(item).values():
             pending.extend(children)
-            if any(dpg.get_item_label(child) == label for child in children):
-                return True
-    return False
+            for child in children:
+                if dpg.does_item_exist(child) and dpg.get_item_label(child) == label:
+                    return child
+    return None
 
 
 def test_projects_renders_corrupt_store_diagnostic(tmp_path):
@@ -335,7 +347,11 @@ def test_experiment_lab_data_and_chart_grid_render():
         app._render_node_content(nid)
 
         assert _has_label(_WORKSPACE, "Lab Data (measured)")
-        assert _has_label(_WORKSPACE, "Paste from Excel")
+        # Именно enabled, а не просто наличие: кнопка какое-то время стояла
+        # enabled=False, и проверка по подписи этого не замечала.
+        paste_btn = _item_by_label(_WORKSPACE, "Paste from Excel")
+        assert paste_btn is not None
+        assert dpg.get_item_configuration(paste_btn)["enabled"] is True
         assert _has_label(_WORKSPACE, "Copy table")
         assert _has_label(_WORKSPACE, "Bo vs pressure")
         assert _has_label(_WORKSPACE, "vapor_density vs pressure")
