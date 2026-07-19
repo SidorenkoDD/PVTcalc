@@ -100,7 +100,7 @@ class ExperimentsFacade:
         )
         return df
 
-    def cce(self, pressure_arr_bar: list, reservoir_temperature: float) -> pd.DataFrame:
+    def cce(self, pressure_arr_bar: list, reservoir_temperature_k: float) -> pd.DataFrame:
         """
         Дифференциация при постоянном составе (см. `calc_core/Experiments/CCE.py`).
 
@@ -108,8 +108,11 @@ class ExperimentsFacade:
         ----------
         pressure_arr_bar : list
             Ступени давления, бар.
-        reservoir_temperature : float
-            Температура эксперимента, K (не °C — так требует сам `CCE.__init__`).
+        reservoir_temperature_k : float
+            Температура эксперимента, **K** — в отличие от `dle`/`separator`
+            того же фасада, которые принимают °C. Так требует сам
+            `CCE.__init__`; суффикс в имени параметра — чтобы это расхождение
+            было видно на месте вызова, а не только в докстринге.
 
         Returns
         -------
@@ -122,15 +125,15 @@ class ExperimentsFacade:
             Если давления <= 0 или температура <= 0 K.
         """
         validate_positive_pressure(pressure_arr_bar, name='pressure_arr_bar')
-        validate_temperature_kelvin(reservoir_temperature, name='reservoir_temperature')
-        calc = CCE(self._composition_copy(), list(pressure_arr_bar), reservoir_temperature)
+        validate_temperature_kelvin(reservoir_temperature_k, name='reservoir_temperature_k')
+        calc = CCE(self._composition_copy(), list(pressure_arr_bar), reservoir_temperature_k)
         df = calc.calculate()
 
         self._model.result_store_object.add(
             module='Experiments.cce',
             params={
                 'pressure_arr_bar': list(pressure_arr_bar),
-                'reservoir_temperature': reservoir_temperature,
+                'reservoir_temperature_k': reservoir_temperature_k,
             },
             data=df,
         )

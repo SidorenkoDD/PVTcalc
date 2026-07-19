@@ -28,10 +28,20 @@ class CriticalPointCalculator:
         """
         Вычисляет |P_dew(T) - P_bubble(T)|.
         Возвращает 1e6, если расчет некорректен.
+
+        Note
+        ----
+        Сентинел `1e6` возвращается по пяти разным причинам (несходимость
+        bubble, несходимость dew, неположительное давление у любой из веток,
+        нарушение `P_dew >= 0.9*P_bubble`, исключение внутри) — снаружи они
+        неразличимы, и минимизатор в `calculate()` видит просто «плато».
+        Поэтому каждая ветка логируется на DEBUG: без этого диагностика
+        расходимости критической точки (`gap` ≈ 772 бар на многокомпонентных
+        составах, см. `docs/BACKLOG.md`) ведётся вслепую.
         """
         try:
             self.composition.T = T
-            
+
             # Bubble point
             b_calc = BubblePointCalculator(
                 composition=self.composition,
@@ -41,9 +51,12 @@ class CriticalPointCalculator:
             )
             P_b = b_calc.calculate()
             if not b_calc.converged or P_b is None or P_b <= 0:
+                logger.debug(
+                    "_calc_gap(T=%.4f K): sentinel — bubble не пригоден "
+                    "(converged=%s, P_b=%s)", T, b_calc.converged, P_b)
                 return 1e6
-            
-            # Dew point (без dew_point_type, так как его нет в текущей версии)
+
+            # Dew point (без dew_point_type — берётся дефолтный 'upper')
             d_calc = DewPointCalculator(
                 composition=self.composition,
                 T=T,
@@ -51,17 +64,29 @@ class CriticalPointCalculator:
                 tol=1e-8
             )
             P_d = d_calc.calculate()
-            
+
             if P_d is None or P_d <= 0:
+                logger.debug(
+                    "_calc_gap(T=%.4f K): sentinel — dew не пригоден "
+                    "(converged=%s, P_d=%s, P_b=%.4f)",
+                    T, d_calc.converged, P_d, P_b)
                 return 1e6
-            
+
             # Проверка: P_dew должен быть >= P_bubble
             if P_d < P_b * 0.9:
+                logger.debug(
+                    "_calc_gap(T=%.4f K): sentinel — нарушено P_dew >= 0.9*P_bubble "
+                    "(P_b=%.4f, P_d=%.4f)", T, P_b, P_d)
                 return 1e6
-            
-            return abs(P_d - P_b)
-            
+
+            gap = abs(P_d - P_b)
+            logger.debug("_calc_gap(T=%.4f K): P_b=%.4f, P_d=%.4f, gap=%.6f",
+                         T, P_b, P_d, gap)
+            return gap
+
         except Exception:
+            logger.debug("_calc_gap(T=%.4f K): sentinel — исключение внутри расчёта",
+                         T, exc_info=True)
             return 1e6
     
     def calculate(self) -> Optional[Dict[str, Any]]:

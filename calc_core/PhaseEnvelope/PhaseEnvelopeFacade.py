@@ -74,14 +74,15 @@ class PhaseEnvelopeFacade:
             raise InputValidationError(
                 f'Диапазон температур пуст: t_max_c ({t_max_c}) должно быть больше t_min_c ({t_min_c}).')
 
-    def bubble_point(self, T: float, **kwargs) -> float:
+    def bubble_point(self, T_k: float, **kwargs) -> float:
         """
         Давление точки кипения (Ньютон по производным летучести).
 
         Parameters
         ----------
-        T : float
-            Температура, K.
+        T_k : float
+            Температура, **K** (в отличие от `ssm`/`newton`/`grid`, которые
+            принимают °C — суффикс в имени параметра именно поэтому).
         **kwargs
             Прочие параметры `BubblePointCalculator` (`P_guess`, `K_guess`,
             `max_iter`, `tol`).
@@ -94,32 +95,32 @@ class PhaseEnvelopeFacade:
         Raises
         ------
         InputValidationError
-            Если `T` <= 0 K.
+            Если `T_k` <= 0 K.
         ConvergenceError
             Если `BubblePointCalculator` не сошёлся.
         """
-        validate_temperature_kelvin(T)
-        calc = BubblePointCalculator(self._composition_copy(), T, **kwargs)
+        validate_temperature_kelvin(T_k)
+        calc = BubblePointCalculator(self._composition_copy(), T_k, **kwargs)
         p = calc.calculate()
 
         self._model.result_store_object.add(
             module='PhaseEnvelope.bubble_point',
-            params={'T': T, **kwargs},
+            params={'T_k': T_k, **kwargs},
             data={'P': p, 'converged': calc.converged},
         )
 
         if not calc.converged:
-            raise ConvergenceError(f'BubblePointCalculator не сошёлся при T={T}')
+            raise ConvergenceError(f'BubblePointCalculator не сошёлся при T={T_k} K')
         return p
 
-    def dew_point(self, T: float, **kwargs) -> float:
+    def dew_point(self, T_k: float, **kwargs) -> float:
         """
         Давление начала конденсации (Ньютон по производным летучести).
 
         Parameters
         ----------
-        T : float
-            Температура, K.
+        T_k : float
+            Температура, **K** (см. замечание про единицы в `bubble_point`).
         **kwargs
             Прочие параметры `DewPointCalculator` (`dew_point_type`,
             `P_guess`, `K_guess`, `max_iter`, `tol`).
@@ -132,22 +133,22 @@ class PhaseEnvelopeFacade:
         Raises
         ------
         InputValidationError
-            Если `T` <= 0 K.
+            Если `T_k` <= 0 K.
         ConvergenceError
             Если `DewPointCalculator` не сошёлся или вернул `None`.
         """
-        validate_temperature_kelvin(T)
-        calc = DewPointCalculator(self._composition_copy(), T, **kwargs)
+        validate_temperature_kelvin(T_k)
+        calc = DewPointCalculator(self._composition_copy(), T_k, **kwargs)
         p = calc.calculate()
 
         self._model.result_store_object.add(
             module='PhaseEnvelope.dew_point',
-            params={'T': T, **kwargs},
+            params={'T_k': T_k, **kwargs},
             data={'P': p, 'converged': calc.converged},
         )
 
         if not calc.converged or p is None:
-            raise ConvergenceError(f'DewPointCalculator не сошёлся при T={T}')
+            raise ConvergenceError(f'DewPointCalculator не сошёлся при T={T_k} K')
         return p
 
     def critical_point(self, **kwargs) -> dict:
@@ -162,13 +163,27 @@ class PhaseEnvelopeFacade:
         Returns
         -------
         dict
-            `{'T_crit', 'P_crit', 'S_v', 'S_l', 'K_v', 'K_l', 'metric',
-            'is_trivial_converged'}` — см. `CriticalPointCalculator.calculate()`.
+            `{'T', 'P', 'T_C', 'P_bubble', 'P_dew', 'gap'}`:
+            `T` — температура критической точки, K; `T_C` — она же в °C;
+            `P` — давление, бар (полусумма `P_bubble`/`P_dew`);
+            `gap` — |P_bubble - P_dew|, **метрика качества сходимости**.
+            См. `CriticalPointCalculator.calculate()`.
 
         Raises
         ------
         ConvergenceError
             Если критическая точка не найдена (`calculate()` вернул `None`).
+
+        Warnings
+        --------
+        **Результат сейчас недостоверен для многокомпонентных составов.**
+        На `KRSNL_PVTSIM` замерен `gap` ≈ 772 бар при координате ~229 °C /
+        608 бар — то есть решение разошлось, а `calculate()` всё равно вернул
+        словарь, а не `None`. Поэтому GUI намеренно не считает и не рисует
+        критическую точку (см. `gui/services/phase_envelope_service.py`).
+        **Всегда проверяйте `gap`** перед использованием результата: он должен
+        быть малым по сравнению с `P`. Починка солвера — отдельная задача,
+        см. `docs/BACKLOG.md`.
         """
         calc = CriticalPointCalculator(self._composition_copy(), **kwargs)
         result = calc.calculate()
