@@ -5,6 +5,7 @@ import dearpygui.dearpygui as dpg
 from gui.app_state import NodeStatus
 from gui.services import phase_envelope_service as pe_svc
 from gui.view.contracts import ContextBoundView
+from gui.view.read_only_table import render_readonly_table
 
 _ENV_METHOD_SSM = "SSM (curve)"
 _ENV_METHOD_GRID = "Grid (stability scan)"
@@ -130,16 +131,7 @@ class EnvelopeViewMixin(ContextBoundView):
         dpg.add_button(label="Copy table", parent=parent,
                        callback=lambda: self._copy_table(
                            cols, formatted_rows, "Phase envelope data"))
-        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
-                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, scrollX=True, height=-1,
-                       freeze_rows=1, freeze_columns=1):
-            for c in cols:
-                dpg.add_table_column(label=c)
-            for row in formatted_rows:
-                with dpg.table_row():
-                    for value in row:
-                        dpg.add_text(value)
+        render_readonly_table(parent, cols, formatted_rows)
 
     # --- всплывающее окно параметров огибающей ----------------------------
 

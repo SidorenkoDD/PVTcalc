@@ -8,6 +8,7 @@ from gui.app_state import NodeStatus
 from gui.services import clipboard_service
 from gui.services import experiment_service as exp_svc
 from gui.view.contracts import ContextBoundView
+from gui.view.read_only_table import render_readonly_table
 
 
 class ExperimentViewMixin(ContextBoundView):
@@ -442,16 +443,7 @@ class ExperimentViewMixin(ContextBoundView):
         dpg.add_button(label="Copy table", parent=parent,
                        callback=lambda: self._copy_table(
                            [c for c, _ in idxs], rows, "Experiment results"))
-        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
-                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, scrollX=True, height=-1,
-                       freeze_rows=1, freeze_columns=1):
-            for c, _ in idxs:
-                dpg.add_table_column(label=c)
-            for row in rows:
-                with dpg.table_row():
-                    for value in row:
-                        dpg.add_text(value)
+        render_readonly_table(parent, [c for c, _ in idxs], rows)
 
     def _render_exp_composition(self, result, parent) -> None:
         stages = result.get("stages", [])
@@ -484,17 +476,7 @@ class ExperimentViewMixin(ContextBoundView):
         dpg.add_button(label="Copy table", parent=parent,
                        callback=lambda: self._copy_table(
                            columns, rows, f"{phase.capitalize()} composition"))
-        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
-                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, scrollX=True, height=-1,
-                       freeze_rows=1, freeze_columns=1):
-            dpg.add_table_column(label="Component")
-            for column in columns[1:]:
-                dpg.add_table_column(label=column)
-            for row in rows:
-                with dpg.table_row():
-                    for value in row:
-                        dpg.add_text(value)
+        render_readonly_table(parent, columns, rows)
 
     def _render_exp_chart(self, result, parent, nid) -> None:
         node = self._state.node_by_id(nid)

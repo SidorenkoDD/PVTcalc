@@ -5,6 +5,7 @@ import dearpygui.dearpygui as dpg
 from gui.app_state import NodeStatus
 from gui.services import flash_service
 from gui.view.contracts import ContextBoundView
+from gui.view.read_only_table import render_readonly_table
 
 
 class FlashViewMixin(ContextBoundView):
@@ -71,16 +72,8 @@ class FlashViewMixin(ContextBoundView):
                        callback=lambda: self._copy_table(
                            ["Property", "Vapor", "Liquid"], rows,
                            "Flash results"))
-        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
-                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, height=-1, freeze_rows=1):
-            dpg.add_table_column(label="Property")
-            dpg.add_table_column(label="Vapor")
-            dpg.add_table_column(label="Liquid")
-            for row in rows:
-                with dpg.table_row():
-                    for value in row:
-                        dpg.add_text(value)
+        render_readonly_table(parent, ["Property", "Vapor", "Liquid"], rows,
+                              scroll_x=False, freeze_columns=0)
 
     def _render_flash_composition(self, result, parent) -> None:
         """Состав каждой фазы (yi/xi) и константы равновесия K = yi/xi."""
@@ -105,17 +98,8 @@ class FlashViewMixin(ContextBoundView):
                        callback=lambda: self._copy_table(
                            ["Component", "Vapor yi", "Liquid xi", "K = yi/xi"],
                            rows, "Flash composition"))
-        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
-                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, height=-1, freeze_rows=1):
-            dpg.add_table_column(label="Component")
-            dpg.add_table_column(label="Vapor yi")
-            dpg.add_table_column(label="Liquid xi")
-            dpg.add_table_column(label="K = yi/xi")
-            for row in rows:
-                with dpg.table_row():
-                    for value in row:
-                        dpg.add_text(value)
+        render_readonly_table(
+            parent, ["Component", "Vapor yi", "Liquid xi", "K = yi/xi"], rows)
 
     # ==================================================================
     #  Вкладка Compare (таблица сравнения + плитка панелей)
@@ -158,17 +142,7 @@ class FlashViewMixin(ContextBoundView):
         dpg.add_button(label="Copy table", parent=parent,
                        callback=lambda: self._copy_table(
                            ["Property"] + headers, rows, "Comparison"))
-        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
-                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, scrollX=True, height=-1,
-                       freeze_rows=1, freeze_columns=1):
-            dpg.add_table_column(label="Property")
-            for h in headers:
-                dpg.add_table_column(label=h)
-            for row in rows:
-                with dpg.table_row():
-                    for value in row:
-                        dpg.add_text(value)
+        render_readonly_table(parent, ["Property"] + headers, rows)
 
     def _compare_k_table(self, members, headers, parent) -> None:
         # набор компонентов — из первого участника с известным составом жидкости
@@ -197,17 +171,7 @@ class FlashViewMixin(ContextBoundView):
                        callback=lambda: self._copy_table(
                            ["Component (K=yi/xi)"] + headers, rows,
                            "K-value comparison"))
-        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
-                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
-                       resizable=True, scrollY=True, scrollX=True, height=-1,
-                       freeze_rows=1, freeze_columns=1):
-            dpg.add_table_column(label="Component (K=yi/xi)")
-            for h in headers:
-                dpg.add_table_column(label=h)
-            for row in rows:
-                with dpg.table_row():
-                    for value in row:
-                        dpg.add_text(value)
+        render_readonly_table(parent, ["Component (K=yi/xi)"] + headers, rows)
 
     def _compare_panels(self, members, headers, parent) -> None:
         with dpg.group(horizontal=True, parent=parent):
