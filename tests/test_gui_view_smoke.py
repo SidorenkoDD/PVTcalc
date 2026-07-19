@@ -223,6 +223,30 @@ def test_model_tree_context_save_targets_requested_model(tmp_path):
         dpg.destroy_context()
 
 
+def test_project_delete_dialog_warns_about_dirty_loaded_models(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        state.enter_model("KRSNL_PVTSIM")
+        state.models["KRSNL_PVTSIM"].dirty = True
+        project_id = state.models["KRSNL_PVTSIM"].project_id
+
+        app._on_delete_project_confirm(None, None, project_id)
+
+        modal = app._modals[-1]
+        assert any("1 model(s) have unsaved changes" in text
+                   for text in _text_values(modal))
+        dpg.delete_item(modal)
+    finally:
+        dpg.destroy_context()
+
+
 def test_compare_selection_is_scoped_to_model(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)
