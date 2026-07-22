@@ -118,6 +118,9 @@ class PVTcalcApp(
         # debounce адаптивной раскладки карточек/графиков после переноса окна
         # на другой монитор или resize viewport.
         self._viewport_resize_generation: int = 0
+        # Финальное `stop_dearpygui()` разрешается только после явного решения
+        # пользователя в Save all / Discard changes.
+        self._exit_authorized: bool = False
         # модели, чей workspace уже восстановлен из постоянного store либо
         # старой сессии в этом запуске
         self._restored_models: set[str] = set()
@@ -158,8 +161,9 @@ class PVTcalcApp(
         dpg.bind_theme(build_light_theme())
 
         dpg.create_viewport(title="PVTcalc", width=self._session.window_width,
-                            height=self._session.window_height)
+                            height=self._session.window_height, disable_close=True)
         dpg.set_viewport_resize_callback(self._on_viewport_resize)
+        dpg.set_exit_callback(self._on_viewport_close_request)
         self._build_menu()
         self._build_layout()
         self._build_shortcuts()
@@ -416,10 +420,24 @@ class PVTcalcApp(
         continue_action()
 
     def _on_exit_application(self, sender=None, app_data=None, user_data=None) -> None:
+        self._request_exit_confirmation()
+
+    def _on_viewport_close_request(self, sender=None, app_data=None,
+                                   user_data=None) -> None:
+        """Системная кнопка закрытия viewport идёт через тот же save-dialog."""
+        self._request_exit_confirmation()
+
+    def _request_exit_confirmation(self) -> None:
+        if self._exit_authorized or self._has_open_modal():
+            return
         self._confirm_save_before(
-            dpg.stop_dearpygui,
+            self._finish_exit,
             action_name="closing the application",
         )
+
+    def _finish_exit(self) -> None:
+        self._exit_authorized = True
+        dpg.stop_dearpygui()
 
     def _schedule_session_autosave(self) -> None:
         """Debounce снимка UI-сессии после изменений состояния."""

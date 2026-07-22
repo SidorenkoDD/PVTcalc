@@ -423,6 +423,31 @@ def test_global_edit_shortcuts_do_not_run_behind_modal(monkeypatch):
         dpg.destroy_context()
 
 
+def test_system_exit_request_uses_save_confirmation(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        assert state.new_flash_run() is not None
+
+        app._on_viewport_close_request()
+
+        modal = app._modals[-1]
+        assert any("before closing the application" in text
+                   for text in _text_values(modal))
+        assert _has_label(modal, "Save all")
+        assert _has_label(modal, "Discard changes")
+        assert _has_label(modal, "Cancel")
+    finally:
+        dpg.destroy_context()
+
+
 def test_compare_selection_distinguishes_same_local_id_across_models(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)

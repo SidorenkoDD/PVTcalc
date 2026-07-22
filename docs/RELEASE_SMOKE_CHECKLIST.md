@@ -52,7 +52,7 @@ DearPyGui, фокус и визуальное поведение на рабоч
 
 ## Завершение
 
-- Проверить Save all / Discard / Cancel при открытии другого проекта и при
-  Project → Exit application... .
+- Проверить Save all / Discard / Cancel при открытии другого проекта, при
+  Project → Exit application... и при системной кнопке закрытия окна.
 - Убедиться, что `models.json` и backups появились в ожидаемой пользовательской
   папке, а тестовые `tests/fixtures/models.json` не менялись.
