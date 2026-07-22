@@ -46,6 +46,26 @@ def test_model_and_project_catalog_cleanup(tmp_path):
     assert lab_svc.list_datasets(db_path, "project_a") == []
 
 
+def test_dataset_update_preserves_scope_and_manual_conditions(tmp_path):
+    db_path = tmp_path / "models.json"
+    dataset = lab_svc.create_dataset(
+        db_path, "project_a", title="DLE initial", experiment_kind="dle",
+        columns=["pressure", "Bo"], rows=[[300.0, 1.2]],
+        conditions={"T_c": 80.0, "P_res": 350.0},
+    )
+
+    updated = lab_svc.update_dataset(
+        db_path, "project_a", dataset["dataset_id"], title="DLE revised",
+        columns=["pressure", "Bo"], rows=[[250.0, 1.1]],
+        conditions={"T_c": 85.0, "P_res": 300.0},
+    )
+
+    assert updated is not None
+    assert updated["title"] == "DLE revised"
+    assert updated["conditions"] == {"T_c": 85.0, "P_res": 300.0}
+    assert updated["rows"] == [[250.0, 1.1]]
+
+
 def test_corrupt_catalog_is_not_overwritten(tmp_path):
     db_path = tmp_path / "models.json"
     path = lab_svc.catalog_path(db_path)

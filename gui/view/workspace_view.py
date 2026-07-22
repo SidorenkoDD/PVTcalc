@@ -1,5 +1,7 @@
 """IDE-дерево модели и диспетчер вкладок рабочего пространства."""
 
+import math
+
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import (
@@ -40,6 +42,8 @@ class WorkspaceViewMixin(ContextBoundView):
     _exp_chart_holder: dict[str, int]
     _lab_data_holder: dict[str, int]
     _lab_data_controls: dict[str, tuple[int, int, int]]
+    _lab_catalog_editor: dict | None
+    _lab_catalog_modal: int | None
 
     def _compare_ref(self, model_id: str, node_id: str) -> NodeRef:
         model = self._state.models.get(model_id)
@@ -137,20 +141,218 @@ class WorkspaceViewMixin(ContextBoundView):
         if not expanded:
             return
         if not datasets:
-            dpg.add_text("    Publish a local DLE/CCE/Separator table to share it.",
+            dpg.add_text("    Create a measured-data set for this project.",
                          parent=_MODEL_TREE, wrap=270)
-            return
         for dataset in datasets:
             label = (f"    {dataset['experiment_kind'].upper()} — {dataset['title']} "
                      f"({len(dataset['rows'])} point(s))")
             dpg.add_selectable(label=label, parent=_MODEL_TREE,
-                               user_data=dataset["dataset_id"],
+                               user_data=(dataset["dataset_id"], "project", None),
                                callback=self._on_project_lab_dataset)
+        for kind in ("dle", "cce", "separator"):
+            dpg.add_selectable(label=f"    + New project {kind.upper()} Lab Data",
+                               parent=_MODEL_TREE,
+                               user_data=(kind, "project", None),
+                               callback=self._on_new_lab_dataset)
 
     def _on_project_lab_dataset(self, sender, app_data, user_data) -> None:
-        self._set_status(
-            "Open a matching experiment and choose this dataset in Lab Data source.",
+        dataset_id, scope, model_id = user_data
+        project_id = self._state.active_project_id
+        if not project_id:
+            return
+        dataset = lab_svc.get_dataset(self._state.db_path, project_id, dataset_id,
+                                      model_id=model_id)
+        if dataset is not None:
+            self._open_lab_dataset_editor(dataset)
+
+    def _render_model_lab_data_tree(self, model) -> None:
+        datasets = [dataset for dataset in lab_svc.list_datasets(
+            self._state.db_path, model.project_id, model_id=model.model_id)
+            if dataset["scope"] == "model"]
+        key = f"{model.model_id}:model_lab"
+        expanded = key in self._expanded_cats
+        dpg.add_selectable(
+            label=f"  {'v' if expanded else '>'} Model Lab Data ({len(datasets)})",
+            parent=_MODEL_TREE, user_data=key, callback=self._on_cat_toggle,
         )
+        if not expanded:
+            return
+        for dataset in datasets:
+            dpg.add_selectable(
+                label=(f"      {dataset['experiment_kind'].upper()} — "
+                       f"{dataset['title']} ({len(dataset['rows'])} point(s))"),
+                parent=_MODEL_TREE,
+                user_data=(dataset["dataset_id"], "model", model.model_id),
+                callback=self._on_project_lab_dataset,
+            )
+        for kind in ("dle", "cce", "separator"):
+            dpg.add_selectable(label=f"      + New {kind.upper()} Lab Data",
+                               parent=_MODEL_TREE,
+                               user_data=(kind, "model", model.model_id),
+                               callback=self._on_new_lab_dataset)
+
+    def _on_new_lab_dataset(self, sender, app_data, user_data) -> None:
+        kind, scope, model_id = user_data
+        self._open_lab_dataset_editor({
+            "dataset_id": None,
+            "title": f"{str(kind).upper()} Lab Data",
+            "experiment_kind": str(kind),
+            "scope": str(scope),
+            "model_id": model_id,
+            "columns": list(exp_svc.EXPERIMENT_TYPES[str(kind)]["lab_columns"]),
+            "rows": [],
+            "conditions": {},
+        })
+
+    def _open_lab_dataset_editor(self, dataset) -> None:
+        """Opens the single manual editor used by project and model catalogs."""
+        if self._lab_catalog_modal and dpg.does_item_exist(self._lab_catalog_modal):
+            dpg.delete_item(self._lab_catalog_modal)
+        data = dict(dataset)
+        data["rows"] = [list(row) for row in data.get("rows", [])]
+        data["conditions"] = dict(data.get("conditions") or {})
+        self._lab_catalog_editor = data
+        title = ("New " if data.get("dataset_id") is None else "Edit ") + "Lab Data"
+        with dpg.window(label=title, modal=True, no_collapse=True,
+                        width=850, height=620) as win:
+            self._track_modal(win)
+            self._lab_catalog_modal = win
+            data["title_id"] = dpg.add_input_text(
+                label="Name", width=430, default_value=data["title"], parent=win)
+            dpg.add_text(
+                f"{data['scope'].title()} scope · "
+                f"{data['experiment_kind'].upper()} · manual input only",
+                parent=win,
+            )
+            with dpg.group(horizontal=True, parent=win):
+                data["t_id"] = dpg.add_input_text(
+                    label="T, C (optional)", width=160,
+                    default_value=(self._g(data["conditions"]["T_c"])
+                                   if "T_c" in data["conditions"] else ""))
+                if data["experiment_kind"] in ("dle", "separator"):
+                    data["p_id"] = dpg.add_input_text(
+                        label="P res, bar (optional)", width=180,
+                        default_value=(self._g(data["conditions"]["P_res"])
+                                       if "P_res" in data["conditions"] else ""))
+            with dpg.group(horizontal=True, parent=win):
+                dpg.add_button(label="Add point", callback=self._on_catalog_lab_add_row)
+                dpg.add_button(label="Remove last", callback=self._on_catalog_lab_remove_row,
+                               enabled=True)
+                dpg.add_button(label="Save", callback=self._on_catalog_lab_save)
+                dpg.add_button(label="Cancel", callback=self._on_catalog_lab_cancel)
+            data["holder"] = dpg.add_group(parent=win)
+            self._render_catalog_lab_table()
+
+    def _render_catalog_lab_table(self) -> None:
+        data = self._lab_catalog_editor
+        if not data or not dpg.does_item_exist(data["holder"]):
+            return
+        dpg.delete_item(data["holder"], children_only=True)
+        rows = data["rows"]
+        columns = data["columns"]
+        if not rows:
+            dpg.add_text("No measured points. Add them manually one row at a time.",
+                         parent=data["holder"])
+            return
+        with dpg.table(parent=data["holder"], header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True, borders_outerV=True,
+                       resizable=True, scrollY=True, scrollX=True, height=350):
+            dpg.add_table_column(label="#", width_fixed=True, width=35)
+            for column in columns:
+                dpg.add_table_column(label=column)
+            for row_index, row in enumerate(rows):
+                with dpg.table_row():
+                    dpg.add_text(str(row_index + 1))
+                    for column_index, value in enumerate(row):
+                        dpg.add_input_text(
+                            default_value="" if value is None else self._g(value),
+                            width=115, user_data=(row_index, column_index),
+                            callback=self._on_catalog_lab_cell,
+                        )
+
+    def _on_catalog_lab_add_row(self, sender=None, app_data=None, user_data=None) -> None:
+        data = self._lab_catalog_editor
+        if data is None:
+            return
+        data["rows"].append([None] * len(data["columns"]))
+        self._render_catalog_lab_table()
+
+    def _on_catalog_lab_remove_row(self, sender=None, app_data=None, user_data=None) -> None:
+        data = self._lab_catalog_editor
+        if data is None or not data["rows"]:
+            return
+        data["rows"].pop()
+        self._render_catalog_lab_table()
+
+    def _on_catalog_lab_cell(self, sender, app_data, user_data) -> None:
+        data = self._lab_catalog_editor
+        if data is None:
+            return
+        row, column = user_data
+        text = str(app_data).strip().replace(",", ".")
+        try:
+            value = None if not text else float(text)
+            if value is not None and not math.isfinite(value):
+                raise ValueError
+        except ValueError:
+            self._set_status("Lab Data values must be finite numbers.")
+            return
+        data["rows"][row][column] = value
+
+    def _catalog_lab_conditions(self, data) -> dict[str, float]:
+        conditions: dict[str, float] = {}
+        for key, field in (("T_c", "t_id"), ("P_res", "p_id")):
+            item = data.get(field)
+            raw = str(dpg.get_value(item)).strip() if item else ""
+            if not raw:
+                continue
+            try:
+                value = float(raw.replace(",", "."))
+            except ValueError:
+                raise ValueError(f"{key} must be a number") from None
+            if not math.isfinite(value):
+                raise ValueError(f"{key} must be finite")
+            conditions[key] = value
+        return conditions
+
+    def _on_catalog_lab_save(self, sender=None, app_data=None, user_data=None) -> None:
+        data = self._lab_catalog_editor
+        project_id = self._state.active_project_id
+        if data is None or not project_id:
+            return
+        try:
+            title = str(dpg.get_value(data["title_id"])).strip()
+            if not title:
+                raise ValueError("Name is required")
+            conditions = self._catalog_lab_conditions(data)
+            if data.get("dataset_id"):
+                saved = lab_svc.update_dataset(
+                    self._state.db_path, project_id, data["dataset_id"], title=title,
+                    columns=data["columns"], rows=data["rows"], conditions=conditions,
+                    model_id=data.get("model_id"),
+                )
+            else:
+                saved = lab_svc.create_dataset(
+                    self._state.db_path, project_id, title=title,
+                    experiment_kind=data["experiment_kind"], columns=data["columns"],
+                    rows=data["rows"], conditions=conditions, scope=data["scope"],
+                    model_id=data.get("model_id"),
+                )
+            if saved is None:
+                raise ValueError("Lab Data dataset is no longer available")
+        except (ValueError, lab_svc.LabDataStoreError) as exc:
+            self._set_status(f"Could not save Lab Data: {exc}")
+            return
+        self._on_catalog_lab_cancel()
+        self._render_tree()
+        self._render_workspace()
+        self._set_status("Lab Data saved.")
+
+    def _on_catalog_lab_cancel(self, sender=None, app_data=None, user_data=None) -> None:
+        if self._lab_catalog_modal and dpg.does_item_exist(self._lab_catalog_modal):
+            dpg.delete_item(self._lab_catalog_modal)
+        self._lab_catalog_modal = None
+        self._lab_catalog_editor = None
 
     def _on_tree_query(self, sender, app_data, user_data=None) -> None:
         query = str(app_data).strip().lower()
@@ -333,6 +535,8 @@ class WorkspaceViewMixin(ContextBoundView):
                 user_data=(model.model_id, "composition"),
                 callback=self._on_tree_open_node,
             )
+
+        self._render_model_lab_data_tree(model)
 
         # Flash (категория с историей запусков)
         cat_key = f"{model.model_id}:flash"

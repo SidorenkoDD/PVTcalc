@@ -13,6 +13,9 @@ gui_settings.json
 # Ротационные backup и межпроцессный lock базы моделей
 models.json.bak*
 models.json.lock
+# Пользовательский каталог Project/Model Lab Data и его backup
+*.lab.json
+*.lab.json.bak
 *.tmp
 # Выгруженные деки Eclipse 300 (результат Export -> E300), а не исходники
 *.inc

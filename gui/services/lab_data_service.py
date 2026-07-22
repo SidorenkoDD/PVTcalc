@@ -68,6 +68,8 @@ def _normalise_dataset(raw: object) -> dict[str, Any] | None:
             _finite(value) for value in
             (raw_row[:len(columns)] + [None] * len(columns))[:len(columns)]
         ])
+    raw_conditions = raw.get("conditions")
+    conditions = dict(raw_conditions) if isinstance(raw_conditions, dict) else {}
     return {
         "dataset_id": dataset_id,
         "title": str(raw.get("title") or kind.upper()),
@@ -76,6 +78,7 @@ def _normalise_dataset(raw: object) -> dict[str, Any] | None:
         **({"model_id": model_id} if scope == "model" else {}),
         "columns": list(columns),
         "rows": rows,
+        "conditions": conditions,
         "created_at": str(raw.get("created_at") or ""),
     }
 
@@ -153,6 +156,7 @@ def create_dataset(
     rows: list[list[float | None]],
     scope: str = "project",
     model_id: str | None = None,
+    conditions: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Atomically publishes a local table to the shared/model catalog."""
     scope = scope if scope in _SCOPES else "project"
@@ -166,6 +170,7 @@ def create_dataset(
         "model_id": model_id,
         "columns": columns,
         "rows": rows,
+        "conditions": conditions or {},
         "created_at": datetime.now().isoformat(timespec="seconds"),
     })
     if dataset is None:
@@ -178,6 +183,69 @@ def create_dataset(
 
     _update(models_db_path, append)
     return dict(dataset)
+
+
+def update_dataset(
+    models_db_path: str | Path,
+    project_id: str,
+    dataset_id: str,
+    *,
+    title: str,
+    columns: list[str],
+    rows: list[list[float | None]],
+    conditions: dict[str, float] | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Updates only an existing dataset visible in the requested scope."""
+    updated: dict[str, Any] | None = None
+
+    def replace(data) -> None:
+        nonlocal updated
+        project = data.setdefault("projects", {}).get(project_id)
+        if not isinstance(project, dict):
+            return
+        for index, raw in enumerate(project.get("datasets", [])):
+            dataset = _normalise_dataset(raw)
+            if (dataset is None or dataset["dataset_id"] != dataset_id
+                    or (dataset["scope"] == "model"
+                        and dataset.get("model_id") != model_id)):
+                continue
+            candidate = _normalise_dataset({
+                **dataset, "title": title, "columns": columns, "rows": rows,
+                "conditions": conditions or {},
+            })
+            if candidate is None:
+                raise ValueError("invalid Lab Data dataset")
+            project["datasets"][index] = candidate
+            updated = dict(candidate)
+            return
+
+    _update(models_db_path, replace)
+    return updated
+
+
+def delete_dataset(models_db_path: str | Path, project_id: str,
+                   dataset_id: str, *, model_id: str | None = None) -> bool:
+    deleted = False
+
+    def remove(data) -> None:
+        nonlocal deleted
+        project = data.setdefault("projects", {}).get(project_id)
+        if not isinstance(project, dict):
+            return
+        kept = []
+        for raw in project.get("datasets", []):
+            dataset = _normalise_dataset(raw)
+            if (dataset is not None and dataset["dataset_id"] == dataset_id
+                    and (dataset["scope"] != "model"
+                         or dataset.get("model_id") == model_id)):
+                deleted = True
+                continue
+            kept.append(raw)
+        project["datasets"] = kept
+
+    _update(models_db_path, remove)
+    return deleted
 
 
 def delete_project_datasets(models_db_path: str | Path, project_id: str) -> None:

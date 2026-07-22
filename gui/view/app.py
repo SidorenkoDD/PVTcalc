@@ -103,6 +103,8 @@ class PVTcalcApp(
         self._lab_data_holder: dict[str, int] = {}
         self._lab_data_controls: dict[str, tuple[int, int, int]] = {}
         self._lab_source_choices: dict[str, dict[str, str | None]] = {}
+        self._lab_catalog_editor: dict | None = None
+        self._lab_catalog_modal: int | None = None
         self._lab_active_cell: tuple[str, int, int] | None = None
         self._lab_cell_ids: dict[tuple[str, int, int], int] = {}
         self._lab_navigation_registry_id: int | None = None

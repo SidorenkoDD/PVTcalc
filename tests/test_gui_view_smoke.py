@@ -261,7 +261,7 @@ def test_search_selects_models_and_opens_cross_model_compare(tmp_path):
         dpg.destroy_context()
 
 
-def test_publish_lab_data_creates_project_source_and_tree_branch(tmp_path):
+def test_project_lab_tree_creates_dataset_with_manual_editor(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)
     state = AppState(ModelRepository(str(db_path)))
@@ -271,25 +271,19 @@ def test_publish_lab_data_creates_project_source_and_tree_branch(tmp_path):
         app._build_layout()
         state.refresh_model_list()
         app._open_project("KRSNL_PVTSIM")
-        node_id = state.new_experiment("dle", {"T_c": 50.0, "P_res": 300.0})
-        assert node_id is not None
-        node = state.node_by_id(node_id)
-        columns = ["pressure", "Bo", "Rs", "liquid_density", "vapor_density"]
-        state.append_lab_data_rows(node_id, columns, [[300.0, 1.2]])
-        app._render_workspace()
 
-        app._on_lab_publish(None, None, (node_id, "project"))
+        app._on_new_lab_dataset(None, None, ("dle", "project", None))
+        assert app._lab_catalog_editor is not None
+        app._on_catalog_lab_add_row()
+        app._on_catalog_lab_cell(None, "300", (0, 0))
+        app._on_catalog_lab_cell(None, "1.2", (0, 1))
+        app._on_catalog_lab_save()
 
-        dataset_id = node.params.get("lab_data_ref")
-        assert isinstance(dataset_id, str)
         datasets = lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                          experiment_kind="dle")
-        assert [dataset["dataset_id"] for dataset in datasets] == [dataset_id]
-        assert any(label.startswith("Project:")
-                   for label in app._lab_source_choices[node_id])
-        app._expanded_cats.add("KRSNL_PVTSIM:lab")
-        app._render_tree()
-        assert _has_label(_MODEL_TREE, "v Project Lab Data (1)")
+        assert len(datasets) == 1
+        assert datasets[0]["rows"][0][:2] == [300.0, 1.2]
+        assert app._lab_catalog_editor is None
     finally:
         dpg.destroy_context()
 
@@ -765,11 +759,9 @@ def test_experiment_lab_data_and_chart_grid_render():
         app._render_node_content(nid)
 
         assert _has_label(_WORKSPACE, "Lab Data (measured)")
-        # Именно enabled, а не просто наличие: кнопка какое-то время стояла
-        # enabled=False, и проверка по подписи этого не замечала.
-        paste_btn = _item_by_label(_WORKSPACE, "Paste from Excel")
-        assert paste_btn is not None
-        assert dpg.get_item_configuration(paste_btn)["enabled"] is True
+        assert _item_by_label(_WORKSPACE, "Paste from Excel") is None
+        assert any("Manual point-by-point input" in text
+                   for text in _text_values(_WORKSPACE))
         assert _has_label(_WORKSPACE, "Copy table")
         assert _has_label(_WORKSPACE, "Bo vs pressure")
         assert _has_label(_WORKSPACE, "vapor_density vs pressure")

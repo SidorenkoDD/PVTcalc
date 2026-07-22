@@ -108,6 +108,9 @@ class ContextBoundView:
     def _render_workspace(self) -> None:
         raise NotImplementedError
 
+    def _open_lab_dataset_editor(self, dataset) -> None:
+        raise NotImplementedError
+
     def _overview_is_selected(self) -> bool:
         raise NotImplementedError
 
