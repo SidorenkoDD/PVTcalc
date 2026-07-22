@@ -1,6 +1,7 @@
 """IDE-дерево модели и диспетчер вкладок рабочего пространства."""
 
 import math
+import time
 
 import dearpygui.dearpygui as dpg
 
@@ -30,6 +31,8 @@ class WorkspaceViewMixin(ContextBoundView):
     _search_selected_model_ids: set[str]
     _selected_tree_model_id: str | None
     _selected_tree_lab_dataset: tuple[str, str, str | None] | None
+    _last_lab_dataset_click: tuple[str, str, str | None] | None
+    _last_lab_dataset_click_time: float
     _compare_selection: list[NodeRef]
     _tabbar_id: int | None
     _tab_ids: dict[str, int]
@@ -150,15 +153,32 @@ class WorkspaceViewMixin(ContextBoundView):
     def _on_project_lab_dataset(self, sender, app_data, user_data) -> None:
         """Selects a dataset; editing is deliberately reserved for double-click."""
         dataset_id, scope, model_id = user_data
+        ref = (dataset_id, scope, model_id)
+        now = time.monotonic()
+        is_double = (self._last_lab_dataset_click == ref
+                     and now - self._last_lab_dataset_click_time < 0.4)
+        self._last_lab_dataset_click = ref
+        self._last_lab_dataset_click_time = now
+        self._select_lab_dataset(ref)
+        if is_double:
+            self._last_lab_dataset_click = None
+            self._open_selected_lab_dataset(ref)
+
+    def _select_lab_dataset(self, ref: tuple[str, str, str | None]) -> None:
         self._selected_tree_model_id = None
-        self._selected_tree_lab_dataset = (dataset_id, scope, model_id)
+        self._selected_tree_lab_dataset = ref
 
     def _on_project_lab_dataset_edit(self, sender, app_data, user_data) -> None:
-        self._on_project_lab_dataset(sender, app_data, user_data)
+        ref = (str(user_data[0]), str(user_data[1]), user_data[2])
+        self._last_lab_dataset_click = None
+        self._select_lab_dataset(ref)
+        self._open_selected_lab_dataset(ref)
+
+    def _open_selected_lab_dataset(self, ref: tuple[str, str, str | None]) -> None:
         project_id = self._state.active_project_id
         if not project_id:
             return
-        dataset_id, _scope, model_id = user_data
+        dataset_id, _scope, model_id = ref
         dataset = lab_svc.get_dataset(self._state.db_path, project_id, dataset_id,
                                       model_id=model_id)
         if dataset is not None:
@@ -203,13 +223,6 @@ class WorkspaceViewMixin(ContextBoundView):
                     user_data=(dataset["dataset_id"], scope, model_id),
                     callback=self._on_project_lab_dataset,
                 )
-                with dpg.item_handler_registry() as registry:
-                    dpg.add_item_double_clicked_handler(
-                        button=dpg.mvMouseButton_Left,
-                        callback=self._on_project_lab_dataset_edit,
-                        user_data=(dataset["dataset_id"], scope, model_id),
-                    )
-                dpg.bind_item_handler_registry(item, registry)
                 self._attach_lab_dataset_context_menu(item, dataset, model_id)
             dpg.add_selectable(label=f"{indent}    + New {kind.upper()} Lab Data",
                                parent=_MODEL_TREE,

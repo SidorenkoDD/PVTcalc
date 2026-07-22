@@ -11,6 +11,7 @@ from gui.services import lab_data_service as lab_svc
 from gui.services import project_service as proj_svc
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState
+from gui.view import workspace_view
 from gui.view.app import (
     _PRIMARY,
     _PROJECTS_CONTENT,
@@ -301,7 +302,8 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
         dpg.destroy_context()
 
 
-def test_lab_dataset_single_click_selects_and_double_click_opens_editor(tmp_path):
+def test_lab_dataset_single_click_selects_and_double_click_opens_editor(tmp_path,
+                                                                         monkeypatch):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)
     dataset = lab_svc.create_dataset(
@@ -316,12 +318,14 @@ def test_lab_dataset_single_click_selects_and_double_click_opens_editor(tmp_path
         state.refresh_model_list()
         app._open_project("KRSNL_PVTSIM")
         ref = (dataset["dataset_id"], "project", None)
+        click_times = iter((10.0, 10.2))
+        monkeypatch.setattr(workspace_view.time, "monotonic", lambda: next(click_times))
 
         app._on_project_lab_dataset(None, True, ref)
         assert app._selected_tree_lab_dataset == ref
         assert app._lab_catalog_modal is None
 
-        app._on_project_lab_dataset_edit(None, None, ref)
+        app._on_project_lab_dataset(None, True, ref)
         assert app._lab_catalog_modal is not None
         assert dpg.does_item_exist(app._lab_catalog_modal)
 
@@ -333,6 +337,29 @@ def test_lab_dataset_single_click_selects_and_double_click_opens_editor(tmp_path
         app._on_project_lab_dataset_edit(None, None, ref)
         assert app._lab_catalog_modal is not None
         assert dpg.does_item_exist(app._lab_catalog_modal)
+    finally:
+        dpg.destroy_context()
+
+
+def test_exit_request_confirms_even_when_all_models_are_saved(monkeypatch):
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        stopped: list[bool] = []
+        monkeypatch.setattr(dpg, "stop_dearpygui", lambda: stopped.append(True))
+
+        app._on_exit_application()
+
+        modal = app._modals[-1]
+        assert any("All loaded models are saved" in text
+                   for text in _text_values(modal))
+        app._close_then_continue(modal, app._finish_exit)
+        assert stopped == [True]
     finally:
         dpg.destroy_context()
 

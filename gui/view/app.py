@@ -83,6 +83,11 @@ class PVTcalcApp(
         # Выбранный набор каталога LAB DATA. В отличие от расчётных узлов он
         # не принадлежит AppState, поэтому хранится как адрес в представлении.
         self._selected_tree_lab_dataset: tuple[str, str, str | None] | None = None
+        # Распознавание двойного клика по набору LAB DATA. Используем тот же
+        # надёжный механизм, что и на Projects: callback selectable приходит
+        # стабильно, в отличие от item-handler на пересоздаваемом дереве.
+        self._last_lab_dataset_click: tuple[str, str, str | None] | None = None
+        self._last_lab_dataset_click_time: float = 0.0
         # Выбор узлов для сравнения (Ctrl+клик в дереве). Полный адрес нужен
         # для Flash и Experiments: локальные exp_1/flash_1 повторяются в
         # разных моделях одного проекта.
@@ -175,7 +180,10 @@ class PVTcalcApp(
         dpg.create_viewport(title="PVTcalc", width=self._session.window_width,
                             height=self._session.window_height, disable_close=True)
         dpg.set_viewport_resize_callback(self._on_viewport_resize)
-        dpg.set_exit_callback(self._on_viewport_close_request)
+        # `set_exit_callback` вызывается лишь на последнем кадре DPG: показанный
+        # из него Save/Discard диалог уже не успевает отрисоваться. Системный
+        # крестик намеренно заблокирован `disable_close`; контролируемый выход
+        # доступен из Project -> Exit application....
         self._build_menu()
         self._build_layout()
         self._build_shortcuts()
@@ -407,11 +415,15 @@ class PVTcalcApp(
             return
         self._set_status(f"Model '{model.model_id}' saved.")
 
-    def _confirm_save_before(self, continue_action, *, action_name: str) -> None:
+    def _confirm_save_before(self, continue_action, *, action_name: str,
+                             confirm_when_clean: bool = False) -> None:
         """Запрашивает единое решение для всех несохранённых моделей."""
         dirty = [model for model in self._state.models.values()
                  if model.loaded and model.dirty]
         if not dirty:
+            if confirm_when_clean:
+                self._confirm_clean_exit(continue_action)
+                return
             continue_action()
             return
 
@@ -437,6 +449,28 @@ class PVTcalcApp(
                                    win, continue_action))
                 dpg.add_button(label="Cancel", width=110,
                                callback=lambda: dpg.delete_item(win))
+
+    def _confirm_clean_exit(self, continue_action) -> None:
+        """Makes controlled exit explicit even when there is nothing to save."""
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label="Exit application", modal=True, no_resize=True,
+                        no_collapse=True, width=420, height=160,
+                        pos=(max(0, w // 2 - 210), max(0, h // 2 - 80))) as win:
+            self._track_modal(win)
+            dpg.add_text("All loaded models are saved. Close the application?")
+            dpg.add_spacer(height=10)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Close application", width=145,
+                               callback=lambda: self._close_then_continue(
+                                   win, continue_action))
+                dpg.add_button(label="Cancel", width=110,
+                               callback=lambda: dpg.delete_item(win))
+
+    @staticmethod
+    def _close_then_continue(win: int, continue_action) -> None:
+        if dpg.does_item_exist(win):
+            dpg.delete_item(win)
+        continue_action()
 
     def _save_then_continue(self, win: int, continue_action) -> None:
         try:
@@ -479,6 +513,7 @@ class PVTcalcApp(
         self._confirm_save_before(
             self._finish_exit,
             action_name="closing the application",
+            confirm_when_clean=True,
         )
 
     def _finish_exit(self) -> None:
