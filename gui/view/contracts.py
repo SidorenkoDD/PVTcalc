@@ -25,6 +25,8 @@ class ViewHost(Protocol):
 
     def _track_modal(self, win: int) -> int: ...
 
+    def _close_tracked_modal(self, win: int) -> None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ViewContext:
@@ -61,6 +63,9 @@ class ContextBoundView:
         raise NotImplementedError
 
     def _track_modal(self, win: int) -> int:
+        raise NotImplementedError
+
+    def _close_tracked_modal(self, win: int) -> None:
         raise NotImplementedError
 
     def _copy_table(self, columns, rows, label: str = "Table") -> None:

@@ -277,7 +277,7 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
         assert app._lab_catalog_editor["title"] == "DLE LAB-1"
         assert _item_by_label(app._lab_catalog_modal, "Save") is None
         assert _has_label(app._lab_catalog_modal, "Close")
-        assert app._lab_condition_input_theme_id is not None
+        assert _has_label(app._lab_catalog_modal, "T res, C (optional)")
         assert lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                      experiment_kind="dle") == []
         app._on_catalog_lab_add_row()
@@ -321,6 +321,15 @@ def test_lab_dataset_single_click_selects_and_double_click_opens_editor(tmp_path
         assert app._selected_tree_lab_dataset == ref
         assert app._lab_catalog_modal is None
 
+        app._on_project_lab_dataset_edit(None, None, ref)
+        assert app._lab_catalog_modal is not None
+        assert dpg.does_item_exist(app._lab_catalog_modal)
+
+        # Closing via the regular action must clear both the window id and
+        # editor state, otherwise a later double-click can be swallowed.
+        app._on_catalog_lab_cancel()
+        assert app._lab_catalog_modal is None
+        assert app._lab_catalog_editor is None
         app._on_project_lab_dataset_edit(None, None, ref)
         assert app._lab_catalog_modal is not None
         assert dpg.does_item_exist(app._lab_catalog_modal)
@@ -650,6 +659,31 @@ def test_system_exit_request_uses_save_confirmation(tmp_path):
         assert _has_label(modal, "Save all")
         assert _has_label(modal, "Discard changes")
         assert _has_label(modal, "Cancel")
+    finally:
+        dpg.destroy_context()
+
+
+def test_exit_request_dismisses_lab_editor_then_shows_save_confirmation(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        assert state.new_flash_run() is not None
+        app._on_new_lab_dataset(None, None, ("dle", "project", None))
+        assert app._lab_catalog_modal is not None
+
+        app._on_viewport_close_request()
+
+        assert app._lab_catalog_modal is None
+        modal = app._modals[-1]
+        assert any("before closing the application" in text
+                   for text in _text_values(modal))
     finally:
         dpg.destroy_context()
 

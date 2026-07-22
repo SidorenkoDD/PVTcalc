@@ -83,4 +83,15 @@ def build_light_theme() -> int:
                 const = getattr(dpg, const_name, None)
                 if const is not None:
                     dpg.add_theme_color(const, rgba, category=dpg.mvThemeCat_Core)
+        # Поля ввода должны читаться как отдельные рабочие поверхности, а не
+        # растворяться в светлом фоне окна. Компонентная тема наследуется всеми
+        # `add_input_text`, включая ручной ввод LAB DATA.
+        with dpg.theme_component(dpg.mvInputText):
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (224, 239, 255, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered,
+                                (202, 226, 252, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive,
+                                (189, 218, 250, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Border, (83, 130, 184, 255))
+            dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
     return theme_id

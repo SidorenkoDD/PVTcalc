@@ -108,7 +108,6 @@ class PVTcalcApp(
         self._lab_source_choices: dict[str, dict[str, str | None]] = {}
         self._lab_catalog_editor: dict | None = None
         self._lab_catalog_modal: int | None = None
-        self._lab_condition_input_theme_id: int | None = None
         self._lab_active_cell: tuple[str, int, int] | None = None
         self._lab_cell_ids: dict[tuple[str, int, int], int] = {}
         self._lab_navigation_registry_id: int | None = None
@@ -238,19 +237,38 @@ class PVTcalcApp(
 
     def _track_modal(self, win: int) -> int:
         """Регистрирует модальное окно в стеке для закрытия по Esc. Возвращает id."""
+        self._modals = [modal for modal in self._modals
+                        if dpg.does_item_exist(modal)]
         self._modals.append(win)
         return win
 
     def _has_open_modal(self) -> bool:
-        return any(dpg.does_item_exist(w) for w in self._modals)
+        self._modals = [modal for modal in self._modals
+                        if dpg.does_item_exist(modal)]
+        return bool(self._modals)
+
+    def _close_tracked_modal(self, win: int) -> None:
+        """Closes a modal and clears state that would otherwise block reopening."""
+        if dpg.does_item_exist(win):
+            dpg.delete_item(win)
+        self._modals = [modal for modal in self._modals if modal != win]
+        if win == self._lab_catalog_modal:
+            self._lab_catalog_modal = None
+            self._lab_catalog_editor = None
+            self._selected_tree_lab_dataset = None
+
+    def _dismiss_all_modals_for_exit(self) -> None:
+        """The OS close request must never be swallowed by an unrelated dialog."""
+        for win in reversed(tuple(self._modals)):
+            self._close_tracked_modal(win)
+        self._modals.clear()
 
     def _on_key_escape(self, sender, app_data) -> None:
         """Esc закрывает верхнее открытое модальное окно."""
         while self._modals:
             win = self._modals[-1]
             if dpg.does_item_exist(win):
-                dpg.delete_item(win)
-                self._modals.pop()
+                self._close_tracked_modal(win)
                 return
             self._modals.pop()
 
@@ -454,8 +472,10 @@ class PVTcalcApp(
         self._request_exit_confirmation()
 
     def _request_exit_confirmation(self) -> None:
-        if self._exit_authorized or self._has_open_modal():
+        if self._exit_authorized:
             return
+        if self._has_open_modal():
+            self._dismiss_all_modals_for_exit()
         self._confirm_save_before(
             self._finish_exit,
             action_name="closing the application",

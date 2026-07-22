@@ -45,6 +45,7 @@ class WorkspaceViewMixin(ContextBoundView):
     _lab_data_controls: dict[str, tuple[int, int, int]]
     _lab_catalog_editor: dict | None
     _lab_catalog_modal: int | None
+    _modals: list[int]
 
     def _compare_ref(self, model_id: str, node_id: str) -> NodeRef:
         model = self._state.models.get(model_id)
@@ -261,14 +262,15 @@ class WorkspaceViewMixin(ContextBoundView):
     def _open_lab_dataset_editor(self, dataset) -> None:
         """Opens the single manual editor used by project and model catalogs."""
         if self._lab_catalog_modal and dpg.does_item_exist(self._lab_catalog_modal):
-            dpg.delete_item(self._lab_catalog_modal)
+            self._close_tracked_modal(self._lab_catalog_modal)
         data = dict(dataset)
         data["rows"] = [list(row) for row in data.get("rows", [])]
         data["conditions"] = dict(data.get("conditions") or {})
         self._lab_catalog_editor = data
         title = ("New " if data.get("dataset_id") is None else "Edit ") + "Lab Data"
         with dpg.window(label=title, modal=True, no_collapse=True,
-                        width=850, height=620) as win:
+                        width=850, height=620,
+                        on_close=self._on_lab_catalog_window_closed) as win:
             self._track_modal(win)
             self._lab_catalog_modal = win
             data["title_id"] = dpg.add_input_text(
@@ -281,18 +283,16 @@ class WorkspaceViewMixin(ContextBoundView):
             )
             with dpg.group(horizontal=True, parent=win):
                 data["t_id"] = dpg.add_input_text(
-                    label="T, C (optional)", width=160,
+                    label="T res, C (optional)", width=160,
                     default_value=(self._g(data["conditions"]["T_c"])
                                    if "T_c" in data["conditions"] else ""),
                     callback=self._on_catalog_lab_metadata_changed)
-                dpg.bind_item_theme(data["t_id"], self._lab_condition_input_theme())
                 if data["experiment_kind"] in ("dle", "separator"):
                     data["p_id"] = dpg.add_input_text(
                         label="P res, bar (optional)", width=180,
                         default_value=(self._g(data["conditions"]["P_res"])
                                        if "P_res" in data["conditions"] else ""),
                         callback=self._on_catalog_lab_metadata_changed)
-                    dpg.bind_item_theme(data["p_id"], self._lab_condition_input_theme())
             with dpg.group(horizontal=True, parent=win):
                 dpg.add_button(label="Add point", callback=self._on_catalog_lab_add_row)
                 dpg.add_button(label="Remove last", callback=self._on_catalog_lab_remove_row,
@@ -305,22 +305,6 @@ class WorkspaceViewMixin(ContextBoundView):
             )
             data["holder"] = dpg.add_group(parent=win)
             self._render_catalog_lab_table()
-
-    def _lab_condition_input_theme(self):
-        """Makes optional reservoir T/P fields visibly distinct from the dialog."""
-        theme_id = getattr(self, "_lab_condition_input_theme_id", None)
-        if theme_id is None:
-            with dpg.theme() as theme_id:
-                with dpg.theme_component(dpg.mvInputText):
-                    dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (224, 239, 255, 255))
-                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered,
-                                        (202, 226, 252, 255))
-                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive,
-                                        (189, 218, 250, 255))
-                    dpg.add_theme_color(dpg.mvThemeCol_Border, (83, 130, 184, 255))
-                    dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
-            self._lab_condition_input_theme_id = theme_id
-        return theme_id
 
     def _render_catalog_lab_table(self) -> None:
         data = self._lab_catalog_editor
@@ -448,11 +432,19 @@ class WorkspaceViewMixin(ContextBoundView):
         self._autosave_catalog_lab()
 
     def _on_catalog_lab_cancel(self, sender=None, app_data=None, user_data=None) -> None:
-        if self._lab_catalog_modal and dpg.does_item_exist(self._lab_catalog_modal):
-            dpg.delete_item(self._lab_catalog_modal)
-        self._lab_catalog_modal = None
-        self._lab_catalog_editor = None
-        self._selected_tree_lab_dataset = None
+        if self._lab_catalog_modal is not None:
+            self._close_tracked_modal(self._lab_catalog_modal)
+
+    def _on_lab_catalog_window_closed(self, sender=None, app_data=None,
+                                      user_data=None) -> None:
+        """Keeps Esc/title-bar closing equivalent to the explicit Close button."""
+        win = sender if isinstance(sender, int) else self._lab_catalog_modal
+        if win is not None:
+            self._modals = [modal for modal in self._modals if modal != win]
+        if win == self._lab_catalog_modal:
+            self._lab_catalog_modal = None
+            self._lab_catalog_editor = None
+            self._selected_tree_lab_dataset = None
 
     def _on_lab_editor_delete_confirm(self, sender=None, app_data=None, user_data=None) -> None:
         data = self._lab_catalog_editor
