@@ -96,33 +96,28 @@ Editable-установка нужна, чтобы `calc_core` и `gui` импо
 
 ## Использование расчётного ядра
 
-Для одно- и двухфазного Flash используйте `VLE.Flash`. Давление передаётся в
-барах, температура в `Conditions` — в °C:
+Для одно- и двухфазного Flash используйте единый фасад
+`CompositionalModel.flash()`. Давление передаётся в барах, температура — в °C:
 
 ```python
 from calc_core.Composition.Composition import Composition
-from calc_core.Utils.Conditions import Conditions
-from calc_core.VLE.Flash import Flash
+from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
 
 database = Composition.from_db("models.json")
 print(database.list_models())
 
 saved = getattr(database, database.list_models()[0])
 composition = saved.new_composition(saved.composition, deep_copy=True)
-conditions = Conditions(p=100.0, t=110.0)
+model = CompositionalModel(composition)
 
-result = Flash(composition, conditions).calculate()
+result = model.flash(p_bar=100.0, t_celsius=110.0)
 print(result.is_two_phase, result.phase_type)
 print(result.vapor.mole_fraction, result.liquid.mole_fraction)
 ```
 
-Глубокая копия в примере важна: часть низкоуровневых калькуляторов меняет
-температуру переданного `Composition` и пересчитывает температурно-зависимые
-параметры. GUI-сервисы и фасады экспериментов/огибающей уже изолируют состав.
-
-`CompositionalModel.flash()` пока не является рекомендуемой точкой входа: он
-рассчитан на двухфазный случай, возвращает сырой словарь и не копирует состав.
-Унификация этого контракта запланирована в ROADMAP R2.1.
+Фасад сам выполняет глубокую копию переданного состава: низкоуровневый Flash
+меняет температуру и пересчитывает температурно-зависимые параметры рабочей
+копии, но исходная модель остаётся неизменной.
 
 ## Данные и безопасность записи
 

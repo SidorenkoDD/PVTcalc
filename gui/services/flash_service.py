@@ -1,27 +1,21 @@
 """
 Запуск одного флэш-расчёта (P, T) — фреймворк-независимо.
 
-Тонкая обёртка над `calc_core.VLE.Flash` + `Conditions`: обрабатывает и
-двухфазный, и однофазный случай (в отличие от `CompositionalModel.flash`,
-который ждёт двухфазную точку). Ввод давления — в барах, температуры — в
-°C (внутри `Conditions` конвертируется в Кельвины). Не импортирует
+Тонкая адаптация `CompositionalModel.flash`: передаёт давление в барах и
+температуру в °C, оставляя JSON-сериализацию слепка результата этому модулю.
+Публичный фасад обрабатывает и двухфазный, и однофазный случай. Не импортирует
 DearPyGui; оркестрация потока/прогресса/отмены — во View.
 
-Побочный эффект (из движка): `Flash` перезаписывает `composition.T`
-температурой точки и пересчитывает EOS-зависимые свойства состава.
+Перед созданием фасада сервис делает нормализованную глубокую копию состава,
+чтобы округлённые сохранённые доли и общий объект редактора не попадали внутрь
+расчёта.
 """
 
 import logging
 
 from calc_core.Composition.Composition import Composition
-from calc_core.Utils.Conditions import Conditions
+from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
 from calc_core.Utils.ResultDiagnostics import ResultDiagnostics
-from calc_core.Utils.Validation import (
-    validate_composition_normalized,
-    validate_positive_pressure,
-    validate_temperature_celsius,
-)
-from calc_core.VLE.Flash import Flash
 from calc_core.VLE.FlashResult import FlashResult, PhaseState
 
 logger = logging.getLogger(__name__)
@@ -48,18 +42,11 @@ def run_flash(composition: Composition, p_bar: float, t_celsius: float) -> Flash
         `pressure`, `temperature` (K), `vapor`/`liquid` (`PhaseState`),
         `is_two_phase`.
     """
-    validate_positive_pressure(p_bar, name="P")
-    validate_temperature_celsius(t_celsius, name="T")
-    # Сохранённые инженерные составы часто округлены до 5-6 знаков; допускаем
-    # небольшой хвост и затем штатно нормализуем независимую рабочую копию.
-    validate_composition_normalized(composition.composition, tol=1e-4)
-    conditions = Conditions(p_bar, t_celsius)
     logger.info("Флэш: P=%s бар, T=%s °C", p_bar, t_celsius)
-    # ВАЖНО: Flash мутирует состав (перезаписывает T и пересчитывает a/b/c/d,
-    # BIP). Чтобы не «увести» общий объект (открытый редактор состава, другие
-    # флэши), считаем на независимой глубокой копии.
+    # Сохранённые инженерные составы часто округлены до 5-6 знаков; фасад
+    # принимает уже нормированный Composition, поэтому нормализуем копию здесь.
     work = composition.new_composition(composition.composition, deep_copy=True)
-    return Flash(work, conditions).calculate()
+    return CompositionalModel(work).flash(p_bar, t_celsius)
 
 
 def _as_float(value):
