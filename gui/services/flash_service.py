@@ -15,6 +15,7 @@ import logging
 
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.Conditions import Conditions
+from calc_core.Utils.ResultDiagnostics import ResultDiagnostics
 from calc_core.Utils.Validation import (
     validate_composition_normalized,
     validate_positive_pressure,
@@ -86,6 +87,7 @@ def snapshot_flash_result(result: FlashResult) -> dict:
     return {
         "is_two_phase": bool(result.is_two_phase),
         "phase_type": result.phase_type,
+        "diagnostics": result.diagnostics.to_dict(),
         "pressure": _as_float(result.pressure),
         "temperature": _as_float(result.temperature),
         "vapor": phase(result.vapor),
@@ -107,4 +109,5 @@ def restore_flash_result(snap: dict) -> FlashResult:
         liquid=phase(snap.get("liquid", {})),
         is_two_phase=bool(snap.get("is_two_phase")),
         phase_type=snap.get("phase_type"),
+        diagnostics=ResultDiagnostics.from_dict(snap.get("diagnostics")),
     )

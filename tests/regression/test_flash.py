@@ -77,9 +77,8 @@ def test_przlm_single_phase(przlm_composition):
     тест проходил со старым эталоном. `molecular_ weight` не изменился —
     сам состав тот же, поехали только EOS-зависимые свойства.
 
-    ВНИМАНИЕ: эталон завязан на живой, редактируемый models.json в корне
-    репозитория — обычная работа в GUI может снова его сдвинуть. Отвязка
-    тестов на фикстуру-снапшот числится отдельной задачей в docs/BACKLOG.md.
+    После итерации R0.1 вход зафиксирован в `tests/fixtures/models.json`:
+    дальнейшая работа в GUI с корневой базой этот baseline не сдвигает.
     """
     conditions = Conditions(200, 100)
     przlm_composition.T = conditions.t

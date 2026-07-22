@@ -1,12 +1,16 @@
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any
+
+from calc_core.Utils.ResultDiagnostics import ResultDiagnostics
+
 
 @dataclass(frozen=True)
 class PhaseState:
     """Состояние одной фазы"""
     mole_fraction: float  # От 0.0 до 1.0 (доля этой фазы в системе)
     composition: Any      # Состав фазы (ваш объект Composition или dict/list)
-    properties: Dict[str, Any] # Словарь свойств (плотность, Z-фактор и т.д.)
+    properties: dict[str, Any]  # Словарь свойств (плотность, Z-фактор и т.д.)
+
 
 @dataclass(frozen=True)
 class FlashResult:
@@ -20,6 +24,12 @@ class FlashResult:
     liquid : PhaseState
     is_two_phase : bool
     phase_type: str | None = None
+    diagnostics: ResultDiagnostics = ResultDiagnostics()
+
+    @property
+    def quality_status(self) -> str:
+        """``ok`` либо ``warning`` для отображения во внешнем интерфейсе."""
+        return self.diagnostics.status
 
     @property
     def liquid_composition(self) -> Any:

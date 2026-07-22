@@ -6,15 +6,14 @@ import pytest
 
 from calc_core.Composition.Composition import Composition
 
-# Абсолютный путь от расположения самого conftest, а не относительный от cwd:
-# иначе fixtures резолвятся только при запуске pytest из корня репозитория
-# (`pytest tests/` из другой директории молча падал бы на поиске файла).
-MODELS_JSON_PATH = str(Path(__file__).resolve().parents[1] / "models.json")
+# Версионированный снимок отделён от рабочей пользовательской базы в корне.
+# Абсолютный путь строится от conftest, поэтому запуск не зависит от cwd.
+MODELS_JSON_PATH = str(Path(__file__).resolve().parent / "fixtures" / "models.json")
 
 
 @pytest.fixture
 def models_db():
-    """Снэпшот моделей флюидов из models.json (кэшируется pytest на время теста)."""
+    """Версионированный снэпшот моделей флюидов для тестов."""
     return Composition.from_db(MODELS_JSON_PATH)
 
 

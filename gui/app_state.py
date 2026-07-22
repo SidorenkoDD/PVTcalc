@@ -81,6 +81,28 @@ class NodeRef:
     variant_id: str
     node_id: str
 
+    def to_dict(self) -> dict[str, str]:
+        """JSON-совместимое представление для params/session."""
+        return {
+            "model_id": self.model_id,
+            "variant_id": self.variant_id,
+            "node_id": self.node_id,
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> Optional["NodeRef"]:
+        """Безопасно читает адрес из session; повреждённое значение → None."""
+        if not isinstance(value, dict):
+            return None
+        model_id = value.get("model_id")
+        variant_id = value.get("variant_id")
+        node_id = value.get("node_id")
+        if (not isinstance(model_id, str) or not model_id
+                or not isinstance(variant_id, str) or not variant_id
+                or not isinstance(node_id, str) or not node_id):
+            return None
+        return cls(model_id, variant_id, node_id)
+
 
 class StateChangeKind(Enum):
     """Минимальная область View, которую нужно обновить после команды."""
@@ -414,6 +436,10 @@ class AppState:
         if notify:
             self._notify(StateChange(StateChangeKind.WORKSPACE))
 
+    def ensure_model_loaded(self, model_id: str) -> Model:
+        """Лениво загружает модель, не меняя активный выбор."""
+        return self._ensure_loaded(model_id)
+
     # обратная совместимость со старым именем
     open_model = set_active_model
 
@@ -718,26 +744,61 @@ class AppState:
         self.open_node(node_id)
         return node_id
 
-    def open_compare(self, member_ids: list[str]) -> Optional[str]:
+    def open_compare(self, member_ids: list[str | NodeRef]) -> Optional[str]:
         """
         Открывает вкладку сравнения выбранных узлов (единственный узел
         `compare`, его список участников обновляется). Нужно ≥2 существующих
         узла. Не откатывается undo (это представление, не правка данных).
         """
         variant = self.active_variant
-        if variant is None:
+        owner_model_id = self.active_model_id
+        owner_variant_id = self.active_variant_id
+        if (variant is None or owner_model_id is None
+                or owner_variant_id is None):
             return None
-        # упорядочиваем по порядку создания узлов (не по порядку выбора)
-        wanted = set(member_ids)
-        members = [nid for nid in variant.nodes if nid in wanted]
-        if len(members) < 2:
-            return None
-        nid = "compare"
-        if nid not in variant.nodes:
-            variant.nodes[nid] = GraphNode(nid, NodeKind.COMPARE, "Compare",
-                                           NodeStatus.FRESH, params={"members": members})
+        local_only = all(isinstance(member, str) for member in member_ids)
+        refs: list[NodeRef]
+        if local_only:
+            # Старый локальный API: сохраняем исторический порядок создания.
+            wanted = {str(member) for member in member_ids}
+            refs = [
+                NodeRef(owner_model_id, owner_variant_id, node_id)
+                for node_id in variant.nodes if node_id in wanted
+            ]
         else:
-            variant.nodes[nid].params["members"] = members
+            refs = []
+            for member in member_ids:
+                ref = (member if isinstance(member, NodeRef)
+                       else NodeRef(owner_model_id, owner_variant_id, member))
+                if ref not in refs:
+                    refs.append(ref)
+        resolved = [(ref, self.node_by_ref(ref)) for ref in refs]
+        resolved = [(ref, node) for ref, node in resolved if node is not None]
+        if len(resolved) < 2:
+            return None
+        refs = [ref for ref, _node in resolved]
+        nodes = [node for _ref, node in resolved]
+        kinds = {node.kind for node in nodes}
+        if len(kinds) != 1 or kinds.pop() not in (NodeKind.FLASH, NodeKind.EXPERIMENT):
+            return None
+        if nodes[0].kind is NodeKind.EXPERIMENT:
+            experiment_kinds = {node.params.get("kind") for node in nodes}
+            if len(experiment_kinds) != 1:
+                return None
+        nid = "compare"
+        title = (f"Compare {str(nodes[0].params.get('kind')).upper()}"
+                 if nodes[0].kind is NodeKind.EXPERIMENT else "Compare")
+        params = {
+            "member_refs": [ref.to_dict() for ref in refs],
+            # Legacy-поле оставляем для старых consumers и понятного snapshot.
+            "members": [ref.node_id for ref in refs],
+        }
+        if nid not in variant.nodes:
+            variant.nodes[nid] = GraphNode(nid, NodeKind.COMPARE, title,
+                                           NodeStatus.FRESH, params=params)
+        else:
+            variant.nodes[nid].params.update(params)
+            variant.nodes[nid].title = title
         self.open_node(nid)
         return nid
 

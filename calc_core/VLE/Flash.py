@@ -13,15 +13,15 @@
 """
 
 import logging
+from dataclasses import replace
 
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
-from calc_core.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 from calc_core.Utils.Conditions import Conditions
 from calc_core.Utils.FluidPropertiesCalculator import FluidPropertiesCalculator
+from calc_core.Utils.ResultDiagnostics import ResultWarning, diagnose_flash_result
 from calc_core.VLE.FlashResult import FlashResult, PhaseState
-from dataclasses import dataclass
-from typing import Dict, Any
+from calc_core.VLE.PhaseEquilibriumNewton import PhaseEquilibriumNewton
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class Flash:
         self.phase_stability_object = TwoPhaseStabilityTest(self.composition, self.conditions.p, self.conditions.t)
         self.phase_stability_object.calculate_phase_stability()
 
-        if self.phase_stability_object.stable == False:
+        if not self.phase_stability_object.stable:
             logger.debug("P=%s, T=%s: система нестабильна, двухфазный расчёт", self.conditions.p, self.conditions.t)
             # === ДВУХФАЗНАЯ СИСТЕМА ===
             phase_equil_object = PhaseEquilibriumNewton(
@@ -108,11 +108,22 @@ class Flash:
             )
             self.vapour_phase_props = vapour_phase_props_object.calc_all_properties()
 
-            return FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
+            result = FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
                 vapor=PhaseState(mole_fraction=vapor_frac, composition=self.phase_equil_result['yi_v'], properties=self.vapour_phase_props),
                 liquid=PhaseState(mole_fraction=liquid_frac, composition=self.phase_equil_result['xi_l'], properties=self.liquid_phase_props),
                 is_two_phase=True
             )
+            extra = ()
+            if phase_equil_object.trivial_solution:
+                extra = (ResultWarning(
+                    "trivial_equilibrium",
+                    "Итерации пришли к K≈1; двухфазное представление требует проверки.",
+                    "equilibrium",
+                ),)
+            diagnostics = diagnose_flash_result(
+                result, self.composition.composition, extra_warnings=extra,
+            )
+            return replace(result, diagnostics=diagnostics)
 
         else:
             logger.debug(
@@ -132,9 +143,13 @@ class Flash:
             # а "пару" даем долю 0.0 и тот же состав. 
             # Для DLE это математически идеально: газа выделилось 0, осталась вся жидкость.
             # (Если нужно определить, газ это или жидкость, можно добавить простую проверку плотности)
-            return FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
+            result = FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
                 vapor=PhaseState(mole_fraction=0.0, composition=self.composition.composition, properties={}),
                 liquid=PhaseState(mole_fraction=1.0, composition=self.composition.composition, properties=self.one_phase_stability_props),
                 is_two_phase=False,
                 phase_type=phase_type,
+            )
+            return replace(
+                result,
+                diagnostics=diagnose_flash_result(result, self.composition.composition),
             )

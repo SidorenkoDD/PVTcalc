@@ -1,8 +1,8 @@
 """Корреляции критической температуры C7+ (11 методов) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
 
 import math
-from typing import Dict, Callable
-from calc_core.Utils.Constants import CONSTANT_R
+from typing import Callable
+
 
 class CriticalTemperatureCorrelation:
     """
@@ -174,7 +174,7 @@ class CriticalTemperatureCorrelation:
             'watansiri owens starling': self._watansiri_owens_starling,
         }
         _method = method.lower()
-        if not _method in method_map:
+        if _method not in method_map:
             raise ValueError(f"CriticalTemperatureCorrelation: Unknown correlation method: {method}")
         return method_map[_method]
 

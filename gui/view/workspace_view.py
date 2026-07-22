@@ -2,7 +2,14 @@
 
 import dearpygui.dearpygui as dpg
 
-from gui.app_state import NodeKind, NodeStatus, StateChange, StateChangeKind
+from gui.app_state import (
+    GraphNode,
+    NodeKind,
+    NodeRef,
+    NodeStatus,
+    StateChange,
+    StateChangeKind,
+)
 from gui.services import experiment_service as exp_svc
 from gui.view.contracts import ContextBoundView
 
@@ -15,17 +22,42 @@ class WorkspaceViewMixin(ContextBoundView):
 
     _expanded_models: set[str]
     _expanded_cats: set[str]
-    _compare_selection: set[tuple[str, str]]
+    _compare_selection: list[NodeRef]
     _tabbar_id: int | None
     _tab_ids: dict[str, int]
     _tab_content_ids: dict[str, int]
     _workspace_crumb_id: int | None
+    _rendered_workspace_ref: tuple[str, str] | None
     _bip_ids: dict[tuple[int, int], int]
     _flash_input_ids: dict[str, tuple[int, int]]
     _exp_input_ids: dict[str, dict[str, int]]
     _exp_chart_holder: dict[str, int]
     _lab_data_holder: dict[str, int]
     _lab_data_controls: dict[str, tuple[int, int, int]]
+
+    def _compare_ref(self, model_id: str, node_id: str) -> NodeRef:
+        model = self._state.models.get(model_id)
+        variant_id = next(iter(model.variants), "base") if model else "base"
+        return NodeRef(model_id, variant_id, node_id)
+
+    def _selected_compare_nodes(self) -> list[tuple[NodeRef, GraphNode]]:
+        """Живые выбранные узлы с полным межмодельным адресом."""
+        out = []
+        for ref in self._compare_selection:
+            node = self._state.node_by_ref(ref)
+            if node is not None:
+                out.append((ref, node))
+        return out
+
+    def _compare_selection_count(self, kind: NodeKind,
+                                 experiment_kind: str | None = None) -> int:
+        return len([
+            node for _ref, node in self._selected_compare_nodes()
+            if node.kind is kind and (
+                experiment_kind is None
+                or node.params.get("kind") == experiment_kind
+            )
+        ])
 
     def _render_tree(self) -> None:
         """Показывает модели текущего проекта и узлы активной модели."""
@@ -89,7 +121,7 @@ class WorkspaceViewMixin(ContextBoundView):
         )
         if cat_exp:
             for run in runs:
-                mark = ("[*] " if (model.model_id, run.node_id)
+                mark = ("[*] " if self._compare_ref(model.model_id, run.node_id)
                         in self._compare_selection else "")
                 sel = dpg.add_selectable(
                     label="      " + mark + self._flash_tree_label(run),
@@ -100,10 +132,9 @@ class WorkspaceViewMixin(ContextBoundView):
                 self._attach_flash_context_menu(sel, model.model_id, run.node_id)
             dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
                                user_data=model.model_id, callback=self._on_new_flash)
-            n_sel = sum(1 for selected_mid, node_id in self._compare_selection
-                         if selected_mid == model.model_id and node_id in variant.nodes)
+            n_sel = self._compare_selection_count(NodeKind.FLASH)
             if n_sel >= 2:
-                dpg.add_selectable(label=f"      = Compare ({n_sel})",
+                dpg.add_selectable(label=f"      = Compare selected ({n_sel})",
                                    parent=_MODEL_TREE, user_data=model.model_id,
                                    callback=self._on_open_compare)
 
@@ -126,13 +157,24 @@ class WorkspaceViewMixin(ContextBoundView):
                     parent=_MODEL_TREE, user_data=kkey, callback=self._on_cat_toggle)
                 if kexp:
                     for run in kruns:
+                        mark = ("[*] " if self._compare_ref(mid, run.node_id)
+                                in self._compare_selection else "")
                         sel = dpg.add_selectable(
-                            label="        " + self._exp_run_leaf_label(run),
+                            label="        " + mark + self._exp_run_leaf_label(run),
                             parent=_MODEL_TREE,
                             default_value=(active_nid == run.node_id),
                             user_data=(mid, run.node_id),
                             callback=self._on_tree_open_node)
                         self._attach_exp_context_menu(sel, mid, run.node_id)
+                    selected = self._compare_selection_count(
+                        NodeKind.EXPERIMENT, kind,
+                    )
+                    if selected >= 2:
+                        dpg.add_selectable(
+                            label=f"        = Compare selected {lbl} ({selected})",
+                            parent=_MODEL_TREE, user_data=mid,
+                            callback=self._on_open_compare,
+                        )
                     dpg.add_selectable(label=f"        + New {lbl}",
                                        parent=_MODEL_TREE, user_data=(mid, kind),
                                        callback=self._on_new_experiment)
@@ -227,23 +269,42 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_tree_open_node(self, sender, app_data, user_data) -> None:
         mid, nid = user_data
-        if mid != self._state.active_model_id:
-            self._state.set_active_model(mid)
-        node = self._state.node_by_id(nid)
-        # Ctrl+клик по флэшу — переключить участие в сравнении
-        if self._ctrl_down() and node is not None and node.kind is NodeKind.FLASH:
+        ref = self._compare_ref(mid, nid)
+        node = self._state.node_by_ref(ref)
+        # Ctrl+клик по расчёту — переключить участие в сравнении
+        if (self._ctrl_down() and node is not None
+                and node.kind in (NodeKind.FLASH, NodeKind.EXPERIMENT)):
             self._toggle_compare(mid, nid)
             return
+        if mid != self._state.active_model_id:
+            self._state.set_active_model(mid, notify=False)
+            self._restore_workspace(mid)
         self._state.open_node(nid)
 
     def _toggle_compare(self, model_id: str, node_id: str) -> None:
-        ref = (model_id, node_id)
+        ref = self._compare_ref(model_id, node_id)
         if ref in self._compare_selection:
-            self._compare_selection.discard(ref)
+            self._compare_selection.remove(ref)
         else:
-            self._compare_selection.add(ref)
+            node = self._state.node_by_ref(ref)
+            if node is None:
+                return
+            def compatible(selected_ref: NodeRef) -> bool:
+                selected_node = self._state.node_by_ref(selected_ref)
+                if selected_node is None or selected_node.kind is not node.kind:
+                    return False
+                return (node.kind is NodeKind.FLASH
+                        or selected_node.params.get("kind") == node.params.get("kind"))
+            self._compare_selection = [
+                selected for selected in self._compare_selection if compatible(selected)
+            ]
+            self._compare_selection.append(ref)
         self._render_tree()
-        self._set_status(f"Compare selection: {len(self._compare_selection)} run(s).")
+        model_count = len({selected.model_id for selected in self._compare_selection})
+        self._set_status(
+            f"Compare selection: {len(self._compare_selection)} run(s) "
+            f"from {model_count} model(s).",
+        )
 
     def _on_toggle_compare(self, sender, app_data, user_data) -> None:
         if isinstance(user_data, tuple) and len(user_data) == 2:
@@ -256,18 +317,15 @@ class WorkspaceViewMixin(ContextBoundView):
     def _on_open_compare(self, sender, app_data, user_data) -> None:
         mid = user_data
         if mid != self._state.active_model_id:
-            self._state.set_active_model(mid)
-        variant = self._state.active_variant
-        if variant is None:
-            return
-        members = [node_id for model_id, node_id in self._compare_selection
-                    if model_id == mid and node_id in variant.nodes]
-        self._state.open_compare(members)
+            self._state.set_active_model(mid, notify=False)
+            self._restore_workspace(mid)
+        self._state.open_compare(list(self._compare_selection))
 
     def _on_new_flash(self, sender, app_data, user_data) -> None:
         mid = user_data
         if mid != self._state.active_model_id:
-            self._state.set_active_model(mid)
+            self._state.set_active_model(mid, notify=False)
+            self._restore_workspace(mid)
         self._state.new_flash_run()
         self._set_status("New flash tab opened - set P/T and Run.")
 
@@ -351,7 +409,8 @@ class WorkspaceViewMixin(ContextBoundView):
     def _on_new_experiment(self, sender, app_data, user_data) -> None:
         mid, kind = user_data
         if mid != self._state.active_model_id:
-            self._state.set_active_model(mid)
+            self._state.set_active_model(mid, notify=False)
+            self._restore_workspace(mid)
         composition = self._state.active_composition
         if composition is None:
             return
@@ -376,6 +435,9 @@ class WorkspaceViewMixin(ContextBoundView):
             dpg.add_input_text(hint="rename + Enter", width=200, on_enter=True,
                                user_data=(model_id, node_id),
                                callback=self._on_flash_rename)
+            dpg.add_button(label="Add / remove from compare", width=200,
+                           user_data=(model_id, node_id),
+                           callback=self._on_toggle_compare)
             dpg.add_button(label="Duplicate", width=200,
                            user_data=(model_id, node_id),
                            callback=self._on_exp_duplicate)
@@ -409,11 +471,15 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_new_envelope(self, sender, app_data, user_data) -> None:
         mid = user_data
-        if mid != self._state.active_model_id:
-            self._state.set_active_model(mid)
+        switched = mid != self._state.active_model_id
+        if switched:
+            self._state.set_active_model(mid, notify=False)
+            self._restore_workspace(mid)
         if self._state.active_composition is None:
             return
         self._expanded_cats.add(f"{mid}:env")
+        if switched:
+            self._state.notify(StateChange(StateChangeKind.NAVIGATION))
         # параметры собираем во всплывающем окне; узел заводится по «Run»
         self._open_envelope_dialog(None)
 
@@ -448,10 +514,19 @@ class WorkspaceViewMixin(ContextBoundView):
     def _render_workspace(self) -> None:
         if not dpg.does_item_exist(_WORKSPACE):
             return
+        current_workspace_ref = (
+            (self._state.active_model_id, self._state.active_variant_id)
+            if (self._state.active_model_id is not None
+                and self._state.active_variant_id is not None)
+            else None
+        )
         # синхронизировать закрытые крестиком вкладки до пересборки (иначе
-        # они «воскресли» бы из состояния при следующей отрисовке)
-        self._reconcile_closed_tabs()
+        # они «воскресли» бы из состояния при следующей отрисовке). Tab ids
+        # предыдущей модели нельзя применять к новой: exp_1 там другой узел.
+        if current_workspace_ref == self._rendered_workspace_ref:
+            self._reconcile_closed_tabs()
         dpg.delete_item(_WORKSPACE, children_only=True)
+        self._rendered_workspace_ref = current_workspace_ref
         self._flash_input_ids = {}
         self._exp_input_ids = {}
         self._exp_chart_holder = {}
@@ -584,7 +659,8 @@ class WorkspaceViewMixin(ContextBoundView):
         if node.kind is NodeKind.COMPOSITION:
             return "Composition"
         if node.kind is NodeKind.COMPARE:
-            return f"Compare ({len(node.params.get('members', []))})"
+            members = node.params.get("member_refs", node.params.get("members", []))
+            return f"Compare ({len(members)})"
         if node.kind is NodeKind.EXPERIMENT:
             label = node.params.get("label")
             base = exp_svc.EXPERIMENT_TYPES.get(node.params.get("kind"), {}).get(
@@ -604,7 +680,8 @@ class WorkspaceViewMixin(ContextBoundView):
         if node.kind is NodeKind.COMPOSITION:
             return "Composition"
         if node.kind is NodeKind.COMPARE:
-            return f"Compare ({len(node.params.get('members', []))} runs)"
+            members = node.params.get("member_refs", node.params.get("members", []))
+            return f"Compare ({len(members)} runs)"
         if node.kind is NodeKind.EXPERIMENT:
             return "Experiments  >  " + self._exp_tree_label(node)
         if node.kind is NodeKind.PHASE_ENVELOPE:

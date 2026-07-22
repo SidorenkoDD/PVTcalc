@@ -2,7 +2,7 @@
 Тесты фреймворк-независимого слоя GUI (`gui.app_state` + `gui.services`).
 
 Не импортируют DearPyGui — проверяют только состояние и загрузку моделей
-из `models.json`, поэтому идут в CI без опциональной группы `[gui]`.
+из версионированной тестовой базы, поэтому идут в CI без View.
 """
 
 from pathlib import Path
@@ -17,7 +17,7 @@ from gui.app_state import (
 )
 from gui.services.model_repository import ModelRepository
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 
 @pytest.fixture

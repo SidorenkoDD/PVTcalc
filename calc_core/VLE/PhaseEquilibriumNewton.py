@@ -10,17 +10,19 @@
 """
 
 import logging
+import math
 
 import numpy as np
 
-from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from calc_core.Composition.Composition import Composition
-from calc_core.Utils.Errors import ConvergenceError
+from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from calc_core.Utils.Constants import (
+    TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE,
     TOL_TWO_PHASE_FLASH_CONVERGENCE,
     TOL_TWO_PHASE_FLASH_TRIVIAL_SOLUTION,
-    TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE,
 )
+from calc_core.Utils.Errors import ConvergenceError, InputValidationError
+from calc_core.Utils.Validation import validate_positive_pressure, validate_temperature_kelvin
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +56,47 @@ class PhaseEquilibriumNewton:
             Начальное приближение констант равновесия `{компонент: K_i}`,
             обычно из `TwoPhaseStabilityTest.k_values_for_flash`.
         """
+        validate_positive_pressure(p, name='p')
+        validate_temperature_kelvin(t, name='t')
+
+        if k_values is None:
+            raise InputValidationError('Начальные K-значения не должны быть None.')
+        try:
+            provided_components = set(k_values)
+        except TypeError as exc:
+            raise InputValidationError(
+                'Начальные K-значения должны быть словарём {компонент: K_i}.'
+            ) from exc
+
+        expected_components = set(composition.composition)
+        if provided_components != expected_components:
+            missing = sorted(expected_components - provided_components)
+            extra = sorted(provided_components - expected_components)
+            raise InputValidationError(
+                f'Компоненты K-значений не совпадают с составом: missing={missing}, extra={extra}'
+            )
+
+        validated_k = {}
+        for component in composition.composition:
+            value = k_values[component]
+            try:
+                number = float(value)
+            except (TypeError, ValueError) as exc:
+                raise InputValidationError(
+                    f'K[{component}] должно быть числом. Передано: {value!r}'
+                ) from exc
+            if isinstance(value, bool) or not math.isfinite(number) or number <= 0.0:
+                raise InputValidationError(
+                    f'K[{component}] должно быть конечным и больше 0. Передано: {value!r}'
+                )
+            validated_k[component] = number
+
         self._composition = composition
         self._p = float(p)
         self._t = float(t)
 
         self.zi = composition.composition
-        self.k_values = dict(k_values)
+        self.k_values = validated_k
 
         self.L = 0.5
         self.fv = 1.0 - self.L
@@ -156,7 +193,7 @@ class PhaseEquilibriumNewton:
 
         Raises
         ------
-        ValueError
+        InputValidationError
             Если K-значения не удовлетворяют требованию `K_min < 1 < K_max`
             (необходимое условие существования двухфазного решения).
         """
@@ -164,7 +201,7 @@ class PhaseEquilibriumNewton:
         k_max = float(np.max(self._k))
 
         if not ((k_min < 1.0) and (k_max > 1.0)):
-            raise ValueError(
+            raise InputValidationError(
                 "Константы равновесия не удовлетворяют требованиям уравнения Рэчфорда-Райза"
             )
 
@@ -224,8 +261,12 @@ class PhaseEquilibriumNewton:
         Returns
         -------
         float
-            Найденная мольная доля паровой фазы Fv (или последнее
-            приближение, если `_RR_MAX_ITER` исчерпан без сходимости).
+            Найденная мольная доля паровой фазы Fv.
+
+        Raises
+        ------
+        ConvergenceError
+            Если `_RR_MAX_ITER` исчерпан без достижения допуска.
         """
         fv_left, fv_right = self._rr_bounds()
         fv = float(np.clip(self.fv, fv_left, fv_right))
@@ -254,7 +295,10 @@ class PhaseEquilibriumNewton:
             if (residual_step <= self._RR_NEWTON_TOL) and (residual_func <= self._RR_NEWTON_TOL):
                 return fv
 
-        return fv
+        raise ConvergenceError(
+            f'Rachford-Rice (Newton) не сошёлся за {self._RR_MAX_ITER} итераций '
+            f'(P={self._p} бар, T={self._t} K, residual={abs(self._rr_sum(fv)):.3e})'
+        )
 
     def find_solve_bisection_v4(self, tol=TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE):
         """
@@ -273,6 +317,11 @@ class PhaseEquilibriumNewton:
         -------
         float
             Найденная мольная доля паровой фазы Fv.
+
+        Raises
+        ------
+        ConvergenceError
+            Если `_RR_MAX_ITER` исчерпан без достижения допуска.
         """
         fv_left, fv_right = self._rr_bounds()
         f_left = self._rr_sum(fv_left)
@@ -292,7 +341,10 @@ class PhaseEquilibriumNewton:
                 fv_left = fv
                 f_left = f_mid
 
-        return fv
+        raise ConvergenceError(
+            f'Rachford-Rice (bisection) не сошёлся за {self._RR_MAX_ITER} итераций '
+            f'(P={self._p} бар, T={self._t} K, residual={abs(self._rr_sum(fv)):.3e})'
+        )
 
     # =====================================================================================
     # ФАЗОВЫЕ СОСТАВЫ
@@ -542,7 +594,7 @@ class PhaseEquilibriumNewton:
                 break
 
             i += 1
-            if i > self._FUG_MAX_ITER:
+            if i >= self._FUG_MAX_ITER:
                 logger.warning(
                     "PhaseEquilibriumNewton: не сошлось за %d итераций (P=%s, T=%s), последний Fv=%.6f",
                     self._FUG_MAX_ITER, self._p, self._t, self.fv,

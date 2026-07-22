@@ -18,7 +18,7 @@ import logging
 
 import dearpygui.dearpygui as dpg
 
-from gui.app_state import AppState, NodeKind, StateChange, StateChangeKind
+from gui.app_state import AppState, NodeKind, NodeRef, StateChange, StateChangeKind
 from gui.calculation_coordinator import CalculationCoordinator
 from gui.session import SessionState, save_session
 from gui.view.composition_view import CompositionViewMixin
@@ -71,16 +71,20 @@ class PVTcalcApp(
         # состояние разворота дерева (во View, чтобы переживать перерисовку)
         self._expanded_models: set[str] = set()
         self._expanded_cats: set[str] = set()
-        # выбор узлов для сравнения (Ctrl+клик в дереве)
-        # Полный адрес флэша: локальные node_id (например, flash_1) могут
-        # повторяться в разных моделях одного проекта.
-        self._compare_selection: set[tuple[str, str]] = set()
+        # Выбор узлов для сравнения (Ctrl+клик в дереве). Полный адрес нужен
+        # для Flash и Experiments: локальные exp_1/flash_1 повторяются в
+        # разных моделях одного проекта.
+        self._compare_selection: list[NodeRef] = []
         # id таб-бара и вкладок рабочей области (захватываем при отрисовке,
         # чтобы не плодить фиксированные алиасы при пересоздании)
         self._tabbar_id: int | None = None
         self._tab_ids: dict[str, int] = {}
         self._tab_content_ids: dict[str, int] = {}
         self._workspace_crumb_id: int | None = None
+        # Workspace, которому принадлежат текущие DPG tab ids. Нельзя
+        # reconciliate эти ids с вариантом другой модели: локальные exp_1/
+        # flash_1 там закономерно повторяются.
+        self._rendered_workspace_ref: tuple[str, str] | None = None
         # id полей ввода (захватываем при отрисовке, без фиксированных алиасов)
         self._bip_ids: dict[tuple[int, int], int] = {}
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
@@ -515,13 +519,17 @@ class PVTcalcApp(
         """
         Лениво восстанавливает workspace модели из `session.workspaces[mid]`
         (узлы/результаты/вкладки/сравнение). Повторный вызов для той же модели —
-        no-op (guard `_restored_models`). Модель должна быть активной.
+        no-op (guard `_restored_models`). Активный выбор не меняется.
         """
         if model_id in self._restored_models:
             return
         self._restored_models.add(model_id)
         ws = (self._session.workspaces or {}).get(model_id) or {}
-        variant = self._state.active_variant
+        try:
+            model = self._state.ensure_model_loaded(model_id)
+        except KeyError:
+            return
+        variant = model.variants.get("base")
         if variant is None or not ws:
             return
 
@@ -540,7 +548,21 @@ class PVTcalcApp(
         if variant.envelope_runs():
             self._expanded_cats.add(f"{model_id}:env")
 
-        self._state.clear_history()  # восстановление не откатываем
+        variant.undo_stack.clear()
+        variant.redo_stack.clear()  # восстановление не откатываем
+
+        # Compare может ссылаться на результаты другой модели. Восстановим их
+        # workspace лениво, не переключая активную модель.
+        for node in variant.nodes.values():
+            if node.kind is not NodeKind.COMPARE:
+                continue
+            raw_refs = node.params.get("member_refs")
+            if not isinstance(raw_refs, list):
+                continue
+            for raw_ref in raw_refs:
+                ref = NodeRef.from_dict(raw_ref)
+                if ref is not None and ref.model_id != model_id:
+                    self._restore_workspace(ref.model_id)
 
     @staticmethod
     def _workspace_snapshot(variant) -> dict:

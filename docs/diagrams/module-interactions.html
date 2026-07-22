@@ -403,211 +403,223 @@
 <body>
 
 <div class="titleblock">
-  <p class="eyebrow">PVTcalc · справочная документация</p>
-  <h1>Диаграммы взаимодействия модулей</h1>
-  <p class="dek">Четыре листа: слоистая карта пакетов <code>calc_core/</code>, пошаговый разбор одного флэша, оркестрация PVT-эксперимента по ступеням и карта дублирующихся реализаций в зоне <code>PhaseDiagram/</code>.</p>
+  <p class="eyebrow">PVTcalc · актуальная карта архитектуры</p>
+  <h1>Взаимодействие GUI и расчётного ядра</h1>
+  <p class="dek">Шесть листов: полная вертикаль приложения, внутреннее устройство GUI, жизненный цикл фонового расчёта и три основных пути ядра — Flash, PVT-эксперименты и фазовая огибающая.</p>
   <div class="meta-row">
-    <span><strong>Ветка:</strong> cleanup/remove-dead-legacy-modules</span>
-    <span><strong>Источник:</strong> CLAUDE.md + трассировка импортов</span>
-    <span><strong>Дата:</strong> 2026-07-11</span>
+    <span><strong>Ветка:</strong> gui/phase-0-1-dearpygui</span>
+    <span><strong>Источник:</strong> фактические импорты + docs/GUI.md</span>
+    <span><strong>Обновлено:</strong> 2026-07-19</span>
   </div>
 </div>
 
 <div class="legend">
-  <span class="legend-item"><span class="swatch live"></span>живой модуль</span>
-  <span class="legend-item"><span class="swatch warn"></span>сохранён намеренно / зона дублирования</span>
+  <span class="legend-item"><span class="swatch live"></span>живой основной путь</span>
+  <span class="legend-item"><span class="swatch warn"></span>ограничение / изолированный код</span>
   <span class="legend-item"><span class="swatch entry"></span>точка входа / персистентность</span>
-  <span class="legend-item"><span class="swatch plain"></span>обычный внутренний модуль</span>
+  <span class="legend-item"><span class="swatch plain"></span>внутренний модуль</span>
 </div>
 
 <nav class="index">
   <ol>
-    <li><a href="#sheet-1"><span class="num">01</span><span class="label">Слои пакетов <code>calc_core/</code></span></a></li>
-    <li><a href="#sheet-2"><span class="num">02</span><span class="label">Один флэш: <code>Flash.calculate()</code></span></a></li>
-    <li><a href="#sheet-3"><span class="num">03</span><span class="label">Эксперимент по ступеням (DLE/CCE/Separator)</span></a></li>
-    <li><a href="#sheet-4"><span class="num">04</span><span class="label">Зона дублирования: <code>PhaseDiagram/</code></span></a></li>
+    <li><a href="#sheet-1"><span class="num">01</span><span class="label">Полная вертикаль: пользователь → GUI → calc_core</span></a></li>
+    <li><a href="#sheet-2"><span class="num">02</span><span class="label">Внутренние связи модулей <code>gui/</code></span></a></li>
+    <li><a href="#sheet-3"><span class="num">03</span><span class="label">Фоновый расчёт и реактивное состояние</span></a></li>
+    <li><a href="#sheet-4"><span class="num">04</span><span class="label">Один флэш: от P/T до <code>FlashResult</code></span></a></li>
+    <li><a href="#sheet-5"><span class="num">05</span><span class="label">CCE / DLE / Separator по ступеням</span></a></li>
+    <li><a href="#sheet-6"><span class="num">06</span><span class="label">Фазовая огибающая: SSM, Grid и ограничения</span></a></li>
   </ol>
 </nav>
 
 <!-- ===================== SHEET 1 ===================== -->
 <section class="sheet" id="sheet-1">
   <div class="sheet-head">
-    <div><span class="num">ЛИСТ 01</span><h2>Слои пакетов calc_core/</h2></div>
-    <p class="sheet-note">Снизу вверх: каждый слой использует только нижележащие. Стрелки между полосами — направление зависимости.</p>
+    <div><span class="num">ЛИСТ 01</span><h2>Полная вертикаль приложения</h2></div>
+    <p class="sheet-note">Стрелка вверх означает «использует нижележащий слой». DearPyGui не проникает в state/services и calc_core.</p>
   </div>
   <div class="sheet-body">
     <div class="layers">
-
       <div class="layer">
-        <div class="layer-label">СЛОЙ 7<span class="name">Точка входа</span></div>
+        <div class="layer-label">СЛОЙ 8<span class="name">Запуск и пользователь</span></div>
         <div class="node-row">
-          <div class="node entry"><span class="file">test_notebook.ipynb</span><span class="desc">единственный интеграционный сценарий</span></div>
-          <div class="node entry"><span class="file">Utils/Export.py</span><span class="desc">ModelJSONDB → models.json</span></div>
-          <div class="node warn"><span class="file">Utils/Import.py</span><span class="desc">DBModelImport, заготовка — понадобится</span></div>
+          <div class="node entry"><span class="file">python -m gui</span><span class="desc">gui/__main__.py собирает Repository → State → Session → App</span></div>
+          <div class="node entry"><span class="file">test_notebook.ipynb</span><span class="desc">инженерный сценарий прямого вызова calc_core</span></div>
         </div>
       </div>
       <div class="layer-arrow">▲ использует</div>
 
       <div class="layer">
-        <div class="layer-label">СЛОЙ 6<span class="name">Оркестрация сценариев</span></div>
+        <div class="layer-label">СЛОЙ 7<span class="name">DearPyGui View</span></div>
         <div class="node-row">
-          <div class="node live"><span class="file">CompositionalModel/CompositionalModel.py</span><span class="desc">фасад .flash(P, T)</span></div>
-          <div class="node live"><span class="file">Experiments/{DLE,CCE,SeparatorTest}.py</span><span class="desc">многоступенчатые PVT-эксперименты</span></div>
-          <div class="node warn"><span class="file">PhaseDiagram/*</span><span class="desc">Psat/Pdew/крит.точка — см. Лист 04</span></div>
+          <div class="node live"><span class="file">gui/view/app.py</span><span class="desc">composition root, lifecycle, меню, shortcuts, polling</span></div>
+          <div class="node"><span class="file">gui/view/*_view.py</span><span class="desc">Projects, Composition, Flash/Compare, Experiments, Envelope, Workspace, Dialogs</span></div>
+          <div class="node"><span class="file">gui/view/theme.py</span><span class="desc">единая светлая тема</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ команды / подписка на события</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 6<span class="name">Состояние и jobs</span></div>
+        <div class="node-row">
+          <div class="node live"><span class="file">gui/app_state.py</span><span class="desc">Project → Model → Variant → GraphNode; undo/redo; STALE</span></div>
+          <div class="node live"><span class="file">gui/calculation_coordinator.py</span><span class="desc">одна worker-задача, стабильный NodeRef</span></div>
+          <div class="node entry"><span class="file">gui/session.py + workspace_codec.py</span><span class="desc">gui_session.json v3, восстановление workspace</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ вызывает адаптеры</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 5<span class="name">GUI services</span></div>
+        <div class="node-row">
+          <div class="node live"><span class="file">flash / experiment / phase_envelope</span><span class="desc">валидация, deep copy, перевод единиц, JSON-снимок</span></div>
+          <div class="node"><span class="file">composition / project / model_repository</span><span class="desc">редактирование, импорт, каталог и модели</span></div>
+          <div class="node"><span class="file">clipboard / export / settings</span><span class="desc">таблицы, E300, read-only constants</span></div>
+        </div>
+      </div>
+      <div class="layer-arrow">▲ единственная граница GUI ↔ ядро</div>
+
+      <div class="layer">
+        <div class="layer-label">СЛОЙ 4<span class="name">Публичная оркестрация ядра</span></div>
+        <div class="node-row">
+          <div class="node live"><span class="file">CompositionalModel</span><span class="desc">composition + result store + sub-facades</span></div>
+          <div class="node live"><span class="file">ExperimentsFacade</span><span class="desc">dle / cce / separator → DataFrame</span></div>
+          <div class="node live"><span class="file">PhaseEnvelopeFacade</span><span class="desc">bubble / dew / grid / ssm / newton / critical</span></div>
+          <div class="node live"><span class="file">VLE/Flash.py</span><span class="desc">GUI использует напрямую для корректной однофазной ветви</span></div>
         </div>
       </div>
       <div class="layer-arrow">▲ использует</div>
 
       <div class="layer">
-        <div class="layer-label">СЛОЙ 5<span class="name">Равновесный движок</span></div>
+        <div class="layer-label">СЛОЙ 3<span class="name">Численные алгоритмы</span></div>
         <div class="node-row">
-          <div class="node live"><span class="file">VLE/Flash.py</span><span class="desc">оркестратор одного флэша → FlashResult</span></div>
-          <div class="node live"><span class="file">VLE/PhaseEquilibriumNewton.py</span><span class="desc">Rachford-Rice + Ньютон по фугитивностям</span></div>
-          <div class="node live"><span class="file">PhaseStability/TwoPhaseStabilityTest.py</span><span class="desc">тест Михельсена</span></div>
+          <div class="node live"><span class="file">PhaseStability/* + VLE/*</span><span class="desc">Михельсен, Rachford–Rice, Ньютон; P/T/K validation, явная несходимость и ResultDiagnostics</span></div>
+          <div class="node live"><span class="file">Experiments/{DLE,CCE,SeparatorTest}</span><span class="desc">последовательность ступеней</span></div>
+          <div class="node live"><span class="file">PhaseEnvelope/*</span><span class="desc">Psat, SSM, Newton, Grid</span></div>
         </div>
       </div>
       <div class="layer-arrow">▲ использует</div>
 
       <div class="layer">
-        <div class="layer-label">СЛОЙ 4<span class="name">EOS и свойства фаз</span></div>
+        <div class="layer-label">СЛОЙ 2<span class="name">Термодинамика</span></div>
         <div class="node-row">
-          <div class="node live"><span class="file">EOS/BrusilovskiyEOS.py</span><span class="desc">фугитивности, Z-фактор, якобиан</span></div>
-          <div class="node live"><span class="file">Utils/FluidPropertiesCalculator.py</span><span class="desc">молярный объём/плотность/вязкость (LBC)</span></div>
+          <div class="node live"><span class="file">EOS/BrusilovskiyEOS.py</span><span class="desc">Z, фугитивности, производные</span></div>
+          <div class="node live"><span class="file">Composition/Composition.py</span><span class="desc">zi, свойства компонентов, BIP, EOS-параметры</span></div>
+          <div class="node"><span class="file">Utils/FluidPropertiesCalculator.py</span><span class="desc">объём, плотность, вязкость</span></div>
         </div>
       </div>
       <div class="layer-arrow">▲ использует</div>
 
       <div class="layer">
-        <div class="layer-label">СЛОЙ 3<span class="name">Состав флюида</span></div>
+        <div class="layer-label">СЛОЙ 1<span class="name">Данные и фундамент</span></div>
         <div class="node-row">
-          <div class="node live"><span class="file">Composition/Composition.py</span><span class="desc">Composition: zi + composition_data</span></div>
+          <div class="node entry"><span class="file">ModelStore + models.json</span><span class="desc">схема, lock, revision, atomic write, backups</span></div>
+          <div class="node"><span class="file">DB.json + JsonDBReader</span><span class="desc">компоненты и исходные свойства</span></div>
+          <div class="node"><span class="file">PlusComponents/*</span><span class="desc">32 проверенные корреляции C7+; единицы и зависимости</span></div>
+          <div class="node"><span class="file">Constants / Conditions / Errors / Cardano</span><span class="desc">общие примитивы ядра</span></div>
         </div>
       </div>
-      <div class="layer-arrow">▲ использует</div>
-
-      <div class="layer">
-        <div class="layer-label">СЛОЙ 2<span class="name">Данные и корреляции</span></div>
-        <div class="node-row">
-          <div class="node"><span class="file">Utils/JsonDBReader.py</span><span class="desc">+ BaseClasses.Reader → DB.json</span></div>
-          <div class="node"><span class="file">Utils/BRS_EOS_DB.py</span><span class="desc">EOS-параметры компонентов + BIP</span></div>
-          <div class="node"><span class="file">PlusComponents/*</span><span class="desc">6 корреляций свойств C7+</span></div>
-        </div>
-      </div>
-      <div class="layer-arrow">▲ использует</div>
-
-      <div class="layer">
-        <div class="layer-label">СЛОЙ 1<span class="name">Фундамент</span></div>
-        <div class="node-row">
-          <div class="node"><span class="file">Utils/Constants.py</span><span class="desc">CONSTANT_R, допуски сходимости</span></div>
-          <div class="node"><span class="file">Utils/Errors.py</span><span class="desc">иерархия исключений</span></div>
-          <div class="node"><span class="file">Utils/Cardano.py</span><span class="desc">решатель кубического уравнения</span></div>
-          <div class="node"><span class="file">Utils/Conditions.py</span><span class="desc">P/T условия ⚠ баг 273.14</span></div>
-          <div class="node"><span class="file">EOS/BaseEOS.py</span><span class="desc">EOSType, абстрактный EOS</span></div>
-        </div>
-      </div>
-
     </div>
   </div>
-  <p class="sheet-foot">Не показаны на диаграмме: 25 удалённых legacy-файлов (calculations.*) и намеренно сохранённый нерабочий <code>EOS/RootChooser.py</code> — см. CLAUDE.md, раздел «Live vs Legacy».</p>
+  <p class="sheet-foot">Архитектурное исключение: <code>flash_service</code> вызывает <code>VLE.Flash</code> напрямую, потому что текущий <code>CompositionalModel.flash()</code> не является полным одно-/двухфазным контрактом. Это отдельная задача R2.1 в ROADMAP.md.</p>
 </section>
 
 <!-- ===================== SHEET 2 ===================== -->
 <section class="sheet" id="sheet-2">
   <div class="sheet-head">
-    <div><span class="num">ЛИСТ 02</span><h2>Один флэш: Flash.calculate()</h2></div>
-    <p class="sheet-note">Что передаётся между модулями внутри одного вызова — от состава и условий до FlashResult.</p>
+    <div><span class="num">ЛИСТ 02</span><h2>Внутреннее устройство gui/</h2></div>
+    <p class="sheet-note">View рисует и передаёт команды. Состояние решает, что изменилось. Services знают формат ядра, но не знают DearPyGui.</p>
   </div>
   <div class="sheet-body">
-    <div class="flow">
-      <div class="step">
-        <div class="title">Composition(zi, T_res, eos_name) + Conditions(p_bar, t_C)</div>
-        <div class="sub">вход: мольные доли, давление, температура</div>
+    <div class="dup-grid">
+      <div class="dup-card">
+        <span class="status-chip used">composition root</span>
+        <span class="file">view/app.py · PVTcalcApp</span>
+        <span class="class">ViewContext(state, session, jobs)</span>
+        <p class="note">Создаёт DPG context/layout, связывает feature-view, подписывается на StateChange, сохраняет сессию и опрашивает job.</p>
       </div>
-      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, conditions</span></div>
-      <div class="step">
-        <div class="title">Flash.calculate()</div>
-        <div class="sub"><code>calc_core/VLE/Flash.py</code></div>
+      <div class="dup-card">
+        <span class="status-chip alt">feature views</span>
+        <span class="file">projects / composition / flash / experiment / envelope</span>
+        <span class="class">+ workspace / dialogs / new_fluid_form</span>
+        <p class="note">Каждый экран импортирует DPG, свой GUI-сервис и контракт ViewHost; обратного импорта из feature-view в app.py нет.</p>
       </div>
-      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, P, T</span></div>
-      <div class="step">
-        <div class="title">TwoPhaseStabilityTest.calculate_phase_stability()</div>
-        <div class="sub">внутри — BrusilovskiyEOS считает фугитивности пробных фаз (Wilson K-старт)</div>
+      <div class="dup-card">
+        <span class="status-chip used">view model</span>
+        <span class="file">app_state.py · AppState</span>
+        <span class="class">Project / Model / Variant / GraphNode / NodeRef</span>
+        <p class="note">Команды редактирования, навигация, dirty/save, undo/redo, история узлов и ленивая инвалидация; Compare хранит полные межмодельные NodeRef.</p>
       </div>
-      <div class="connector"><span class="arrow">↓</span><span class="payload">stable: bool, k_values, S_v, S_l</span></div>
+      <div class="dup-card">
+        <span class="status-chip alt">events</span>
+        <span class="file">StateChangeKind</span>
+        <span class="class">FULL · NAVIGATION · MODEL_LIST · TREE · WORKSPACE · NODE</span>
+        <p class="note">Определяет минимальную область перерисовки. NODE-событие несёт NodeRef, поэтому соседние вкладки не пересоздаются.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip used">calculations</span>
+        <span class="file">calculation_coordinator.py</span>
+        <span class="class">CalculationJob(node_ref, result, error, done)</span>
+        <p class="note">Не более одной daemon worker-задачи. View применяет результат в главном DPG-потоке к адресу model/variant/node.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip alt">persistence</span>
+        <span class="file">session.py + workspace_codec.py</span>
+        <span class="class">SessionState ↔ gui_session.json v3</span>
+        <p class="note">Сохраняет окно, workspaces, параметры и снимки результатов; санирует повреждения, RUNNING после рестарта становится STALE.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip used">comparison R3.2</span>
+        <span class="file">services/comparison_service.py</span>
+        <span class="class">DLE / CCE / Separator → series + deviations</span>
+        <p class="note">Без DearPyGui проверяет одинаковый тип и условия, сопоставляет сетки, готовит межмодельные расчётные/Lab Data кривые и абсолютные/относительные отклонения.</p>
+      </div>
     </div>
 
-    <div class="branch-wrap">
-      <div>
-        <div class="branch-head unstable">если unstable → 2 фазы</div>
-        <div class="flow">
-          <div class="step">
-            <div class="title">PhaseEquilibriumNewton.find_solve_loop()</div>
-            <div class="sub">Rachford-Rice (Fv) → Ньютон по ln(fugacity)</div>
-          </div>
-          <div class="connector"><span class="arrow">↓</span><span class="payload">xi_l, yi_v, Fv</span></div>
-          <div class="step">
-            <div class="title">FluidPropertiesCalculator ×2</div>
-            <div class="sub">по жидкости и по пару отдельно</div>
-          </div>
-          <div class="connector"><span class="arrow">↓</span><span class="payload">M, Vm, ρ, Z, μ (LBC)</span></div>
-          <div class="step">
-            <div class="title">FlashResult(vapor, liquid, is_two_phase=True)</div>
-          </div>
-        </div>
-      </div>
-      <div>
-        <div class="branch-head stable">если stable → 1 фаза («ТРЮК»)</div>
-        <div class="flow">
-          <div class="step">
-            <div class="title">весь состав → жидкость</div>
-            <div class="sub">vapor.mole_fraction = 0.0, без проверки газ/жидкость</div>
-          </div>
-          <div class="connector"><span class="arrow">↓</span><span class="payload">composition.composition</span></div>
-          <div class="step">
-            <div class="title">FluidPropertiesCalculator ×1</div>
-          </div>
-          <div class="connector"><span class="arrow">↓</span><span class="payload">M, Vm, ρ, Z, μ</span></div>
-          <div class="step">
-            <div class="title">FlashResult(is_two_phase=False)</div>
-            <div class="sub">PhaseIdentificator мог бы уточнить фазу, но не интегрирован в Flash</div>
-          </div>
-        </div>
-      </div>
+    <div class="flow" style="margin-top:1.4rem">
+      <div class="step"><div class="title">Feature-view</div><div class="sub">читает AppState, вызывает команду или service</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">команда пользователя</span></div>
+      <div class="step"><div class="title">AppState / GUI service / CalculationCoordinator</div><div class="sub">изменяет state или считает через calc_core</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">StateChange(kind, node_ref)</span></div>
+      <div class="step"><div class="title">PVTcalcApp</div><div class="sub">перерисовывает Projects, tree, workspace или только одну вкладку</div></div>
     </div>
   </div>
+  <p class="sheet-foot">Текущий feature-view контракт реализован mixin-композицией через <code>ContextBoundView</code>. Переход к объектной композиции возможен по одному экрану и не требует менять services/state.</p>
 </section>
 
 <!-- ===================== SHEET 3 ===================== -->
 <section class="sheet" id="sheet-3">
   <div class="sheet-head">
-    <div><span class="num">ЛИСТ 03</span><h2>Эксперимент по ступеням</h2></div>
-    <p class="sheet-note">DLE / CCE / SeparatorTest — общий скелет, состав жидкости переходит со ступени на ступень.</p>
+    <div><span class="num">ЛИСТ 03</span><h2>Жизненный цикл фонового расчёта</h2></div>
+    <p class="sheet-note">Одинаков для Flash, CCE/DLE/Separator и Phase envelope. DearPyGui вызывается только в главном потоке.</p>
   </div>
   <div class="sheet-body">
     <div class="flow">
-      <div class="step">
-        <div class="title">Composition (пластовый) + список ступеней</div>
-        <div class="sub">давления (DLE/CCE) или пары P/T (SeparatorTest)</div>
+      <div class="step"><div class="title">View валидирует поля и фиксирует params узла</div><div class="sub">P/T, ступени, метод огибающей, диапазоны сетки</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">NodeRef(model_id, variant_id, node_id)</span></div>
+      <div class="step"><div class="title">AppState.set_node_running()</div><div class="sub">EMPTY/FRESH/STALE → RUNNING; StateChange(NODE)</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">operation: Callable</span></div>
+      <div class="step"><div class="title">CalculationCoordinator.start()</div><div class="sub">daemon thread; одновременно допускается одна задача</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">gui.services.* → calc_core</span></div>
+      <div class="step"><div class="title">Service делает deep copy и вызывает ядро</div><div class="sub">результат преобразуется в FlashResult или JSON-совместимый dict</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">job.done / result / error</span></div>
+      <div class="step"><div class="title">PVTcalcApp polling через frame callback</div><div class="sub">главный поток безопасно забирает take_finished()</div></div>
+    </div>
+    <div class="branch-wrap">
+      <div>
+        <div class="branch-head unstable">успех</div>
+        <div class="flow">
+          <div class="step"><div class="title">set_node_result(ref, result)</div><div class="sub">RUNNING → FRESH</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">StateChange(NODE)</span></div>
+          <div class="step"><div class="title">Обновляется только целевая вкладка</div><div class="sub">session autosave сохраняет снимок workspace</div></div>
+        </div>
       </div>
-      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, T</span></div>
-      <div class="step">
-        <div class="title">SaturationPressure.sp_convergence_loop()</div>
-        <div class="sub"><code>PhaseDiagram/new_methodv2.py</code> — напрямую через TwoPhaseStabilityTest, минуя Flash</div>
-      </div>
-      <div class="connector"><span class="arrow">↓</span><span class="payload">P_sat</span></div>
-      <div class="step">
-        <div class="title">цикл по ступеням i = 1…N</div>
-        <div class="sub">Flash(composition_i, conditions_i).calculate() → FlashResult_i</div>
-      </div>
-      <div class="connector"><span class="arrow">↻</span><span class="payload">composition.new_composition(xi_l)</span></div>
-      <div class="step">
-        <div class="title">жидкость со ступени i → состав ступени i+1</div>
-        <div class="sub">пар со ступени считается «ушедшим», не участвует дальше</div>
-      </div>
-      <div class="connector"><span class="arrow">↓</span><span class="payload">[FlashResult_1 … FlashResult_N]</span></div>
-      <div class="step">
-        <div class="title">_vectorize_dle_results(...)</div>
-        <div class="sub">Bo, Rs и т.п. — код дословно продублирован между DLE.py и SeparatorTest.py</div>
+      <div>
+        <div class="branch-head stable">ошибка или cancel</div>
+        <div class="flow">
+          <div class="step"><div class="title">set_node_error() или reset_node()</div><div class="sub">ошибка видна в узле; готовый отменённый результат отбрасывается</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">текущее ограничение</span></div>
+          <div class="step"><div class="title">Солвер продолжает работу после Cancel</div><div class="sub">cancellation token в calc_core пока отсутствует</div></div>
+        </div>
       </div>
     </div>
   </div>
@@ -616,56 +628,148 @@
 <!-- ===================== SHEET 4 ===================== -->
 <section class="sheet" id="sheet-4">
   <div class="sheet-head">
-    <div><span class="num">ЛИСТ 04</span><h2>Зона дублирования: PhaseDiagram/</h2></div>
-    <p class="sheet-note">Единственная область с 4–5 параллельными реализациями одной задачи. Ни одна не канонична.</p>
+    <div><span class="num">ЛИСТ 04</span><h2>Один флэш: Flash.calculate()</h2></div>
+    <p class="sheet-note">Основной путь равновесного расчёта. Однофазный тип теперь уточняет PhaseIdentificator.</p>
   </div>
   <div class="sheet-body">
-    <div class="dup-grid">
-      <div class="dup-card">
-        <span class="status-chip used">используется в проде</span>
-        <span class="file">new_methodv2.py</span>
-        <span class="class">SaturationPressure</span>
-        <p class="note">Вызывается напрямую из DLE / CCE / SeparatorTest — де-факто основная версия.</p>
-      </div>
-      <div class="dup-card">
-        <span class="status-chip alt">независимая реализация</span>
-        <span class="file">BubblePointPressure.py + DewPressure.py</span>
-        <span class="class">BubblePointCalculator / DewPointCalculator</span>
-        <p class="note">Используется в test_notebook.ipynb, но не в экспериментах.</p>
-      </div>
-      <div class="dup-card">
-        <span class="status-chip alt">версия Дениса</span>
-        <span class="file">SaturationPressure_den_v.py</span>
-        <span class="class">DewPointCalculator</span>
-        <p class="note">В коде открытая пометка: «непонятно, откуда брать K-факторы».</p>
-      </div>
-      <div class="dup-card">
-        <span class="status-chip used">используется в проде</span>
-        <span class="file">CriticalPoint.py</span>
-        <span class="class">CriticalPointCalculator</span>
-        <p class="note">Критерий: минимизация зазора между bubble- и dew-кривой.</p>
-      </div>
-      <div class="dup-card">
-        <span class="status-chip orphan">осиротевший</span>
-        <span class="file">CriticalProperties_den_v.py</span>
-        <span class="class">CriticalPointCalculator</span>
-        <p class="note">Тот же класс, другой критерий (касательная плоскость). Единственный потребитель — сломанный CVD_den_v.py.</p>
-      </div>
-      <div class="dup-card">
-        <span class="status-chip notebook">только в ноутбуке</span>
-        <span class="file">test_notebook.ipynb, ячейки «From VBA» / «Parallel»</span>
-        <span class="class">CriticalPointCalculator / PhaseDiagramCalculator</span>
-        <p class="note">Ещё 2 реализации существуют только внутри ячеек, не вынесены в calc_core/.</p>
-      </div>
+    <div class="flow">
+      <div class="step"><div class="title">gui.services.flash_service.run_flash()</div><div class="sub">валидация → глубокая копия Composition → Conditions(P bar, T °C)</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, conditions</span></div>
+      <div class="step"><div class="title">VLE/Flash.py · Flash.calculate()</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">composition, P, T</span></div>
+      <div class="step"><div class="title">TwoPhaseStabilityTest.calculate_phase_stability()</div><div class="sub">BrusilovskiyEOS считает фугитивности пробных фаз; Wilson K-старт</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">stable, K, S_v, S_l</span></div>
     </div>
-    <div class="dup-callout">
-      При любой задаче, связанной с давлением насыщения, конденсации, критической точкой или фазовой огибающей — <strong>уточнять у пользователя, с какой реализацией работать</strong>, не выбирать самостоятельно.
+    <div class="branch-wrap">
+      <div>
+        <div class="branch-head unstable">нестабильно → две фазы</div>
+        <div class="flow">
+          <div class="step"><div class="title">PhaseEquilibriumNewton</div><div class="sub">Rachford–Rice → Ньютон по ln(fugacity)</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">xi, yi, Fv</span></div>
+          <div class="step"><div class="title">FluidPropertiesCalculator ×2</div><div class="sub">M, Vm, ρ, Z, μ для liquid и vapor</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">FlashResult</span></div>
+          <div class="step"><div class="title">is_two_phase=True</div></div>
+        </div>
+      </div>
+      <div>
+        <div class="branch-head stable">стабильно → одна фаза</div>
+        <div class="flow">
+          <div class="step"><div class="title">PhaseIdentificator</div><div class="sub">phase_type = vapor | liquid | ambiguous</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">общий состав</span></div>
+          <div class="step"><div class="title">FluidPropertiesCalculator ×1</div><div class="sub">свойства существующей фазы</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">FlashResult</span></div>
+          <div class="step"><div class="title">is_two_phase=False + phase_type</div></div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
 
+<!-- ===================== SHEET 5 ===================== -->
+<section class="sheet" id="sheet-5">
+  <div class="sheet-head">
+    <div><span class="num">ЛИСТ 05</span><h2>Эксперименты по ступеням</h2></div>
+    <p class="sheet-note">GUI идёт через ExperimentsFacade; внутри DLE/CCE/Separator пока сохраняют отдельную зависимость от new_methodv2.</p>
+  </div>
+  <div class="sheet-body">
+    <div class="flow">
+      <div class="step"><div class="title">experiment_view.py</div><div class="sub">параметры, Lab Data, запуск, таблицы и графики</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">kind + validated params</span></div>
+      <div class="step"><div class="title">gui.services.experiment_service</div><div class="sub">deep copy → CompositionalModel.experiments</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">dle / cce / separator</span></div>
+      <div class="step"><div class="title">ExperimentsFacade</div><div class="sub">валидация границы, копия состава, единый DataFrame</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">Composition + ступени</span></div>
+      <div class="step"><div class="title">DLE.py / CCE.py / SeparatorTest.py</div><div class="sub">сначала new_methodv2.SaturationPressure → P_sat</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">цикл i = 1…N</span></div>
+      <div class="step"><div class="title">Flash(composition_i, conditions_i)</div><div class="sub">для DLE/Separator жидкость xi становится составом следующей ступени; в CCE общий состав сохраняется</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">FlashResult[] → vectorize</span></div>
+      <div class="step"><div class="title">DataFrame + composition_by_stage</div><div class="sub">service удаляет dict-колонки из плоской таблицы и делает JSON-снимок для GUI/session; пустые свойства отсутствующей фазы считаются штатными</div></div>
+    </div>
+    <div class="dup-callout"><strong>Технический долг:</strong> Psat экспериментов и Psat на SSM-огибающей идут разными путями. CCE зависит от капризной сходимости <code>new_methodv2</code>; унификация запланирована как R1.3–R1.4.</div>
+  </div>
+</section>
+
+<!-- ===================== SHEET 6 ===================== -->
+<section class="sheet" id="sheet-6">
+  <div class="sheet-head">
+    <div><span class="num">ЛИСТ 06</span><h2>Фазовая огибающая: актуальная схема</h2></div>
+    <p class="sheet-note">Каталог PhaseDiagram переименован в PhaseEnvelope. Канонические реализации выбраны; оставшиеся ограничения показаны явно.</p>
+  </div>
+  <div class="sheet-body">
+    <div class="flow">
+      <div class="step"><div class="title">envelope_view.py → phase_envelope_service.py</div><div class="sub">метод ssm или grid, диапазоны T/P, глубокая копия состава</div></div>
+      <div class="connector"><span class="arrow">↓</span><span class="payload">CompositionalModel.phase_envelope</span></div>
+      <div class="step"><div class="title">PhaseEnvelopeFacade</div><div class="sub">валидация, копирование; Bubble/Dew принимаются только после двусторонней stability-проверки</div></div>
+    </div>
+    <div class="branch-wrap">
+      <div>
+        <div class="branch-head unstable">method = ssm</div>
+        <div class="flow">
+          <div class="step"><div class="title">PhaseEnvelopeSSM</div><div class="sub">марш по температуре, stability + последовательные приближения</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">ветви + attrs.diagnostics по каждой T</span></div>
+          <div class="step"><div class="title">phase_envelope_service</div><div class="sub">сшивает ветви; переносит причины NaN в JSON; Psat(T_res) интерполирует по этой же кривой</div></div>
+        </div>
+      </div>
+      <div>
+        <div class="branch-head stable">method = grid</div>
+        <div class="flow">
+          <div class="step"><div class="title">PhaseEnvelopeGrid</div><div class="sub">параллельный scan P×T через TwoPhaseStabilityTest</div></div>
+          <div class="connector"><span class="arrow">↓</span><span class="payload">stable / two-phase points</span></div>
+          <div class="step"><div class="title">phase_envelope_service</div><div class="sub">scatter-снимок; Psat не интерполируется</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dup-grid" style="margin-top:1.4rem">
+      <div class="dup-card">
+        <span class="status-chip used">канонический основной</span>
+        <span class="file">PhaseEnvelopeSuccessiveSubstitution.py</span>
+        <span class="class">PhaseEnvelopeSSM</span>
+        <p class="note">Основной GUI-путь кривой огибающей.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip alt">канонический точечный</span>
+        <span class="file">BubblePointPressure.py / DewPressure.py</span>
+        <span class="class">BubblePointCalculator / DewPointCalculator</span>
+        <p class="note">Сырой converged=True недостаточен: фасад подтверждает смену устойчивости и физический тип.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip alt">канонический альтернативный</span>
+        <span class="file">PhaseEnvelopeNewton.py / PhaseEnvelopeGrid.py</span>
+        <span class="class">PhaseEnvelopeNewton / PhaseEnvelopeGrid</span>
+        <p class="note">Newton — уточнение точек; Grid — карта стабильности и затравки.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip used">диагностика R1.1</span>
+        <span class="file">Diagnostics.py</span>
+        <span class="class">EnvelopeDiagnostic / attach_diagnostics</span>
+        <p class="note">Различает штатное отсутствие ветви, несходимость, неверифицированный корень и пропуск после остановки; GUI получает тот же JSON-контракт.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip orphan">не показывается в GUI</span>
+        <span class="file">CriticalPoint.py</span>
+        <span class="class">CriticalPointCalculator</span>
+        <p class="note">Единственная живая публичная реализация, но пока недостоверна для многокомпонентных составов.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip orphan">переходный путь</span>
+        <span class="file">new_methodv2.py</span>
+        <span class="class">SaturationPressure</span>
+        <p class="note">Не используется GUI-огибающей, но пока вызывается DLE/CCE/Separator.</p>
+      </div>
+      <div class="dup-card">
+        <span class="status-chip notebook">изолировано</span>
+        <span class="file">*_den_v.py + CVD_den_v.py</span>
+        <span class="class">альтернативная критическая точка / незавершённый CVD</span>
+        <p class="note">Не входят в фасад и GUI; CVD имеет сломанный импорт класса.</p>
+      </div>
+    </div>
+    <div class="dup-callout"><strong>R1.1:</strong> полная огибающая — SSM; Newton — независимая сверка с fallback на SSM; Grid — карта, а не точная Psat. Причина NaN больше не теряется. Ноутбучные реализации «From VBA» / «Parallel» удалены 2026-07-19.</div>
+  </div>
+</section>
+
 <footer class="colophon">
-  PVTcalc / calc_core — построено по CLAUDE.md и трассировке импортов, 2026-07-11
+  PVTcalc · gui + calc_core — карта сверена с кодом и документацией, 2026-07-21
 </footer>
 
 </body>

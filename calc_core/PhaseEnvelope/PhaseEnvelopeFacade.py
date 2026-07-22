@@ -13,28 +13,40 @@
 разный набор обязательных параметров — здесь это спрятано за одинаковыми по
 форме методами `bubble_point`/`dew_point`/`critical_point`/`grid`/`ssm`/`newton`.
 
-Для `bubble_point`/`dew_point`/`critical_point` (одноточечные решения методом
-Ньютона) явный сигнал несходимости (`.converged` / `None`) переводится в
-`ConvergenceError`, а не молча возвращается наружу. Для `ssm`/`newton` — не
-переводится: результат там — таблица по сетке температур, где NaN на части
-строк (выше крикондентермы, например) — нормальный физический результат, а не
-ошибка расчёта. Для `grid()` — сигнала несходимости нет вовсе (это скан
-стабильности, не итеративный солвер).
+Для `bubble_point`/`dew_point` недостаточно сигнала `.converged`: сырой Newton
+может сойтись к математическому корню внутри или вне двухфазной области.
+Поэтому фасад дополнительно подтверждает смену устойчивости по обе стороны
+давления; неподтверждённый корень переводится в `ConvergenceError`.
+`critical_point` пока проверяет только `None` и остаётся отдельной задачей R1.2.
+Для `ssm`/`newton` исключение на частичном результате не поднимается: причина
+каждого NaN доступна в `DataFrame.attrs['diagnostics']`. Для `grid()` общего
+сигнала несходимости пока нет (это набор независимых тестов стабильности).
 
-Валидация входных P/T и общая иерархия исключений (`PVTCalcError` и т.п.) —
-не здесь, это отдельная задача (см. `docs/BACKLOG.md`).
+Граничная валидация входных P/T выполняется здесь; валидация прямых вызовов
+низкоуровневых классов остаётся отдельной задачей (см. `docs/BACKLOG.md`).
 """
 
 import logging
+from typing import TYPE_CHECKING
 
 from calc_core.PhaseEnvelope.BubblePointPressure import BubblePointCalculator
-from calc_core.PhaseEnvelope.DewPressure import DewPointCalculator
 from calc_core.PhaseEnvelope.CriticalPoint import CriticalPointCalculator
+from calc_core.PhaseEnvelope.DewPressure import DewPointCalculator
 from calc_core.PhaseEnvelope.PhaseEnvelopeGrid import PhaseEnvelopeGrid
+from calc_core.PhaseEnvelope.PhaseEnvelopeNewton import (
+    PhaseEnvelopeNewton,
+    verify_saturation_boundary,
+)
 from calc_core.PhaseEnvelope.PhaseEnvelopeSuccessiveSubstitution import PhaseEnvelopeSSM
-from calc_core.PhaseEnvelope.PhaseEnvelopeNewton import PhaseEnvelopeNewton
-from calc_core.Utils.Errors import ConvergenceError, InputValidationError
-from calc_core.Utils.Validation import validate_positive_pressure, validate_temperature_kelvin, validate_temperature_celsius
+from calc_core.Utils.Errors import ConvergenceError, InputValidationError, StopIterationError
+from calc_core.Utils.Validation import (
+    validate_positive_pressure,
+    validate_temperature_celsius,
+    validate_temperature_kelvin,
+)
+
+if TYPE_CHECKING:
+    from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +77,11 @@ class PhaseEnvelopeFacade:
         return composition.new_composition(composition.composition, deep_copy=True)
 
     @staticmethod
-    def _validate_envelope_range(t_min_c, t_max_c, p_max_bar):
+    def _validate_envelope_range(t_min_c, t_max_c, t_step_c, p_max_bar):
         """Валидация общего для `ssm`/`newton` диапазона огибающей (T в °C, P в бар)."""
         validate_temperature_celsius(t_min_c, name='t_min_c')
         validate_temperature_celsius(t_max_c, name='t_max_c')
+        validate_positive_pressure(t_step_c, name='t_step_c')
         validate_positive_pressure(p_max_bar, name='p_max_bar')
         if t_max_c <= t_min_c:
             raise InputValidationError(
@@ -97,20 +110,43 @@ class PhaseEnvelopeFacade:
         InputValidationError
             Если `T_k` <= 0 K.
         ConvergenceError
-            Если `BubblePointCalculator` не сошёлся.
+            Если калькулятор не сошёлся или корень не подтверждён независимым
+            двусторонним тестом стабильности.
         """
         validate_temperature_kelvin(T_k)
         calc = BubblePointCalculator(self._composition_copy(), T_k, **kwargs)
         p = calc.calculate()
 
+        verified_type = None
+        verification_error = None
+        if calc.converged and p is not None:
+            try:
+                verified_type = verify_saturation_boundary(
+                    calc.composition, T_k, p, nudge_sign=-1.0,
+                )
+            except StopIterationError as exc:
+                verification_error = str(exc)
+
         self._model.result_store_object.add(
             module='PhaseEnvelope.bubble_point',
             params={'T_k': T_k, **kwargs},
-            data={'P': p, 'converged': calc.converged},
+            data={
+                'P': p,
+                'converged': calc.converged,
+                'verified_type': verified_type,
+                'verification_error': verification_error,
+            },
         )
 
         if not calc.converged:
             raise ConvergenceError(f'BubblePointCalculator не сошёлся при T={T_k} K')
+        if verified_type != 'bubble':
+            reason = 'тест стабильности не сошёлся' if verification_error else (
+                f'граница не подтверждена как bubble (тип={verified_type})'
+            )
+            raise ConvergenceError(
+                f'BubblePointCalculator вернул непроверенный корень при T={T_k} K: {reason}'
+            )
         return p
 
     def dew_point(self, T_k: float, **kwargs) -> float:
@@ -135,20 +171,44 @@ class PhaseEnvelopeFacade:
         InputValidationError
             Если `T_k` <= 0 K.
         ConvergenceError
-            Если `DewPointCalculator` не сошёлся или вернул `None`.
+            Если калькулятор не сошёлся, вернул `None` или корень не
+            подтверждён независимым двусторонним тестом стабильности.
         """
         validate_temperature_kelvin(T_k)
         calc = DewPointCalculator(self._composition_copy(), T_k, **kwargs)
         p = calc.calculate()
 
+        verified_type = None
+        verification_error = None
+        if calc.converged and p is not None:
+            nudge_sign = 1.0 if calc.dew_point_type == 'lower' else -1.0
+            try:
+                verified_type = verify_saturation_boundary(
+                    calc.composition, T_k, p, nudge_sign=nudge_sign,
+                )
+            except StopIterationError as exc:
+                verification_error = str(exc)
+
         self._model.result_store_object.add(
             module='PhaseEnvelope.dew_point',
             params={'T_k': T_k, **kwargs},
-            data={'P': p, 'converged': calc.converged},
+            data={
+                'P': p,
+                'converged': calc.converged,
+                'verified_type': verified_type,
+                'verification_error': verification_error,
+            },
         )
 
         if not calc.converged or p is None:
             raise ConvergenceError(f'DewPointCalculator не сошёлся при T={T_k} K')
+        if verified_type != 'dew':
+            reason = 'тест стабильности не сошёлся' if verification_error else (
+                f'граница не подтверждена как dew (тип={verified_type})'
+            )
+            raise ConvergenceError(
+                f'DewPointCalculator вернул непроверенный корень при T={T_k} K: {reason}'
+            )
         return p
 
     def critical_point(self, **kwargs) -> dict:
@@ -261,10 +321,10 @@ class PhaseEnvelopeFacade:
         Raises
         ------
         InputValidationError
-            Если `p_max_bar` <= 0, температуры ниже абсолютного нуля или
-            `t_max_c` <= `t_min_c`.
+            Если `p_max_bar`/`t_step_c` <= 0, температуры ниже абсолютного
+            нуля или `t_max_c` <= `t_min_c`.
         """
-        self._validate_envelope_range(t_min_c, t_max_c, p_max_bar)
+        self._validate_envelope_range(t_min_c, t_max_c, t_step_c, p_max_bar)
         calc = PhaseEnvelopeSSM(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
         df = calc.calculate_parallel() if parallel else calc.calculate()
 
@@ -305,10 +365,10 @@ class PhaseEnvelopeFacade:
         Raises
         ------
         InputValidationError
-            Если `p_max_bar` <= 0, температуры ниже абсолютного нуля или
-            `t_max_c` <= `t_min_c`.
+            Если `p_max_bar`/`t_step_c` <= 0, температуры ниже абсолютного
+            нуля или `t_max_c` <= `t_min_c`.
         """
-        self._validate_envelope_range(t_min_c, t_max_c, p_max_bar)
+        self._validate_envelope_range(t_min_c, t_max_c, t_step_c, p_max_bar)
         calc = PhaseEnvelopeNewton(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
         df = calc.calculate_parallel() if parallel else calc.calculate()
 

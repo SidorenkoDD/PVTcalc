@@ -19,7 +19,7 @@ from gui.view.app import (
 from gui.view.contracts import ViewHost
 from gui.view.workspace_view import _MODEL_TREE
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 
 def _text_values(root: int | str) -> list[str]:
@@ -259,7 +259,7 @@ def test_project_delete_dialog_warns_about_dirty_loaded_models(tmp_path):
         dpg.destroy_context()
 
 
-def test_compare_selection_is_scoped_to_model(tmp_path):
+def test_compare_selection_distinguishes_same_local_id_across_models(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)
     copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
@@ -279,6 +279,7 @@ def test_compare_selection_is_scoped_to_model(tmp_path):
         assert copy_flash == "flash_1"
 
         app._toggle_compare("KRSNL_PVTSIM", source_flash)
+        app._toggle_compare(copy_id, copy_flash)
         labels = [
             dpg.get_item_label(child)
             for children in dpg.get_item_children(_MODEL_TREE).values()
@@ -286,9 +287,99 @@ def test_compare_selection_is_scoped_to_model(tmp_path):
             if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
         ]
         starred = [label for label in labels if "[*]" in label]
-        assert len(starred) == 1
-        assert "100 bar / 50 C" in starred[0]
+        assert len(starred) == 2
+        assert all("100 bar / 50 C" in label for label in starred)
+        assert len(app._compare_selection) == 2
+        assert {ref.model_id for ref in app._compare_selection} == {
+            "KRSNL_PVTSIM", copy_id,
+        }
         assert copy_flash == source_flash  # одинаковые локальные id — ключевой случай
+    finally:
+        dpg.destroy_context()
+
+
+def test_same_experiment_id_opens_after_switching_between_duplicate_models(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+
+        first_id = state.new_experiment(
+            "dle", {"pressures": [400, 200], "T_c": 100.0, "P_res": 400.0},
+        )
+        app._on_model_row(None, None, copy_id)
+        second_id = state.new_experiment(
+            "dle", {"pressures": [400, 200], "T_c": 100.0, "P_res": 400.0},
+        )
+        assert first_id == second_id == "exp_1"
+
+        app._on_tree_open_node(None, None, ("KRSNL_PVTSIM", first_id))
+        assert state.active_model_id == "KRSNL_PVTSIM"
+        assert state.active_variant.active_node_id == first_id
+        assert first_id in app._tab_ids
+        assert dpg.does_item_exist(app._tab_ids[first_id])
+
+        app._on_tree_open_node(None, None, (copy_id, second_id))
+        assert state.active_model_id == copy_id
+        assert state.active_variant.active_node_id == second_id
+        assert second_id in app._tab_ids
+        assert dpg.does_item_exist(app._tab_ids[second_id])
+    finally:
+        dpg.destroy_context()
+
+
+def test_compare_renders_same_experiment_from_two_models(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        params = {"pressures": [300, 200], "T_c": 100.0, "P_res": 400.0}
+        result = {
+            "kind": "dle", "x": "pressure",
+            "columns": ["pressure", "Bo", "Rs"],
+            "rows": [[300.0, 1.3, 120.0], [200.0, 1.2, 100.0]],
+            "plot_all": ["Bo", "Rs"], "charts": ["Bo", "Rs"],
+            "main_columns": ["pressure", "Bo", "Rs"], "stages": [],
+        }
+        first_id = state.new_experiment("dle", params)
+        first_ref = state.node_ref(first_id)
+        state.set_node_result(first_ref, result)
+
+        app._on_model_row(None, None, copy_id)
+        second_id = state.new_experiment("dle", params)
+        second_ref = state.node_ref(second_id)
+        tuned = {**result, "rows": [[300.0, 1.35, 123.0],
+                                     [200.0, 1.18, 98.0]]}
+        state.set_node_result(second_ref, tuned)
+
+        app._toggle_compare("KRSNL_PVTSIM", first_id)
+        app._toggle_compare(copy_id, second_id)
+        app._on_open_compare(None, None, copy_id)
+
+        compare = state.node_by_id("compare")
+        assert compare is not None
+        assert [item["model_id"] for item in compare.params["member_refs"]] == [
+            "KRSNL_PVTSIM", copy_id,
+        ]
+        resolved = app._resolve_compare_members(compare)
+        assert len(resolved) == 2
+        labels = [app._exp_compare_label(ref, node) for ref, node in resolved]
+        assert state.models["KRSNL_PVTSIM"].title in labels[0]
+        assert state.models[copy_id].title in labels[1]
+        assert "compare" in app._tab_ids
+        assert dpg.does_item_exist(app._tab_ids["compare"])
     finally:
         dpg.destroy_context()
 

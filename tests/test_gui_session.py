@@ -11,7 +11,7 @@ from gui.services import flash_service
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState, load_session, save_session
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 
 @pytest.fixture
@@ -32,6 +32,7 @@ def test_flash_snapshot_roundtrip(repo):
     assert restored.pressure == pytest.approx(result.pressure)
     assert restored.temperature == pytest.approx(result.temperature)
     assert restored.vapor.mole_fraction == pytest.approx(result.vapor.mole_fraction)
+    assert restored.diagnostics == result.diagnostics
     assert restored.liquid.properties["density"] == pytest.approx(
         float(result.liquid.properties["density"]))
 

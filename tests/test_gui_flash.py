@@ -12,7 +12,7 @@ from gui.app_state import AppState, NodeKind, NodeStatus
 from gui.services import flash_service
 from gui.services.model_repository import ModelRepository
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 
 @pytest.fixture
@@ -39,6 +39,8 @@ def test_run_flash_two_phase(repo):
     # свойства обеих фаз посчитаны
     assert result.vapor.properties.get("density") is not None
     assert result.liquid.properties.get("density") is not None
+    assert result.quality_status == "ok"
+    assert result.diagnostics.warnings == ()
 
 
 def test_run_flash_single_phase(repo):
@@ -47,6 +49,7 @@ def test_run_flash_single_phase(repo):
     assert result.is_two_phase is False
     assert result.liquid.mole_fraction == pytest.approx(1.0)
     assert result.vapor.mole_fraction == pytest.approx(0.0)
+    assert result.quality_status == "ok"
 
 
 def test_property_rows_keys_present(repo):

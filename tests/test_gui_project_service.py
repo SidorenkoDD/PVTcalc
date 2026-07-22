@@ -15,7 +15,7 @@ from calc_core.Utils.ModelStore import ModelStoreCorruptError
 from gui.services import project_service as svc
 from gui.services.model_repository import ModelRepository
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 _ZI = {"N2": 0.01, "CO2": 0.02, "C1": 0.60, "C2": 0.08, "C3": 0.05,
        "C6": 0.04, "C7": 0.20}

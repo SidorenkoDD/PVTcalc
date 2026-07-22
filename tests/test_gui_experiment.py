@@ -4,16 +4,18 @@ CCE намеренно не в CI — она тяжёлая (несколько 
 """
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 
-from gui.app_state import AppState, NodeKind, NodeStatus
+from gui.app_state import AppState, NodeKind, NodeRef, NodeStatus
 from gui.services import experiment_service as exp_svc
 from gui.services.model_repository import ModelRepository
+from gui.services.project_service import duplicate_model
 from gui.session import SessionState, load_session, save_session
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 _DLE_PARAMS = {"pressures": [400, 300, 200, 100, 50], "T_c": 100.0, "P_res": 400.0}
 
@@ -49,6 +51,7 @@ def test_run_dle_returns_rich_json_result(repo):
     assert set(["Bo", "Rs"]).issubset(result["charts"])  # больше одной кривой
     assert "pressure" not in result["plot_all"]  # x не строим как кривую
     assert len(result["rows"]) > 0
+    assert "diagnostics" not in result  # пустые свойства отсутствующей фазы штатны
     json.dumps(result)  # JSON-совместимо (NaN → None), включая stages
 
 
@@ -60,6 +63,13 @@ def test_run_dle_has_per_stage_compositions(repo):
     first = stages[0]
     assert isinstance(first["liquid"], dict) and "C1" in first["liquid"]
     assert isinstance(first["vapor"], dict)
+
+
+def test_normal_dle_does_not_emit_verification_banner_data(repo):
+    result = exp_svc.run_experiment(repo.load_composition("KRSNL_PVTSIM"),
+                                    "dle", _DLE_PARAMS)
+
+    assert "diagnostics" not in result
 
 
 def test_series_for_plot_sorted_no_none(repo):
@@ -183,6 +193,50 @@ def test_undo_covers_new_experiment(state):
     assert nid in state.active_variant.nodes
     state.undo()
     assert nid not in state.active_variant.nodes
+
+
+def test_open_compare_accepts_only_same_experiment_type(state):
+    first = state.new_experiment("dle", {"pressures": [400, 200]})
+    second = state.new_experiment("dle", {"pressures": [400, 200]})
+    cce = state.new_experiment("cce", {"pressures": [400, 200]})
+
+    compare_id = state.open_compare([second, first])
+
+    compare = state.node_by_id(compare_id)
+    assert compare.kind is NodeKind.COMPARE
+    assert compare.params["members"] == [first, second]
+    assert compare.title == "Compare DLE"
+    assert state.open_compare([first, cce]) is None
+
+
+def test_open_compare_rejects_mixed_flash_and_experiment(state):
+    experiment = state.new_experiment("dle", {"pressures": [400, 200]})
+    flash = state.new_flash_run(100, 80)
+
+    assert state.open_compare([experiment, flash]) is None
+
+
+def test_open_compare_accepts_same_experiment_from_different_models(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    state.refresh_model_list()
+
+    state.open_model("KRSNL_PVTSIM")
+    first = state.new_experiment("dle", {"pressures": [400, 200]})
+    first_ref = NodeRef("KRSNL_PVTSIM", "base", first)
+    state.open_model(copy_id)
+    second = state.new_experiment("dle", {"pressures": [400, 200]})
+    second_ref = NodeRef(copy_id, "base", second)
+
+    compare_id = state.open_compare([first_ref, second_ref])
+
+    compare = state.node_by_id(compare_id)
+    assert compare.params["member_refs"] == [first_ref.to_dict(), second_ref.to_dict()]
+    assert compare.params["members"] == ["exp_1", "exp_1"]
+    assert state.node_by_ref(first_ref).params["kind"] == "dle"
+    assert state.node_by_ref(second_ref).params["kind"] == "dle"
 
 
 def test_session_experiments_roundtrip(tmp_path):

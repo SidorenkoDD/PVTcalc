@@ -1,8 +1,8 @@
 """Корреляции характеристического фактора Ватсона (Kw) для C7+ (2 метода) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
 
 import math
-from typing import Dict, Callable
-from calc_core.Utils.Constants import CONSTANT_R
+from typing import Callable
+
 
 class KWatsonCorrelation:
     """
@@ -20,7 +20,7 @@ class KWatsonCorrelation:
         }
 
         _method = method.lower()
-        if not _method in method_map:
+        if _method not in method_map:
             raise ValueError(f"KWatsonCorrelation: Unknown correlation method: {method}")
         return method_map[_method]
 

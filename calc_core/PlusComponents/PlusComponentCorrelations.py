@@ -12,13 +12,16 @@
 `Composition.evaluate_composition_data` для компонент с `c7_plus_flag=True`.
 """
 
+import math
+from typing import Dict
+
+from calc_core.PlusComponents.AcentricFactor import AcentricFactorCorrelation
 from calc_core.PlusComponents.CriticalPressure import CriticalPressureCorrelation
 from calc_core.PlusComponents.CriticalTemperature import CriticalTemperatureCorrelation
-from calc_core.PlusComponents.AcentricFactor import AcentricFactorCorrelation
 from calc_core.PlusComponents.CriticalVolume import CriticalVolumeCorrelation
 from calc_core.PlusComponents.kWatson import KWatsonCorrelation
 from calc_core.PlusComponents.ShiftParameter import ShiftParameterCorrelation
-from typing import Dict
+from calc_core.Utils.Errors import InputValidationError
 
 property_classes = {
     'critical_temperature': CriticalTemperatureCorrelation,
@@ -33,6 +36,31 @@ class PlusComponentProperties:
     """
     Main class to calculate C7+ components properties.
     """
+
+    _POSITIVE_PROPERTIES = {
+        'critical_temperature',
+        'critical_pressure',
+        'critical_volume',
+        'Kw',
+    }
+
+    @staticmethod
+    def _finite_number(value, name: str, *, positive: bool = False) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise InputValidationError(
+                f'{name} должно быть числом. Передано: {value!r}'
+            ) from exc
+        if isinstance(value, bool) or not math.isfinite(number):
+            raise InputValidationError(
+                f'{name} должно быть конечным числом. Передано: {value!r}'
+            )
+        if positive and number <= 0.0:
+            raise InputValidationError(
+                f'{name} должно быть больше 0. Передано: {value!r}'
+            )
+        return number
 
     def __init__(self, M: float, gamma: float, Tb: float, correlations_config: Dict[str, str], *, Tc: float = None,
                  Pc: float = None, Kw: float = None, af: float = None):
@@ -59,20 +87,27 @@ class PlusComponentProperties:
             подставляются в `self.data` напрямую, минуя корреляции.
         """
 
+        if not isinstance(correlations_config, dict):
+            raise InputValidationError('correlations_config должен быть словарём.')
+
         self.correlations_config = correlations_config
-        self.data = {'molar_mass': M, 'gamma': gamma, 'Tb': Tb}
+        self.data = {
+            'molar_mass': self._finite_number(M, 'M', positive=True),
+            'gamma': self._finite_number(gamma, 'gamma', positive=True),
+            'Tb': self._finite_number(Tb, 'Tb', positive=True),
+        }
 
         if Pc is not None:
-            self.data['critical_pressure'] = Pc
+            self.data['critical_pressure'] = self._finite_number(Pc, 'Pc', positive=True)
 
         if Tc is not None:
-            self.data['critical_temperature'] = Tc
+            self.data['critical_temperature'] = self._finite_number(Tc, 'Tc', positive=True)
 
         if Kw is not None:
-            self.data['Kw'] = Kw
+            self.data['Kw'] = self._finite_number(Kw, 'Kw', positive=True)
 
         if af is not None:
-            self.data['acentric_factor'] = af
+            self.data['acentric_factor'] = self._finite_number(af, 'af')
 
     def calculate_property(self, property_name: str) -> float:
         """
@@ -95,10 +130,10 @@ class PlusComponentProperties:
 
         Raises
         ------
-        ValueError
+        ValueError or InputValidationError
             Если `property_name` неизвестен, метод для него не указан в
             `correlations_config`, метод неизвестен самой корреляции, или
-            какой-то требуемый параметр отсутствует в `self.data`.
+            какой-то требуемый параметр отсутствует/нечисловой в `self.data`.
         """
 
         if property_name not in property_classes:
@@ -107,6 +142,10 @@ class PlusComponentProperties:
         method = self.correlations_config.get(property_name)
         if method is None:
             raise ValueError(f"PlusComponentProperties: No correlation specified for {property_name}")
+        if not isinstance(method, str):
+            raise InputValidationError(
+                f"Correlation method for {property_name} must be a string. Got: {method!r}"
+            )
 
         calculator = property_classes[property_name]
 
@@ -117,47 +156,57 @@ class PlusComponentProperties:
             raise ValueError(f"Invalid correlation for {property_name}: {e}")
 
         # Подготовка параметров
+        param_to_data_key = {
+            'gamma': 'gamma',
+            'Tb_K': 'Tb',
+            'M': 'molar_mass',
+            'Kw': 'Kw',
+            'Tc_K': 'critical_temperature',
+            'Pc_bar': 'critical_pressure',
+            'af': 'acentric_factor',
+        }
         params = {}
         for param in required_params:
-            if param == 'gamma':
-                value = self.data.get('gamma')
-            elif param == 'Tb_K':
-                value = self.data.get('Tb')
-            elif param == 'M':
-                value = self.data.get('molar_mass')
-            elif param == 'Kw':
-                value = self.data.get('Kw')
-            elif param == 'Tc_K':
-                value = self.data.get('critical_temperature')
-            elif param == 'Pc_bar':
-                value = self.data.get('critical_pressure')
-            else:
-                value = self.data.get('acentric_factor')
+            data_key = param_to_data_key.get(param)
+            if data_key is None:
+                raise ValueError(
+                    f"Correlation '{method}' declares unsupported parameter '{param}'"
+                )
+            value = self.data.get(data_key)
 
             if value is None:
                 raise ValueError(f"Missing required parameter '{param}' for {method}")
 
             params[param] = value
 
-        return correlation_func(**params)
+        result = self._finite_number(
+            correlation_func(**params),
+            f'{property_name} ({method})',
+            positive=property_name in self._POSITIVE_PROPERTIES,
+        )
+        return result
 
     def calculate_all(self):
         """
-        Считает все 6 свойств псевдокомпонента по очереди (`Kw` →
+        Заполняет до 6 свойств псевдокомпонента по очереди (`Kw` →
         `critical_temperature` → `critical_pressure` → `acentric_factor` →
         `critical_volume` → `shift_parameter`) и складывает в `self.data`.
         Порядок важен: некоторые корреляции (например, Kesler-Lee для
         ацентрического фактора) требуют уже посчитанные `Kw`/`Tc`/`Pc`.
+        Значения `Tc`/`Pc`/`Kw`/`af`, переданные явно в `__init__`, считаются
+        исходными данными и пропускаются без пересчёта.
         """
 
-        self.data['Kw'] = self.calculate_property('Kw')
-
-        self.data['critical_temperature'] = self.calculate_property('critical_temperature')
-
-        self.data['critical_pressure'] = self.calculate_property('critical_pressure')
-
-        self.data['acentric_factor'] = self.calculate_property('acentric_factor')
-
-        self.data['critical_volume'] = self.calculate_property('critical_volume')
-
-        self.data['shift_parameter'] = self.calculate_property('shift_parameter')
+        calculation_order = (
+            'Kw',
+            'critical_temperature',
+            'critical_pressure',
+            'acentric_factor',
+            'critical_volume',
+            'shift_parameter',
+        )
+        for property_name in calculation_order:
+            # Явно переданные Tc/Pc/Kw/af являются входными данными и не
+            # должны перезаписываться корреляцией (см. контракт __init__).
+            if property_name not in self.data:
+                self.data[property_name] = self.calculate_property(property_name)

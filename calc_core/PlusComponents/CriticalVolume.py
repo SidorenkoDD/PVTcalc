@@ -1,8 +1,10 @@
 """Корреляции критического объёма C7+ (4 реализованных метода + 1 заготовка) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
 
 import math
-from typing import Dict, Callable
+from typing import Callable
+
 from calc_core.Utils.Constants import CONSTANT_R
+
 
 class CriticalVolumeCorrelation:
     """
@@ -22,7 +24,7 @@ class CriticalVolumeCorrelation:
         }
 
         _method = method.lower()
-        if not _method in method_map:
+        if _method not in method_map:
             raise ValueError(f"CriticalVolumeCorrelation: Unknown correlation method: {method}")
         return method_map[_method]
 
@@ -78,7 +80,9 @@ class CriticalVolumeCorrelation:
 
         :return: Критический объем, cm3/mol
         """
-        return (0.2918 - 0.0928 * af) * CONSTANT_R * Tc_K / Pc_bar
+        # CONSTANT_R задан в J/(mol*K). При Pc в bar и результате в cm3/mol
+        # нужен коэффициент 10: 1 J = 10 bar*cm3.
+        return (0.2918 - 0.0928 * af) * (10.0 * CONSTANT_R) * Tc_K / Pc_bar
 
     @staticmethod
     def _lohrenz(gamma: float, M: float) -> float:

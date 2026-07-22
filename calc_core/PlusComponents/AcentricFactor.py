@@ -1,8 +1,7 @@
 """Корреляции ацентрического фактора C7+ (4 метода) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
 
 import math
-from typing import Dict, Callable
-from calc_core.Utils.Constants import CONSTANT_R
+from typing import Callable
 
 
 class AcentricFactorCorrelation:
@@ -23,7 +22,7 @@ class AcentricFactorCorrelation:
         }
 
         _method = method.lower()
-        if not _method in method_map:
+        if _method not in method_map:
             raise ValueError(f"AcentricFactorCorrelation: Unknown correlation method: {method}")
         return method_map[_method]
 

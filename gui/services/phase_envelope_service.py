@@ -22,7 +22,8 @@
 не роняет остальные):
 
 - **огибающая** (`ssm`) — таблица по сетке температур; NaN на части строк
-  (выше крикондентермы и т.п.) — нормальный физический результат;
+  больше не трактуется вслепую: `diagnostics.rows` отличает физически
+  отсутствующую ветвь (`not_present`) от несходимости теста стабильности;
 - **пластовое Psat** при пластовой температуре — интерполяцией по уже
   посчитанной SSM-огибающей (верхняя ветка bubble/dew_upper) в точке T_res;
   отдельный солвер не запускается, маркер ложится точно на нарисованную
@@ -171,6 +172,13 @@ def _run_ssm(composition: Composition, params: dict) -> dict:
                 t_min_c, t_max_c, t_step_c, p_max_bar)
 
     df = model.phase_envelope.ssm(t_min_c, t_max_c, t_step_c, p_max_bar, parallel=True)
+    diagnostics = df.attrs.get("diagnostics", {
+        "method": "ssm",
+        "partial": False,
+        "failed_temperatures": [],
+        "fallback": None,
+        "rows": [],
+    })
 
     temps = [_f(t) for t in df["Temp_C"].tolist()]
     raw: dict = {}   # ключ ветки -> список значений колонки, выровненный с temps
@@ -200,6 +208,7 @@ def _run_ssm(composition: Composition, params: dict) -> dict:
         "method": "ssm",
         "envelope": _joined_envelope(temps, raw),
         "curves": curves,
+        "diagnostics": diagnostics,
         "reservoir": reservoir,
         "table": {"columns": columns, "rows": rows},
         "t_range": [t_min_c, t_max_c],

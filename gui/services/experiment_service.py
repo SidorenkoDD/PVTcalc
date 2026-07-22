@@ -156,7 +156,6 @@ def _dataframe_to_result(df: pd.DataFrame, kind: str) -> dict:
     и посоставный разбор по ступеням (`stages`).
     """
     meta = EXPERIMENT_TYPES[kind]
-
     # посоставный разбор по ступеням (до отбрасывания dict-колонок)
     stages: list[dict] = []
     for _, r in df.iterrows():

@@ -11,7 +11,7 @@ from gui.app_state import AppState, NodeStatus
 from gui.services import composition_service as svc
 from gui.services.model_repository import ModelRepository
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 
 @pytest.fixture

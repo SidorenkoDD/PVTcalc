@@ -16,7 +16,7 @@ from gui.services import phase_envelope_service as pe_svc
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState, load_session, save_session
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 # узкий/грубый диапазон — быстрый прогон структуры
 _NARROW = {"t_min_c": 90.0, "t_max_c": 110.0, "t_step_c": 20.0,
@@ -62,6 +62,12 @@ def test_run_envelope_ssm_structure_json(repo):
     # таблица покрывает всю сетку температур
     assert result["table"]["columns"][0] == "Temp_C"
     assert len(result["table"]["rows"]) >= 2
+    diagnostics = result["diagnostics"]
+    assert diagnostics["method"] == "ssm"
+    assert diagnostics["partial"] is False
+    assert len(diagnostics["rows"]) == len(result["table"]["rows"])
+    assert all(row["primary_status"] == "ok" for row in diagnostics["rows"])
+    assert all(row["secondary_status"] == "not_present" for row in diagnostics["rows"])
     # крит. точка НЕ считается (убрана по правке автора)
     assert "critical" not in result
     # пластовый маркер

@@ -1,9 +1,11 @@
 """Вкладки Flash/Compare и callbacks фонового flash-расчёта."""
 
+import math
+
 import dearpygui.dearpygui as dpg
 
-from gui.app_state import NodeStatus
-from gui.services import flash_service
+from gui.app_state import NodeKind, NodeRef, NodeStatus
+from gui.services import comparison_service, flash_service
 from gui.view.contracts import ContextBoundView
 from gui.view.read_only_table import render_readonly_table
 
@@ -52,6 +54,15 @@ class FlashViewMixin(ContextBoundView):
         kind = "Two-phase" if result.is_two_phase else "Single-phase"
         dpg.add_text(f"{kind}    P = {result.pressure:.3f} bar    "
                      f"T = {result.temperature:.2f} K", parent=parent)
+        if result.diagnostics.warnings:
+            warning = dpg.add_text(
+                "Result obtained, but requires verification:\n" + "\n".join(
+                    f"- {item.message}" for item in result.diagnostics.warnings
+                ),
+                wrap=760,
+                parent=parent,
+            )
+            dpg.bind_item_theme(warning, self._theme_stale())
         # незакрываемые под-вкладки результата: Main + Composition
         with dpg.tab_bar(parent=parent):
             with dpg.tab(label="Main") as t_main:
@@ -105,15 +116,36 @@ class FlashViewMixin(ContextBoundView):
     #  Вкладка Compare (таблица сравнения + плитка панелей)
     # ==================================================================
 
+    def _resolve_compare_members(self, compare_node):
+        """Разрешает новые межмодельные refs и старые локальные members."""
+        refs = []
+        raw_refs = compare_node.params.get("member_refs")
+        if isinstance(raw_refs, list):
+            refs = [ref for value in raw_refs
+                    if (ref := NodeRef.from_dict(value)) is not None]
+        if not refs:
+            refs = [ref for node_id in compare_node.params.get("members", [])
+                    if (ref := self._state.node_ref(str(node_id))) is not None]
+        return [(ref, member) for ref in refs
+                if (member := self._state.node_by_ref(ref)) is not None]
+
     def _render_compare_tab(self, parent, node) -> None:
-        members = [self._state.node_by_id(m) for m in node.params.get("members", [])]
-        members = [m for m in members if m is not None and m.result is not None]
-        if len(members) < 2:
-            dpg.add_text("Select at least 2 computed flash runs to compare "
+        resolved = self._resolve_compare_members(node)
+        computed = [(ref, member) for ref, member in resolved
+                    if member.result is not None]
+        if len(computed) < 2:
+            dpg.add_text("Select at least 2 computed runs to compare "
                          "(Ctrl+click runs in the tree, or use the right-click menu).",
                          parent=parent)
             return
-        headers = [self._compare_col_label(m) for m in members]
+        if all(member.kind is NodeKind.EXPERIMENT for _ref, member in computed):
+            self._render_experiment_compare(computed, parent)
+            return
+        if not all(member.kind is NodeKind.FLASH for _ref, member in computed):
+            dpg.add_text("Selected results have incompatible types.", parent=parent)
+            return
+        members = [member for _ref, member in computed]
+        headers = [self._compare_col_label(ref, member) for ref, member in computed]
         with dpg.tab_bar(parent=parent):
             with dpg.tab(label="Vapor") as t:
                 self._compare_phase_table(members, headers, "vapor", t)
@@ -124,11 +156,128 @@ class FlashViewMixin(ContextBoundView):
             with dpg.tab(label="Panels") as t:
                 self._compare_panels(members, headers, t)
 
-    def _compare_col_label(self, node) -> str:
-        label = node.params.get("label")
-        if label:
-            return label
-        return f"{self._g(node.params.get('P'))}/{self._g(node.params.get('T'))}"
+    def _render_experiment_compare(self, members, parent) -> None:
+        descriptors = []
+        for ref, member in members:
+            label = self._exp_compare_label(ref, member)
+            raw_lab = member.params.get("lab_data")
+            lab_data = None
+            if isinstance(raw_lab, dict):
+                lab_data = {
+                    "columns": raw_lab.get("columns", []),
+                    "rows": raw_lab.get("rows", []),
+                    "x": "pressure",
+                }
+            descriptors.append({
+                "id": f"{ref.model_id}/{ref.variant_id}/{ref.node_id}",
+                "label": label,
+                "kind": member.params.get("kind"),
+                "params": dict(member.params),
+                "result": member.result,
+                "lab_data": lab_data,
+                "stale": member.status is NodeStatus.STALE,
+            })
+        try:
+            comparison = comparison_service.build_experiment_comparison(descriptors)
+        except comparison_service.IncompatibleComparisonError as exc:
+            dpg.add_text(str(exc), parent=parent)
+            return
+
+        dpg.add_text(
+            f"{str(comparison['kind']).upper()} comparison; "
+            f"reference: {comparison['reference']}",
+            parent=parent,
+        )
+        for message in comparison["warnings"]:
+            warning = dpg.add_text(f"Warning: {message}", wrap=760, parent=parent)
+            dpg.bind_item_theme(warning, self._theme_stale())
+        with dpg.tab_bar(parent=parent):
+            with dpg.tab(label="Curves") as curves:
+                self._render_experiment_compare_charts(comparison, curves)
+            with dpg.tab(label="Deviations") as deviations:
+                self._render_experiment_deviations(comparison, deviations)
+
+    def _exp_compare_label(self, ref: NodeRef, node) -> str:
+        model = self._state.models.get(ref.model_id)
+        model_label = model.title if model is not None else ref.model_id
+        seq = node.node_id.split("_")[-1]
+        run_label = (node.params.get("label")
+                     or f"{str(node.params.get('kind', 'experiment')).upper()} #{seq}")
+        return f"{model_label} · {run_label}"
+
+    def _render_experiment_compare_charts(self, comparison, parent) -> None:
+        columns = comparison["columns"]
+        for offset in range(0, len(columns), 2):
+            with dpg.group(horizontal=True, parent=parent) as row:
+                for column in columns[offset:offset + 2]:
+                    with dpg.child_window(width=440, height=285, border=True,
+                                          parent=row) as card:
+                        self._add_experiment_compare_chart(
+                            column, comparison["series"][column], card,
+                        )
+
+    def _add_experiment_compare_chart(self, column, series, parent) -> None:
+        all_x = [float(value) for item in series
+                 for values in (item["x"], item["lab_x"])
+                 for value in values if isinstance(value, (int, float))
+                 and not isinstance(value, bool) and math.isfinite(float(value))]
+        with dpg.plot(label=f"{column} vs pressure", height=250, width=-1,
+                      parent=parent):
+            dpg.add_plot_legend()
+            x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
+            y_axis = dpg.add_plot_axis(dpg.mvYAxis, label=column)
+            for item in series:
+                if item["x"]:
+                    dpg.add_line_series(item["x"], item["y"],
+                                        label=item["label"], parent=y_axis)
+                if item["lab_x"]:
+                    dpg.add_scatter_series(
+                        item["lab_x"], item["lab_y"],
+                        label=f"{item['label']} (lab)", parent=y_axis,
+                    )
+            if all_x:
+                lo, hi = min(all_x), max(all_x)
+                margin = (hi - lo) * 0.02 if hi > lo else 1.0
+                dpg.set_axis_limits(x_axis, lo - margin, hi + margin)
+
+    def _render_experiment_deviations(self, comparison, parent) -> None:
+        with dpg.tab_bar(parent=parent):
+            for column in comparison["columns"]:
+                with dpg.tab(label=column) as tab:
+                    rows = [
+                        [
+                            self._fmt(row["pressure"]), row["member"],
+                            self._fmt(row["reference"]), self._fmt(row["candidate"]),
+                            self._fmt(row["absolute"]),
+                            self._fmt(row["relative_percent"]),
+                        ]
+                        for row in comparison["deviations"][column]
+                    ]
+                    headers = [
+                        "Pressure, bar", "Compared run", "Reference",
+                        "Compared", "|difference|", "Difference, %",
+                    ]
+                    if not rows:
+                        dpg.add_text(
+                            "No matching pressure points for this property.",
+                            parent=tab,
+                        )
+                        continue
+                    dpg.add_button(
+                        label="Copy table", parent=tab,
+                        callback=lambda _s=None, _a=None, _u=None,
+                        h=headers, r=rows, c=column: self._copy_table(
+                            h, r, f"{c} deviations",
+                        ),
+                    )
+                    render_readonly_table(tab, headers, rows)
+
+    def _compare_col_label(self, ref: NodeRef, node) -> str:
+        model = self._state.models.get(ref.model_id)
+        model_label = model.title if model is not None else ref.model_id
+        run_label = (node.params.get("label")
+                     or f"{self._g(node.params.get('P'))}/{self._g(node.params.get('T'))}")
+        return f"{model_label} · {run_label}"
 
     def _compare_phase_table(self, members, headers, phase, parent) -> None:
         rows = [["Phase mole fraction"] + [

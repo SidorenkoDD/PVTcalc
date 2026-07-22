@@ -1,8 +1,7 @@
 """Корреляции критического давления C7+ (7 реализованных методов + 3 заготовки) — см. `PlusComponentCorrelations.py` за диспетчеризацией."""
 
 import math
-from typing import Dict, Callable
-from calc_core.Utils.Constants import CONSTANT_R
+from typing import Callable
 
 
 class CriticalPressureCorrelation:
@@ -88,7 +87,10 @@ class CriticalPressureCorrelation:
 
         :return: Критическое давление, bar
         """
-        if M <= 53.7:
+        # В формуле одновременно присутствуют log10(M-61.1) и
+        # log10(M-53.7), поэтому фактическая строгая нижняя граница — 61.1.
+        # Прежняя проверка M<=53.7 пропускала 53.7<M<=61.1 в math domain error.
+        if M <= 61.1:
             raise ValueError(f'Молярная масса {M} д.б. больше минимального значения 61.1')
         Pc_mpa = 8.191 - 2.97 * math.log10(M - 61.1) + (15.99 - 5.87 * math.log10(M - 53.7)) * (gamma - 0.8)
         return Pc_mpa * 10
@@ -153,7 +155,7 @@ class CriticalPressureCorrelation:
         }
 
         _method = method.lower()
-        if not _method in method_map:
+        if _method not in method_map:
             raise ValueError(f"CriticalPressureCorrelation: Unknown correlation method: {method}")
         return method_map[_method]
 

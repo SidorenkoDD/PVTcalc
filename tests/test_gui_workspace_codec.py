@@ -1,6 +1,6 @@
 """Workspace v3 сохраняет точные ids, подписи, stale-результаты и compare."""
 
-from gui.app_state import GraphNode, NodeKind, NodeStatus, Variant
+from gui.app_state import GraphNode, NodeKind, NodeRef, NodeStatus, Variant
 from gui.workspace_codec import restore_workspace, snapshot_workspace
 
 
@@ -14,7 +14,13 @@ def test_workspace_v3_roundtrip_preserves_nodes():
         upstream=["composition"])
     variant.nodes["compare"] = GraphNode(
         "compare", NodeKind.COMPARE, "Compare", NodeStatus.FRESH,
-        params={"members": ["exp_7", "other"]})
+        params={
+            "members": ["exp_7", "exp_7"],
+            "member_refs": [
+                NodeRef("base_model", "base", "exp_7").to_dict(),
+                NodeRef("tuned_model", "base", "exp_7").to_dict(),
+            ],
+        })
     variant.exp_seq = 7
     variant.open_node_ids = ["composition", "exp_7", "compare"]
     variant.active_node_id = "compare"
@@ -28,7 +34,8 @@ def test_workspace_v3_roundtrip_preserves_nodes():
     assert restored.nodes["exp_7"].params["label"] == "lab run"
     assert restored.nodes["exp_7"].status is NodeStatus.STALE
     assert restored.nodes["exp_7"].result == {"rows": [[1.0]]}
-    assert restored.nodes["compare"].params["members"] == ["exp_7", "other"]
+    assert restored.nodes["compare"].params["members"] == ["exp_7", "exp_7"]
+    assert restored.nodes["compare"].params["member_refs"][1]["model_id"] == "tuned_model"
     assert restored.active_node_id == "compare"
 
 

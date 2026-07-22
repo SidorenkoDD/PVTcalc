@@ -14,7 +14,7 @@ from calc_core.Utils.E300Import import parse_e300
 from gui.services import export_service as exp_out_svc
 from gui.services import project_service as proj_svc
 
-MODELS_JSON = Path(__file__).resolve().parents[1] / "models.json"
+MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
 
 @pytest.fixture
