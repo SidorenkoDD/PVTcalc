@@ -38,8 +38,8 @@ from calc_core.PhaseEnvelope.PhaseEnvelopeNewton import (
     verify_saturation_boundary,
 )
 from calc_core.PhaseEnvelope.PhaseEnvelopeSuccessiveSubstitution import PhaseEnvelopeSSM
-from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback
 from calc_core.Utils.Errors import ConvergenceError, InputValidationError, StopIterationError
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback
 from calc_core.Utils.Validation import (
     validate_positive_pressure,
     validate_temperature_celsius,
@@ -293,11 +293,7 @@ class PhaseEnvelopeFacade:
         if cancellation_token is None:
             calc.run_parallel(n_jobs=self._model.config.parallel_jobs)
         else:
-            calc.run_parallel(
-                n_jobs=self._model.config.parallel_jobs,
-                cancellation_token=cancellation_token,
-                progress_callback=progress_callback,
-            )
+            calc.run(cancellation_token, progress_callback)
 
         self._model.result_store_object.add(
             module='PhaseEnvelope.grid',
@@ -344,12 +340,7 @@ class PhaseEnvelopeFacade:
         self._validate_envelope_range(t_min_c, t_max_c, t_step_c, p_max_bar)
         calc = PhaseEnvelopeSSM(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
         if cancellation_token is not None:
-            df = calc.calculate_parallel(
-                n_jobs=self._model.config.parallel_jobs,
-                backend='threading',
-                cancellation_token=cancellation_token,
-                progress_callback=progress_callback,
-            )
+            df = calc.calculate(cancellation_token, progress_callback)
         else:
             df = calc.calculate_parallel(n_jobs=self._model.config.parallel_jobs) if parallel else calc.calculate()
 

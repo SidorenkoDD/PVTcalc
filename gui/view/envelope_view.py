@@ -49,13 +49,12 @@ class EnvelopeViewMixin(ContextBoundView):
         with dpg.group(horizontal=True, parent=parent):
             if running:
                 dpg.add_loading_indicator(style=1, radius=2.0)
-                dpg.add_button(label="Cancel", user_data=nid,
-                               callback=self._on_flash_cancel)
+                dpg.add_text("Parallel calculation cannot be cancelled.")
             else:
                 dpg.add_button(label="Edit parameters & run...", user_data=nid,
                                callback=self._on_envelope_edit)
         if running:
-            dpg.add_text("Computing envelope (this may take up to a minute)...",
+            dpg.add_text("Computing envelope in parallel (this may take up to a minute)...",
                          parent=parent)
         if node.status is NodeStatus.STALE and node.error:
             err = dpg.add_text(f"Error: {node.error}", parent=parent)
@@ -293,12 +292,8 @@ class EnvelopeViewMixin(ContextBoundView):
             return
         self._jobs.start(
             ref, "phase envelope",
-            lambda token, progress: pe_svc.run_envelope(
-                composition, params,
-                cancellation_token=token,
-                progress_callback=progress,
-            ),
+            lambda: pe_svc.run_envelope(composition, params),
         )
         self._state.set_node_running(ref)
-        self._set_status("Phase envelope running...")
+        self._set_status("Phase envelope running in parallel (cancellation unavailable)...")
         self._arm_flash_poll()

@@ -81,6 +81,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, effective_n_jobs
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
 
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseEnvelope.Diagnostics import (
@@ -91,7 +92,6 @@ from calc_core.PhaseEnvelope.Diagnostics import (
     attach_diagnostics,
 )
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
-from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
 from calc_core.Utils.Errors import StopIterationError
 
 logger = logging.getLogger(__name__)
@@ -157,7 +157,6 @@ class SaturationPointSSM:
         bracket_tol_rel: float = 1e-3,
         bracket_tol_abs: float = 1e-3,
         max_iter: int = 100,
-        cancellation_token: CancellationToken | None = None,
     ):
         self.composition = composition
         self.composition.T = t_k
@@ -201,7 +200,6 @@ class SaturationPointSSM:
         self.bracket_tol_rel = bracket_tol_rel
         self.bracket_tol_abs = bracket_tol_abs
         self.max_iter = max_iter
-        self.cancellation_token = cancellation_token
 
         # Если явный guess (continuation с предыдущего шага по T) не задан —
         # используем дешёвую оценку Вильсона вместо полного скана "вслепую".
@@ -225,13 +223,8 @@ class SaturationPointSSM:
         она выбрана слишком заниженной для этой температуры) — значение
         считается неопределённым, а не ошибкой, обрушивающей весь расчёт.
         """
-        if self.cancellation_token is not None:
-            self.cancellation_token.throw_if_cancelled()
         try:
-            stab = TwoPhaseStabilityTest(
-                self.composition, p, self.t_k,
-                cancellation_token=self.cancellation_token,
-            )
+            stab = TwoPhaseStabilityTest(self.composition, p, self.t_k)
             stab.calculate_phase_stability()
             return stab.stable
         except StopIterationError:
@@ -260,12 +253,7 @@ class SaturationPointSSM:
         поиска нестабильно ниже `p`, для Dew-поиска — выше).
         """
         p_test = p * (1.0 + nudge_sign * 10.0 * self.bracket_tol_rel)
-        if self.cancellation_token is not None:
-            self.cancellation_token.throw_if_cancelled()
-        stab = TwoPhaseStabilityTest(
-            self.composition, p_test, self.t_k,
-            cancellation_token=self.cancellation_token,
-        )
+        stab = TwoPhaseStabilityTest(self.composition, p_test, self.t_k)
         stab.calculate_phase_stability()
         return 'bubble' if (stab.S_v - 1.0) >= (stab.S_l - 1.0) else 'dew'
 
@@ -532,8 +520,6 @@ class SaturationPointSSM:
 
 def _calculate_envelope_chunk_worker(
     composition: Composition, t_c_chunk: list[float], p_max_bar: float, p_min_bar: float,
-    cancellation_token: CancellationToken | None = None,
-    progress_callback: ProgressCallback | None = None,
 ) -> list[tuple[float, SaturationPoint | None, SaturationPoint | None, str, str]]:
     """
     Считает НЕПРЕРЫВНЫЙ участок диапазона T последовательно, с continuation
@@ -559,16 +545,12 @@ def _calculate_envelope_chunk_worker(
     prev_pb: float | None = None
     prev_pdew: float | None = None
 
-    total = max(1, len(t_c_chunk))
-    for index, t_c in enumerate(t_c_chunk, start=1):
-        if cancellation_token is not None:
-            cancellation_token.throw_if_cancelled()
+    for t_c in t_c_chunk:
         t_k = float(t_c) + 273.15
 
         finder = SaturationPointSSM(
             comp, t_k, p_max_bar, p_min_bar,
             p_guess_bubble=prev_pb, p_guess_dew=prev_pdew,
-            cancellation_token=cancellation_token,
         )
         primary = finder.find_bubble_point()
         p_upper_for_dew = primary.pressure if primary is not None else p_max_bar
@@ -583,8 +565,6 @@ def _calculate_envelope_chunk_worker(
             prev_pb = primary.pressure
         if secondary is not None:
             prev_pdew = secondary.pressure
-        report_progress(progress_callback, index / total,
-                        f"Envelope chunk temperature {index}/{total}")
 
     return results
 
@@ -708,7 +688,6 @@ class PhaseEnvelopeSSM:
             finder = SaturationPointSSM(
                 self.composition, t_k, self.p_max_bar, self.p_min_bar,
                 p_guess_bubble=prev_pb, p_guess_dew=prev_pdew,
-                cancellation_token=cancellation_token,
             )
             primary = finder.find_bubble_point()
             p_upper_for_dew = primary.pressure if primary is not None else self.p_max_bar
@@ -737,13 +716,7 @@ class PhaseEnvelopeSSM:
 
         return self._frame()
 
-    def calculate_parallel(
-        self,
-        n_jobs: int = -1,
-        backend: str = 'loky',
-        cancellation_token: CancellationToken | None = None,
-        progress_callback: ProgressCallback | None = None,
-    ) -> pd.DataFrame:
+    def calculate_parallel(self, n_jobs: int = -1, backend: str = 'loky') -> pd.DataFrame:
         """
         То же самое, что `calculate()`, но диапазон T разбивается на
         непрерывные куски (по числу доступных воркеров), и каждый кусок
@@ -768,12 +741,9 @@ class PhaseEnvelopeSSM:
             len(chunks), n_workers, self.t_min_c, self.t_max_c, self.t_step_c,
         )
 
-        if cancellation_token is not None:
-            cancellation_token.throw_if_cancelled()
         chunk_results = Parallel(n_jobs=n_jobs, backend=backend)(
             delayed(_calculate_envelope_chunk_worker)(
                 self.composition, chunk.tolist(), self.p_max_bar, self.p_min_bar,
-                cancellation_token, progress_callback,
             )
             for chunk in chunks
         )

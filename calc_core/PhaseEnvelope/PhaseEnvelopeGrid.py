@@ -1,13 +1,9 @@
-import threading
-
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
-
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
-
 
 class PhaseEnvelopeGrid:
     def __init__(self, composition: Composition,
@@ -47,13 +43,7 @@ class PhaseEnvelopeGrid:
         flag = 0.0 if stab_test_obj.stable else 1.0
         return p, t - 273.15, flag  # P, T_C, Flag
 
-    def run_parallel(
-        self,
-        n_jobs: int = -1,
-        backend: str = 'loky',
-        cancellation_token: CancellationToken | None = None,
-        progress_callback: ProgressCallback | None = None,
-    ):
+    def run_parallel(self, n_jobs: int = -1, backend: str = 'loky'):
         """
         Запускает расчёт по всей сетке P-T в параллельном режиме.
         """
@@ -61,33 +51,10 @@ class PhaseEnvelopeGrid:
         P_grid, T_grid = np.meshgrid(self.pressure_array, self.temperature_array)
         points = list(zip(P_grid.ravel(), T_grid.ravel()))
 
-        # Потоковый backend нужен только для отменяемого GUI-пути: обычный
-        # `loky` запускает отдельные процессы и не видит threading.Event из
-        # CancellationToken. Численный алгоритм и порядок результатов те же.
-        if cancellation_token is None:
-            results = Parallel(n_jobs=n_jobs, backend=backend)(
-                delayed(self._calc_single_point)(p, t) for p, t in points
-            )
-        else:
-            cancellation_token.throw_if_cancelled()
-            completed = 0
-            counter_lock = threading.Lock()
-
-            def calculate_point(p, t):
-                nonlocal completed
-                cancellation_token.throw_if_cancelled()
-                result = self._calc_single_point(p, t, cancellation_token)
-                with counter_lock:
-                    completed += 1
-                    report_progress(
-                        progress_callback, completed / len(points),
-                        f"Grid point {completed}/{len(points)}",
-                    )
-                return result
-
-            results = Parallel(n_jobs=n_jobs, backend='threading')(
-                delayed(calculate_point)(p, t) for p, t in points
-            )
+        # 2. Параллельный запуск
+        results = Parallel(n_jobs=n_jobs, backend=backend)(
+            delayed(self._calc_single_point)(p, t) for p, t in points
+        )
 
         # 3. Безопасная сборка результатов в атрибуты класса
         if results:
