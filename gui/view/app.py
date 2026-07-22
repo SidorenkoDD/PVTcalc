@@ -71,6 +71,10 @@ class PVTcalcApp(
         # состояние разворота дерева (во View, чтобы переживать перерисовку)
         self._expanded_models: set[str] = set()
         self._expanded_cats: set[str] = set()
+        # Локальная навигация дерева: не меняет модель и не сохраняется как
+        # предметное состояние проекта.
+        self._tree_query: str = ""
+        self._tree_filter: str = "All"
         # Корень модели, который пользователь явно выбрал в дереве. Нужен,
         # чтобы Del удалял модель только после выбора именно её корня, а не
         # случайно вместе с активным расчётным узлом.
@@ -84,6 +88,7 @@ class PVTcalcApp(
         self._tabbar_id: int | None = None
         self._tab_ids: dict[str, int] = {}
         self._tab_content_ids: dict[str, int] = {}
+        self._overview_tab_id: int | None = None
         self._workspace_crumb_id: int | None = None
         # Workspace, которому принадлежат текущие DPG tab ids. Нельзя
         # reconciliate эти ids с вариантом другой модели: локальные exp_1/
@@ -608,7 +613,7 @@ class PVTcalcApp(
                 variant = self._state.active_variant
                 is_open = (ref is not None and variant is not None
                            and ref.node_id in variant.open_node_ids)
-                if ref is None:
+                if ref is None or self._overview_is_selected():
                     self._render_workspace()
                 elif is_open and not self._render_node_content(ref.node_id):
                     self._render_workspace()

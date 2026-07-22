@@ -108,6 +108,9 @@ class ContextBoundView:
     def _render_workspace(self) -> None:
         raise NotImplementedError
 
+    def _overview_is_selected(self) -> bool:
+        raise NotImplementedError
+
     def _chart_grid_columns(self) -> int:
         raise NotImplementedError
 

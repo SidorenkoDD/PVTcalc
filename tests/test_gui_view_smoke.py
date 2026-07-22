@@ -156,6 +156,61 @@ def test_workspace_tree_groups_duplicate_models_by_project(tmp_path):
         dpg.destroy_context()
 
 
+def test_project_overview_lists_models_and_opens_selected_model(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=1000, height=700)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+
+        assert _has_label(_WORKSPACE, "Project overview")
+        texts = _text_values(_WORKSPACE)
+        assert any("Project overview:" in text for text in texts)
+        assert state.models[copy_id].title in texts
+        assert _has_label(_WORKSPACE, "Open active composition")
+        assert _has_label(_WORKSPACE, "New flash")
+
+        app._on_overview_open_model(None, None, copy_id)
+
+        assert state.active_model_id == copy_id
+        assert copy_id in app._expanded_models
+    finally:
+        dpg.destroy_context()
+
+
+def test_tree_filter_shows_attention_runs_only():
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        flash_id = state.new_flash_run(100.0, 50.0)
+        state.set_node_error(flash_id, "input needs review")
+        app._expanded_cats.add("KRSNL_PVTSIM:flash")
+
+        app._on_tree_filter(None, "Needs attention")
+
+        labels = [
+            dpg.get_item_label(child)
+            for children in dpg.get_item_children(_MODEL_TREE).values()
+            for child in children
+            if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
+        ]
+        assert any("Flash (1)" in label for label in labels)
+        assert any("100 bar / 50 C" in label for label in labels)
+        assert not any("Composition" in label for label in labels)
+    finally:
+        dpg.destroy_context()
+
+
 def test_workspace_tree_keeps_multiple_models_expanded(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)

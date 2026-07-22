@@ -11,10 +11,12 @@ from gui.app_state import (
     StateChangeKind,
 )
 from gui.services import experiment_service as exp_svc
+from gui.services import project_service as proj_svc
 from gui.view.contracts import ContextBoundView
 
 _MODEL_TREE = "model_tree"
 _WORKSPACE = "workspace_content"
+_TREE_FILTERS = ["All", "Results only", "Needs attention"]
 
 
 class WorkspaceViewMixin(ContextBoundView):
@@ -22,11 +24,14 @@ class WorkspaceViewMixin(ContextBoundView):
 
     _expanded_models: set[str]
     _expanded_cats: set[str]
+    _tree_query: str
+    _tree_filter: str
     _selected_tree_model_id: str | None
     _compare_selection: list[NodeRef]
     _tabbar_id: int | None
     _tab_ids: dict[str, int]
     _tab_content_ids: dict[str, int]
+    _overview_tab_id: int | None
     _workspace_crumb_id: int | None
     _rendered_workspace_ref: tuple[str, str] | None
     _bip_ids: dict[tuple[int, int], int]
@@ -80,7 +85,22 @@ class WorkspaceViewMixin(ContextBoundView):
             "tree item | Esc close dialog.",
             parent=_MODEL_TREE, wrap=290,
         )
+        with dpg.group(horizontal=True, parent=_MODEL_TREE):
+            dpg.add_input_text(
+                hint="Search models and calculations + Enter", width=195,
+                default_value=self._tree_query, callback=self._on_tree_query,
+                on_enter=True,
+            )
+            dpg.add_combo(
+                items=_TREE_FILTERS, width=105, default_value=self._tree_filter,
+                callback=self._on_tree_filter,
+            )
+        visible_models = 0
         for model in models:
+            if not self._tree_model_visible(model):
+                continue
+            visible_models += 1
+            model_matches = self._tree_model_matches(model)
             expanded = model.model_id in self._expanded_models
             arrow = "v " if expanded else "> "
             # ASCII-маркер не зависит от шрифта DPG: Unicode `●` в некоторых
@@ -98,35 +118,100 @@ class WorkspaceViewMixin(ContextBoundView):
             # при этом только одна модель, но несколько корней могут оставаться
             # раскрытыми одновременно — как в обычном IDE-дереве.
             if expanded and model.loaded:
-                self._render_model_children(model)
+                self._render_model_children(model, model_matches)
+        if not visible_models:
+            dpg.add_text("No models or calculations match the current filter.",
+                         parent=_MODEL_TREE, wrap=290)
 
-    def _render_model_children(self, model) -> None:
+    def _on_tree_query(self, sender, app_data, user_data=None) -> None:
+        self._tree_query = str(app_data).strip().lower()
+        self._render_tree()
+
+    def _on_tree_filter(self, sender, app_data, user_data=None) -> None:
+        value = str(app_data)
+        self._tree_filter = value if value in _TREE_FILTERS else "All"
+        self._render_tree()
+
+    def _tree_model_matches(self, model) -> bool:
+        if not self._tree_query:
+            return True
+        text = " ".join(filter(None, (
+            model.model_id, model.title, model.field_name, model.eos,
+        ))).lower()
+        return self._tree_query in text
+
+    def _tree_node_visible(self, model, node, model_matches: bool) -> bool:
+        if self._tree_filter == "Results only" and node.result is None:
+            return False
+        if self._tree_filter == "Needs attention" and not (
+                node.status is NodeStatus.STALE or node.error):
+            return False
+        if not self._tree_query or model_matches:
+            return True
+        if node.kind is NodeKind.FLASH:
+            label = self._flash_tree_label(node)
+        elif node.kind is NodeKind.EXPERIMENT:
+            label = self._exp_run_leaf_label(node)
+        elif node.kind is NodeKind.PHASE_ENVELOPE:
+            label = self._env_run_leaf_label(node)
+        else:
+            label = node.title
+        return self._tree_query in f"{node.node_id} {label}".lower()
+
+    def _tree_model_visible(self, model) -> bool:
+        model_matches = self._tree_model_matches(model)
+        if not model.loaded:
+            if self._tree_filter == "Results only":
+                return bool(model_matches and model.summary
+                            and proj_svc.calc_summary(model.summary)["persisted"])
+            if self._tree_filter == "Needs attention":
+                return bool(model_matches and model.summary
+                            and proj_svc.calc_summary(model.summary)["stale"])
+            return model_matches
+        variant = model.variants.get("base")
+        if variant is None:
+            return model_matches
+        if model_matches and self._tree_filter == "All":
+            return True
+        return any(self._tree_node_visible(model, node, model_matches)
+                   for node in variant.nodes.values()
+                   if node.kind is not NodeKind.COMPOSITION)
+
+    def _render_model_children(self, model, model_matches: bool) -> None:
         variant = model.variants.get("base")
         if variant is None:
             return
         is_active_model = model.model_id == self._state.active_model_id
         active_nid = variant.active_node_id if is_active_model else None
 
+        show_actions = not self._tree_query and self._tree_filter == "All"
+
         # Composition
         comp = variant.nodes.get("composition")
         stale = "  *" if (comp and comp.status is NodeStatus.STALE) else ""
-        dpg.add_selectable(
-            label=f"    Composition{stale}", parent=_MODEL_TREE,
-            default_value=(active_nid == "composition"),
-            user_data=(model.model_id, "composition"),
-            callback=self._on_tree_open_node,
-        )
+        if (comp is not None and self._tree_filter == "All"
+                and (model_matches or not self._tree_query
+                     or self._tree_query in "composition")):
+            dpg.add_selectable(
+                label=f"    Composition{stale}", parent=_MODEL_TREE,
+                default_value=(active_nid == "composition"),
+                user_data=(model.model_id, "composition"),
+                callback=self._on_tree_open_node,
+            )
 
         # Flash (категория с историей запусков)
         cat_key = f"{model.model_id}:flash"
         cat_exp = cat_key in self._expanded_cats
         runs = variant.flash_runs()
-        dpg.add_selectable(
-            label=f"  {'v' if cat_exp else '>'} Flash ({len(runs)})",
-            parent=_MODEL_TREE, user_data=cat_key, callback=self._on_cat_toggle,
-        )
-        if cat_exp:
-            for run in runs:
+        visible_runs = [run for run in runs
+                        if self._tree_node_visible(model, run, model_matches)]
+        if visible_runs or show_actions:
+            dpg.add_selectable(
+                label=f"  {'v' if cat_exp else '>'} Flash ({len(visible_runs)})",
+                parent=_MODEL_TREE, user_data=cat_key, callback=self._on_cat_toggle,
+            )
+        if cat_exp and (visible_runs or show_actions):
+            for run in visible_runs:
                 mark = ("[*] " if self._compare_ref(model.model_id, run.node_id)
                         in self._compare_selection else "")
                 sel = dpg.add_selectable(
@@ -136,10 +221,11 @@ class WorkspaceViewMixin(ContextBoundView):
                     callback=self._on_tree_open_node,
                 )
                 self._attach_flash_context_menu(sel, model.model_id, run.node_id)
-            dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
-                               user_data=model.model_id, callback=self._on_new_flash)
+            if show_actions:
+                dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
+                                   user_data=model.model_id, callback=self._on_new_flash)
             n_sel = self._compare_selection_count(NodeKind.FLASH)
-            if n_sel >= 2:
+            if show_actions and n_sel >= 2:
                 dpg.add_selectable(label=f"      = Compare selected ({n_sel})",
                                    parent=_MODEL_TREE, user_data=model.model_id,
                                    callback=self._on_open_compare)
@@ -149,19 +235,23 @@ class WorkspaceViewMixin(ContextBoundView):
         ecat_key = f"{mid}:exp"
         ecat_exp = ecat_key in self._expanded_cats
         exp_runs = variant.experiment_runs()
-        dpg.add_selectable(
-            label=f"  {'v' if ecat_exp else '>'} Experiments ({len(exp_runs)})",
-            parent=_MODEL_TREE, user_data=ecat_key, callback=self._on_cat_toggle)
-        if ecat_exp:
+        visible_exp_runs = [run for run in exp_runs
+                            if self._tree_node_visible(model, run, model_matches)]
+        if visible_exp_runs or show_actions:
+            dpg.add_selectable(
+                label=f"  {'v' if ecat_exp else '>'} Experiments ({len(visible_exp_runs)})",
+                parent=_MODEL_TREE, user_data=ecat_key, callback=self._on_cat_toggle)
+        if ecat_exp and (visible_exp_runs or show_actions):
             for kind in ("cce", "dle", "separator"):
                 lbl = exp_svc.EXPERIMENT_TYPES[kind]["label"]
-                kruns = [r for r in exp_runs if r.params.get("kind") == kind]
+                kruns = [r for r in visible_exp_runs if r.params.get("kind") == kind]
                 kkey = f"{mid}:exp:{kind}"
                 kexp = kkey in self._expanded_cats
-                dpg.add_selectable(
-                    label=f"    {'v' if kexp else '>'} {lbl} ({len(kruns)})",
-                    parent=_MODEL_TREE, user_data=kkey, callback=self._on_cat_toggle)
-                if kexp:
+                if kruns or show_actions:
+                    dpg.add_selectable(
+                        label=f"    {'v' if kexp else '>'} {lbl} ({len(kruns)})",
+                        parent=_MODEL_TREE, user_data=kkey, callback=self._on_cat_toggle)
+                if kexp and (kruns or show_actions):
                     for run in kruns:
                         mark = ("[*] " if self._compare_ref(mid, run.node_id)
                                 in self._compare_selection else "")
@@ -175,25 +265,29 @@ class WorkspaceViewMixin(ContextBoundView):
                     selected = self._compare_selection_count(
                         NodeKind.EXPERIMENT, kind,
                     )
-                    if selected >= 2:
+                    if show_actions and selected >= 2:
                         dpg.add_selectable(
                             label=f"        = Compare selected {lbl} ({selected})",
                             parent=_MODEL_TREE, user_data=mid,
                             callback=self._on_open_compare,
                         )
-                    dpg.add_selectable(label=f"        + New {lbl}",
-                                       parent=_MODEL_TREE, user_data=(mid, kind),
-                                       callback=self._on_new_experiment)
+                    if show_actions:
+                        dpg.add_selectable(label=f"        + New {lbl}",
+                                           parent=_MODEL_TREE, user_data=(mid, kind),
+                                           callback=self._on_new_experiment)
 
         # Phase envelope — категория с историей запусков (P-T огибающая + Psat)
         pcat_key = f"{mid}:env"
         pcat_exp = pcat_key in self._expanded_cats
         env_runs = variant.envelope_runs()
-        dpg.add_selectable(
-            label=f"  {'v' if pcat_exp else '>'} Phase envelope ({len(env_runs)})",
-            parent=_MODEL_TREE, user_data=pcat_key, callback=self._on_cat_toggle)
-        if pcat_exp:
-            for run in env_runs:
+        visible_env_runs = [run for run in env_runs
+                            if self._tree_node_visible(model, run, model_matches)]
+        if visible_env_runs or show_actions:
+            dpg.add_selectable(
+                label=f"  {'v' if pcat_exp else '>'} Phase envelope ({len(visible_env_runs)})",
+                parent=_MODEL_TREE, user_data=pcat_key, callback=self._on_cat_toggle)
+        if pcat_exp and (visible_env_runs or show_actions):
+            for run in visible_env_runs:
                 sel = dpg.add_selectable(
                     label="      " + self._env_run_leaf_label(run),
                     parent=_MODEL_TREE,
@@ -201,8 +295,9 @@ class WorkspaceViewMixin(ContextBoundView):
                     user_data=(mid, run.node_id),
                     callback=self._on_tree_open_node)
                 self._attach_env_context_menu(sel, mid, run.node_id)
-            dpg.add_selectable(label="      + New envelope", parent=_MODEL_TREE,
-                               user_data=mid, callback=self._on_new_envelope)
+            if show_actions:
+                dpg.add_selectable(label="      + New envelope", parent=_MODEL_TREE,
+                                   user_data=mid, callback=self._on_new_envelope)
 
     # --- обработчики дерева ----------------------------------------------
 
@@ -519,6 +614,136 @@ class WorkspaceViewMixin(ContextBoundView):
             self._set_status("Phase envelope duplicated.")
 
     # ==================================================================
+    #  Project overview
+    # ==================================================================
+
+    def _overview_stats(self, model) -> tuple[int, int, int, int]:
+        """Расчёты/attention/running/saved для строки Overview без загрузки модели."""
+        if model.loaded and (variant := model.variants.get("base")) is not None:
+            nodes = [node for node in variant.nodes.values()
+                     if node.kind not in (NodeKind.COMPOSITION, NodeKind.COMPARE)]
+            return (
+                sum(node.result is not None for node in nodes),
+                sum(node.status is NodeStatus.STALE or node.error is not None
+                    for node in nodes),
+                sum(node.status is NodeStatus.RUNNING for node in nodes),
+                0,
+            )
+        info = proj_svc.calc_summary(model.summary) if model.summary else {}
+        return (int(info.get("persisted", 0)), int(info.get("stale", 0)), 0,
+                int(info.get("persisted", 0)))
+
+    def _render_project_overview(self, parent) -> None:
+        project_id = self._state.active_project_id
+        project = self._state.projects.get(project_id) if project_id else None
+        models = [self._state.models[mid] for mid in (project.model_ids if project else ())
+                  if mid in self._state.models]
+        title = project.title if project else "Current project"
+        dpg.add_text(f"Project overview: {title}", parent=parent)
+        dpg.add_text(
+            "Saved results come from the project database; unsaved edits are marked "
+            "with * and remain local until Save.",
+            parent=parent, wrap=820,
+        )
+        active_id = self._state.active_model_id
+        with dpg.group(horizontal=True, parent=parent):
+            dpg.add_button(label="Open active composition", user_data=active_id,
+                           callback=self._on_overview_open_composition,
+                           enabled=active_id is not None)
+            dpg.add_button(label="New flash", user_data=active_id,
+                           callback=self._on_overview_new_flash,
+                           enabled=active_id is not None)
+            dpg.add_button(label="New phase envelope", user_data=active_id,
+                           callback=self._on_overview_new_envelope,
+                           enabled=active_id is not None)
+        dpg.add_separator(parent=parent)
+        with dpg.table(parent=parent, header_row=True, borders_innerH=True,
+                       borders_outerH=True, borders_innerV=True,
+                       borders_outerV=True, resizable=True, scrollY=True,
+                       height=330, freeze_rows=1):
+            for label in ("Model", "Field", "Components", "EOS", "Results",
+                          "Attention", "Last saved", "Actions"):
+                dpg.add_table_column(label=label)
+            for model in models:
+                results, attention, running, saved = self._overview_stats(model)
+                with dpg.table_row():
+                    dpg.add_text(model.title + ("  *" if model.dirty else ""))
+                    dpg.add_text(model.field_name or "-")
+                    dpg.add_text(str(model.n_components))
+                    dpg.add_text(model.eos or "-")
+                    result_text = str(results)
+                    if running:
+                        result_text += f" ({running} running)"
+                    if saved and not model.loaded:
+                        result_text += " saved"
+                    dpg.add_text(result_text)
+                    attention_text = str(attention) if attention else "-"
+                    dpg.add_text(attention_text)
+                    saved_at = (model.summary.workspace_saved_at
+                                if model.summary is not None else None)
+                    dpg.add_text(self._format_saved_at(saved_at) or "-")
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="Open", small=True,
+                                       user_data=model.model_id,
+                                       callback=self._on_overview_open_model)
+                        dpg.add_button(label="Last result", small=True,
+                                       user_data=model.model_id,
+                                       callback=self._on_overview_open_last_result,
+                                       enabled=bool(results))
+
+    def _activate_overview_model(self, model_id: str | None) -> bool:
+        if not model_id or model_id not in self._state.models:
+            return False
+        if model_id != self._state.active_model_id:
+            self._state.set_active_model(model_id, notify=False)
+            self._restore_workspace(model_id)
+        return True
+
+    def _on_overview_open_model(self, sender, app_data, user_data) -> None:
+        model_id = str(user_data)
+        if not self._activate_overview_model(model_id):
+            return
+        self._expanded_models.add(model_id)
+        self._state.notify(StateChange(StateChangeKind.NAVIGATION))
+        self._set_status(f"Active model: '{self._state.models[model_id].title}'.")
+
+    def _on_overview_open_composition(self, sender, app_data, user_data) -> None:
+        model_id = str(user_data) if user_data else None
+        if self._activate_overview_model(model_id):
+            self._state.open_node("composition")
+
+    def _on_overview_new_flash(self, sender, app_data, user_data) -> None:
+        model_id = str(user_data) if user_data else None
+        if self._activate_overview_model(model_id):
+            self._state.new_flash_run()
+            self._set_status("New flash tab opened - set P/T and Run.")
+
+    def _on_overview_new_envelope(self, sender, app_data, user_data) -> None:
+        model_id = str(user_data) if user_data else None
+        if self._activate_overview_model(model_id):
+            self._on_new_envelope(None, None, model_id)
+
+    def _on_overview_open_last_result(self, sender, app_data, user_data) -> None:
+        model_id = str(user_data)
+        if not self._activate_overview_model(model_id):
+            return
+        variant = self._state.active_variant
+        if variant is None:
+            return
+        results = [node for node in variant.nodes.values()
+                   if node.kind not in (NodeKind.COMPOSITION, NodeKind.COMPARE)
+                   and node.result is not None]
+        if results:
+            self._state.open_node(results[-1].node_id)
+        else:
+            self._set_status("This model has no loaded calculation result.")
+
+    def _overview_is_selected(self) -> bool:
+        return bool(self._overview_tab_id is not None and self._tabbar_id is not None
+                    and dpg.does_item_exist(self._overview_tab_id)
+                    and dpg.get_value(self._tabbar_id) == self._overview_tab_id)
+
+    # ==================================================================
     #  Рабочая область (вкладки)
     # ==================================================================
 
@@ -556,15 +781,15 @@ class WorkspaceViewMixin(ContextBoundView):
         self._workspace_crumb_id = dpg.add_text(crumb, parent=_WORKSPACE)
         dpg.add_separator(parent=_WORKSPACE)
 
-        if not variant.open_node_ids:
-            dpg.add_text("Open a node from the tree on the left.", parent=_WORKSPACE)
-            return
-
         self._tab_ids = {}
         self._tab_content_ids = {}
+        self._overview_tab_id = None
         with dpg.tab_bar(parent=_WORKSPACE, reorderable=True,
                          callback=self._on_tab_changed) as tabbar:
             self._tabbar_id = tabbar
+            with dpg.tab(label="Project overview") as overview_tab:
+                self._overview_tab_id = overview_tab
+                self._render_project_overview(overview_tab)
             for nid in variant.open_node_ids:
                 n = variant.nodes.get(nid)
                 if n is None:
@@ -590,6 +815,8 @@ class WorkspaceViewMixin(ContextBoundView):
         active = variant.active_node_id
         if active in self._tab_ids:
             dpg.set_value(self._tabbar_id, self._tab_ids[active])
+        elif self._overview_tab_id is not None:
+            dpg.set_value(self._tabbar_id, self._overview_tab_id)
 
     def _render_node_content(self, node_id: str) -> bool:
         """Пересобирает только body одной уже открытой вкладки."""
@@ -638,6 +865,9 @@ class WorkspaceViewMixin(ContextBoundView):
         # закрытие вкладки крестиком меняет выбор -> ловим его здесь же
         if self._reconcile_closed_tabs():
             self._render_workspace()
+            return
+        if app_data == self._overview_tab_id:
+            self._render_tree()
             return
         # app_data — id выбранной вкладки; обратное сопоставление к node_id
         nid = next((k for k, v in self._tab_ids.items() if v == app_data), None)
