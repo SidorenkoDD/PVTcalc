@@ -274,8 +274,10 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
 
         app._on_new_lab_dataset(None, None, ("dle", "project", None))
         assert app._lab_catalog_editor is not None
+        assert app._lab_catalog_editor["title"] == "DLE LAB-1"
         assert _item_by_label(app._lab_catalog_modal, "Save") is None
         assert _has_label(app._lab_catalog_modal, "Close")
+        assert app._lab_condition_input_theme_id is not None
         assert lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                      experiment_kind="dle") == []
         app._on_catalog_lab_add_row()
@@ -295,6 +297,33 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
         app._on_key_delete(None, None)
         assert any("Linked experiments will lose this source" in text
                    for text in _text_values(app._modals[-1]))
+    finally:
+        dpg.destroy_context()
+
+
+def test_lab_dataset_single_click_selects_and_double_click_opens_editor(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    dataset = lab_svc.create_dataset(
+        str(db_path), "KRSNL_PVTSIM", title="DLE LAB-1", experiment_kind="dle",
+        columns=["pressure"], rows=[[300.0]],
+    )
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        ref = (dataset["dataset_id"], "project", None)
+
+        app._on_project_lab_dataset(None, True, ref)
+        assert app._selected_tree_lab_dataset == ref
+        assert app._lab_catalog_modal is None
+
+        app._on_project_lab_dataset_edit(None, None, ref)
+        assert app._lab_catalog_modal is not None
+        assert dpg.does_item_exist(app._lab_catalog_modal)
     finally:
         dpg.destroy_context()
 
