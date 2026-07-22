@@ -6,6 +6,7 @@ import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeKind, NodeRef, NodeStatus
 from gui.services import comparison_service, flash_service
+from gui.services import lab_data_service as lab_svc
 from gui.view.contracts import ContextBoundView
 from gui.view.read_only_table import render_readonly_table
 
@@ -160,7 +161,13 @@ class FlashViewMixin(ContextBoundView):
         descriptors = []
         for ref, member in members:
             label = self._exp_compare_label(ref, member)
-            raw_lab = member.params.get("lab_data")
+            model = self._state.models.get(ref.model_id)
+            raw_lab = lab_svc.effective_lab_data(
+                self._state.db_path,
+                model.project_id if model is not None else "",
+                ref.model_id,
+                member.params,
+            )
             lab_data = None
             if isinstance(raw_lab, dict):
                 lab_data = {

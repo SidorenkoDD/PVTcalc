@@ -165,6 +165,22 @@ def test_lab_data_edits_support_undo_and_redo(state):
     ]
 
 
+def test_lab_data_reference_and_local_copy_support_undo(state):
+    nid = state.new_experiment("dle", {"pressures": [400, 200]})
+    columns = exp_svc.EXPERIMENT_TYPES["dle"]["lab_columns"]
+
+    state.set_lab_data_ref(nid, "lab_shared")
+    assert state.node_by_id(nid).params["lab_data_ref"] == "lab_shared"
+    state.undo()
+    assert "lab_data_ref" not in state.node_by_id(nid).params
+    state.redo()
+    state.copy_lab_data_to_local(nid, columns, [[400.0, 1.4]])
+
+    node = state.node_by_id(nid)
+    assert "lab_data_ref" not in node.params
+    assert node.params["lab_data"]["rows"] == [[400.0, 1.4, None, None, None]]
+
+
 def test_extra_experiment_chart_is_stateful_and_undoable(state):
     nid = state.new_experiment("dle", {"pressures": [400, 200]})
     node = state.node_by_id(nid)

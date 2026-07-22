@@ -1017,6 +1017,45 @@ class AppState:
             data["rows"] = []
             self._mark_dirty()
 
+    def set_lab_data_ref(self, node_id: str, dataset_id: str | None) -> None:
+        """Selects a project/model Lab Data dataset for an experiment node.
+
+        The actual table remains in the GUI catalog; the workspace keeps only a
+        durable reference.  Clearing the reference safely returns to the
+        existing per-run ``params['lab_data']`` table.
+        """
+        node = self._lab_node(node_id)
+        if node is None:
+            return
+        current = node.params.get("lab_data_ref")
+        value = dataset_id.strip() if isinstance(dataset_id, str) else ""
+        if current == value or (not value and current is None):
+            return
+        self._push_undo()
+        if value:
+            node.params["lab_data_ref"] = value
+        else:
+            node.params.pop("lab_data_ref", None)
+        self._mark_dirty()
+
+    def copy_lab_data_to_local(self, node_id: str, columns: list[str],
+                               rows: list[list[float | None]]) -> None:
+        """Detaches a dataset into an editable table owned by this run."""
+        node = self._lab_node(node_id)
+        if node is None or not columns:
+            return
+        self._push_undo()
+        node.params["lab_data"] = {
+            "schema_version": 1,
+            "columns": list(columns),
+            "rows": [
+                (list(row)[:len(columns)] + [None] * len(columns))[:len(columns)]
+                for row in rows if isinstance(row, list)
+            ],
+        }
+        node.params.pop("lab_data_ref", None)
+        self._mark_dirty()
+
     def set_lab_data_value(self, node_id: str, row: int, column: int,
                            value: float | None) -> None:
         """Меняет одну фактическую точку без уведомления (сохраняет фокус поля)."""

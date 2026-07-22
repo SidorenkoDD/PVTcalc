@@ -102,6 +102,7 @@ class PVTcalcApp(
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
         self._lab_data_holder: dict[str, int] = {}
         self._lab_data_controls: dict[str, tuple[int, int, int]] = {}
+        self._lab_source_choices: dict[str, dict[str, str | None]] = {}
         self._lab_active_cell: tuple[str, int, int] | None = None
         self._lab_cell_ids: dict[tuple[str, int, int], int] = {}
         self._lab_navigation_registry_id: int | None = None

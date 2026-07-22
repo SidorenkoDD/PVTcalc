@@ -7,6 +7,7 @@ import dearpygui.dearpygui as dpg
 from gui.app_state import NodeStatus
 from gui.services import clipboard_service
 from gui.services import experiment_service as exp_svc
+from gui.services import lab_data_service as lab_svc
 from gui.view.contracts import ContextBoundView
 from gui.view.read_only_table import render_readonly_table
 
@@ -18,6 +19,7 @@ class ExperimentViewMixin(ContextBoundView):
     _exp_chart_holder: dict[str, int]
     _lab_data_holder: dict[str, int]
     _lab_data_controls: dict[str, tuple[int, int, int]]
+    _lab_source_choices: dict[str, dict[str, str | None]]
     _lab_focus_theme_id: int | str | None
     _lab_active_cell: tuple[str, int, int] | None
     _lab_cell_ids: dict[tuple[str, int, int], int]
@@ -89,7 +91,7 @@ class ExperimentViewMixin(ContextBoundView):
         return list(meta.get("lab_columns", ["pressure"]))
 
     def _lab_rows(self, node, columns: list[str]) -> list[list[float | None]]:
-        data = node.params.get("lab_data")
+        data = self._effective_lab_data(node)
         raw_rows = data.get("rows") if isinstance(data, dict) else None
         if not isinstance(raw_rows, list):
             return []
@@ -105,43 +107,104 @@ class ExperimentViewMixin(ContextBoundView):
             ])
         return rows
 
+    def _effective_lab_data(self, node):
+        model = self._state.active_model
+        if model is None:
+            return node.params.get("lab_data")
+        return lab_svc.effective_lab_data(
+            self._state.db_path, model.project_id, model.model_id, node.params,
+        )
+
+    def _linked_lab_dataset(self, node):
+        ref = node.params.get("lab_data_ref")
+        model = self._state.active_model
+        if not isinstance(ref, str) or not ref or model is None:
+            return None
+        try:
+            return lab_svc.get_dataset(self._state.db_path, model.project_id, ref,
+                                       model_id=model.model_id)
+        except lab_svc.LabDataStoreError:
+            return None
+
     def _render_lab_data(self, node, parent) -> None:
         """Сворачиваемый ввод измерений, привязанный к одному Experiment-узлу."""
         columns = self._lab_columns(node)
         rows = self._lab_rows(node, columns)
+        linked = self._linked_lab_dataset(node)
         with dpg.collapsing_header(label="Lab Data (measured)",
                                   default_open=True, parent=parent) as header:
-            dpg.add_text(
-                "Enter measured points for this experiment. Blank cells are ignored.",
-                parent=header,
-            )
-            with dpg.group(horizontal=True, parent=header):
-                dpg.add_button(label="Add point", user_data=node.node_id,
-                               callback=self._on_lab_add_row)
-                dpg.add_button(label="Paste from Excel",
+            model = self._state.active_model
+            choices: dict[str, str | None] = {"Local to this run": None}
+            if model is not None:
+                try:
+                    datasets = lab_svc.list_datasets(
+                        self._state.db_path, model.project_id,
+                        experiment_kind=node.params.get("kind"),
+                        model_id=model.model_id)
+                except lab_svc.LabDataStoreError as exc:
+                    datasets = []
+                    dpg.add_text(str(exc), parent=header)
+                for dataset in datasets:
+                    prefix = "Model" if dataset["scope"] == "model" else "Project"
+                    choices[f"{prefix}: {dataset['title']}"] = dataset["dataset_id"]
+            self._lab_source_choices[node.node_id] = choices
+            selected = next((label for label, value in choices.items()
+                             if linked and value == linked["dataset_id"]),
+                            "Local to this run")
+            dpg.add_combo(label="Data source", items=list(choices), width=360,
+                          default_value=selected, user_data=node.node_id,
+                          callback=self._on_lab_source_changed, parent=header)
+            if linked is not None:
+                dpg.add_text(
+                    f"{linked['scope'].title()} dataset: {linked['title']} "
+                    "(read only).",
+                    parent=header,
+                )
+                dpg.add_button(label="Make local editable copy",
                                user_data=node.node_id,
-                               callback=self._on_lab_paste)
-                remove_id = dpg.add_button(
-                    label="Remove last", user_data=node.node_id,
-                    callback=self._on_lab_remove_row, enabled=bool(rows))
-                clear_id = dpg.add_button(
-                    label="Clear", user_data=node.node_id,
-                    callback=self._on_lab_clear, enabled=bool(rows))
+                               callback=self._on_lab_make_local_copy,
+                               parent=header)
+            else:
+                dpg.add_text(
+                    "Enter measured points for this run. Blank cells are ignored.",
+                    parent=header,
+                )
+            with dpg.group(horizontal=True, parent=header):
+                if linked is None:
+                    dpg.add_button(label="Add point", user_data=node.node_id,
+                                   callback=self._on_lab_add_row)
+                    dpg.add_button(label="Paste from Excel",
+                                   user_data=node.node_id,
+                                   callback=self._on_lab_paste)
+                    remove_id = dpg.add_button(
+                        label="Remove last", user_data=node.node_id,
+                        callback=self._on_lab_remove_row, enabled=bool(rows))
+                    clear_id = dpg.add_button(
+                        label="Clear", user_data=node.node_id,
+                        callback=self._on_lab_clear, enabled=bool(rows))
+                    dpg.add_button(label="Publish to project", user_data=(node.node_id, "project"),
+                                   callback=self._on_lab_publish)
+                    dpg.add_button(label="Publish to this model", user_data=(node.node_id, "model"),
+                                   callback=self._on_lab_publish)
+                else:
+                    remove_id = clear_id = dpg.add_spacer(width=1)
                 count_id = dpg.add_text(f"{len(rows)} point(s)", parent=header)
                 self._lab_data_controls[node.node_id] = (
                     remove_id, clear_id, count_id)
             holder = dpg.add_group(parent=header)
             self._lab_data_holder[node.node_id] = holder
-            dpg.add_text(
-                "Excel paste: tab-separated columns; a header row is detected "
-                "automatically. Paste starts at the focused cell (or the first "
-                "cell); Ctrl+V and the button both support column paste; arrow "
-                "keys move between cells.",
-                parent=header,
-            )
-            self._render_lab_data_table(node, holder, columns, rows)
+            if linked is None:
+                dpg.add_text(
+                    "Excel paste: tab-separated columns; a header row is detected "
+                    "automatically. Paste starts at the focused cell (or the first "
+                    "cell); Ctrl+V and the button both support column paste; arrow "
+                    "keys move between cells.",
+                    parent=header,
+                )
+            self._render_lab_data_table(node, holder, columns, rows,
+                                        readonly=linked is not None)
 
-    def _render_lab_data_table(self, node, holder, columns, rows) -> None:
+    def _render_lab_data_table(self, node, holder, columns, rows, *, readonly=False) -> None:
         self._ensure_lab_navigation_handlers()
         self._lab_cell_ids = {
             key: cell_id for key, cell_id in self._lab_cell_ids.items()
@@ -164,6 +227,9 @@ class ExperimentViewMixin(ContextBoundView):
                 with dpg.table_row():
                     dpg.add_text(str(row_index + 1))
                     for column_index, value in enumerate(row):
+                        if readonly:
+                            dpg.add_text("" if value is None else self._g(value))
+                            continue
                         cell_id = dpg.add_input_text(
                             default_value="" if value is None else self._g(value),
                             width=115,
@@ -291,13 +357,65 @@ class ExperimentViewMixin(ContextBoundView):
             return
         columns = self._lab_columns(node)
         rows = self._lab_rows(node, columns)
-        self._render_lab_data_table(node, holder, columns, rows)
+        self._render_lab_data_table(node, holder, columns, rows,
+                                    readonly=self._linked_lab_dataset(node) is not None)
         controls = self._lab_data_controls.get(node_id)
         if controls:
             remove_id, clear_id, count_id = controls
             dpg.configure_item(remove_id, enabled=bool(rows))
             dpg.configure_item(clear_id, enabled=bool(rows))
             dpg.set_value(count_id, f"{len(rows)} point(s)")
+
+    def _on_lab_source_changed(self, sender, app_data, user_data) -> None:
+        node_id = str(user_data)
+        choices = self._lab_source_choices.get(node_id, {})
+        self._state.set_lab_data_ref(node_id, choices.get(str(app_data)))
+        self._render_workspace()
+        self._schedule_session_autosave()
+
+    def _on_lab_publish(self, sender, app_data, user_data) -> None:
+        node_id, scope = user_data
+        node = self._state.node_by_id(node_id)
+        model = self._state.active_model
+        if node is None or model is None:
+            return
+        columns = self._lab_columns(node)
+        rows = self._lab_rows(node, columns)
+        if not rows:
+            self._set_status("Add at least one measured point before publishing.")
+            return
+        try:
+            dataset = lab_svc.create_dataset(
+                self._state.db_path, model.project_id,
+                title=f"{str(node.params.get('kind') or 'Lab').upper()} — {model.title}",
+                experiment_kind=str(node.params.get("kind") or ""),
+                columns=columns, rows=rows, scope=str(scope), model_id=model.model_id,
+            )
+        except lab_svc.LabDataStoreError as exc:
+            self._set_status(f"Could not publish Lab Data: {exc}")
+            return
+        self._state.set_lab_data_ref(node_id, dataset["dataset_id"])
+        self._render_workspace()
+        self._schedule_session_autosave()
+        scope_label = "project" if dataset["scope"] == "project" else "model"
+        self._set_status(f"Published Lab Data to {scope_label} catalog.")
+
+    def _on_lab_make_local_copy(self, sender, app_data, user_data) -> None:
+        node_id = str(user_data)
+        node = self._state.node_by_id(node_id)
+        if node is None:
+            return
+        data = self._effective_lab_data(node)
+        if not isinstance(data, dict):
+            return
+        columns = data.get("columns")
+        rows = data.get("rows")
+        if not isinstance(columns, list) or not isinstance(rows, list):
+            return
+        self._state.copy_lab_data_to_local(node_id, list(columns), list(rows))
+        self._render_workspace()
+        self._schedule_session_autosave()
+        self._set_status("Lab Data copied to this run for editing.")
 
     def _on_lab_add_row(self, sender, app_data, user_data) -> None:
         node = self._state.node_by_id(user_data)

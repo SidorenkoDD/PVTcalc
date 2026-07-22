@@ -26,6 +26,7 @@ from calc_core.Utils.Export import ModelJSONDB
 from calc_core.Utils.JsonDBReader import JsonDBReader
 from calc_core.Utils.ModelStore import read_model_store, update_model_store
 from gui.services import composition_service as comp_svc
+from gui.services import lab_data_service as lab_svc
 
 logger = logging.getLogger(__name__)
 
@@ -294,15 +295,27 @@ def delete_model(db_path: str, model_id: str) -> bool:
     class _ModelNotFound(Exception):
         pass
 
+    project_id: str | None = None
+
     def remove(data) -> None:
+        nonlocal project_id
         if model_id not in data:
             raise _ModelNotFound
+        record = data[model_id]
+        raw_project = record.get("project_id") if isinstance(record, dict) else None
+        project_id = (raw_project.strip() if isinstance(raw_project, str)
+                      and raw_project.strip() else model_id)
         del data[model_id]
 
     try:
         update_model_store(db_path, remove)
     except _ModelNotFound:
         return False
+    if project_id is not None:
+        try:
+            lab_svc.delete_model_datasets(db_path, project_id, model_id)
+        except lab_svc.LabDataStoreError:
+            logger.exception("Не удалось очистить model-scoped Lab Data для %s", model_id)
     logger.info("Модель '%s' удалена из %s", model_id, db_path)
     return True
 
@@ -342,6 +355,10 @@ def delete_project(db_path: str, project_id: str) -> bool:
     except _ProjectNotFound:
         return False
     if removed:
+        try:
+            lab_svc.delete_project_datasets(db_path, project_key)
+        except lab_svc.LabDataStoreError:
+            logger.exception("Не удалось очистить Lab Data проекта %s", project_key)
         logger.info("Проект '%s' удалён вместе с %d моделями из %s",
                     project_key, removed, db_path)
     return bool(removed)

@@ -7,6 +7,7 @@ from pathlib import Path
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import AppState
+from gui.services import lab_data_service as lab_svc
 from gui.services import project_service as proj_svc
 from gui.services.model_repository import ModelRepository
 from gui.session import SessionState
@@ -256,6 +257,39 @@ def test_search_selects_models_and_opens_cross_model_compare(tmp_path):
             "KRSNL_PVTSIM", copy_id,
         ]
         assert len(app._compare_selection) == 2
+    finally:
+        dpg.destroy_context()
+
+
+def test_publish_lab_data_creates_project_source_and_tree_branch(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        node_id = state.new_experiment("dle", {"T_c": 50.0, "P_res": 300.0})
+        assert node_id is not None
+        node = state.node_by_id(node_id)
+        columns = ["pressure", "Bo", "Rs", "liquid_density", "vapor_density"]
+        state.append_lab_data_rows(node_id, columns, [[300.0, 1.2]])
+        app._render_workspace()
+
+        app._on_lab_publish(None, None, (node_id, "project"))
+
+        dataset_id = node.params.get("lab_data_ref")
+        assert isinstance(dataset_id, str)
+        datasets = lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
+                                         experiment_kind="dle")
+        assert [dataset["dataset_id"] for dataset in datasets] == [dataset_id]
+        assert any(label.startswith("Project:")
+                   for label in app._lab_source_choices[node_id])
+        app._expanded_cats.add("KRSNL_PVTSIM:lab")
+        app._render_tree()
+        assert _has_label(_MODEL_TREE, "v Project Lab Data (1)")
     finally:
         dpg.destroy_context()
 

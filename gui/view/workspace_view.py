@@ -11,6 +11,7 @@ from gui.app_state import (
     StateChangeKind,
 )
 from gui.services import experiment_service as exp_svc
+from gui.services import lab_data_service as lab_svc
 from gui.services import project_service as proj_svc
 from gui.view.contracts import ContextBoundView
 
@@ -96,6 +97,7 @@ class WorkspaceViewMixin(ContextBoundView):
         if self._tree_query:
             self._render_search_results(models)
             return
+        self._render_project_lab_data_tree(project_id)
         for model in models:
             expanded = model.model_id in self._expanded_models
             arrow = "v " if expanded else "> "
@@ -115,6 +117,40 @@ class WorkspaceViewMixin(ContextBoundView):
             # раскрытыми одновременно — как в обычном IDE-дереве.
             if expanded and model.loaded:
                 self._render_model_children(model)
+
+    def _render_project_lab_data_tree(self, project_id: str | None) -> None:
+        """Separate shared-data branch; model-local datasets stay out of it."""
+        if not project_id:
+            return
+        try:
+            datasets = lab_svc.list_datasets(self._state.db_path, project_id)
+        except lab_svc.LabDataStoreError as exc:
+            dpg.add_text(f"Project Lab Data unavailable: {exc}", parent=_MODEL_TREE,
+                         wrap=290)
+            return
+        key = f"{project_id}:lab"
+        expanded = key in self._expanded_cats
+        dpg.add_selectable(
+            label=f"{'v' if expanded else '>'} Project Lab Data ({len(datasets)})",
+            parent=_MODEL_TREE, user_data=key, callback=self._on_cat_toggle,
+        )
+        if not expanded:
+            return
+        if not datasets:
+            dpg.add_text("    Publish a local DLE/CCE/Separator table to share it.",
+                         parent=_MODEL_TREE, wrap=270)
+            return
+        for dataset in datasets:
+            label = (f"    {dataset['experiment_kind'].upper()} — {dataset['title']} "
+                     f"({len(dataset['rows'])} point(s))")
+            dpg.add_selectable(label=label, parent=_MODEL_TREE,
+                               user_data=dataset["dataset_id"],
+                               callback=self._on_project_lab_dataset)
+
+    def _on_project_lab_dataset(self, sender, app_data, user_data) -> None:
+        self._set_status(
+            "Open a matching experiment and choose this dataset in Lab Data source.",
+        )
 
     def _on_tree_query(self, sender, app_data, user_data=None) -> None:
         query = str(app_data).strip().lower()
