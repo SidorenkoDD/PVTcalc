@@ -16,11 +16,7 @@ import numpy as np
 
 from calc_core.Composition.Composition import Composition
 from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
-from calc_core.Utils.Constants import (
-    TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE,
-    TOL_TWO_PHASE_FLASH_CONVERGENCE,
-    TOL_TWO_PHASE_FLASH_TRIVIAL_SOLUTION,
-)
+from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.Errors import ConvergenceError, InputValidationError
 from calc_core.Utils.Validation import validate_positive_pressure, validate_temperature_kelvin
 
@@ -42,7 +38,10 @@ class PhaseEquilibriumNewton:
     _RR_MAX_ITER = 1000
     _FUG_MAX_ITER = 1000  # лимит итераций внешнего цикла Ньютона по ln(K)
 
-    def __init__(self, composition: Composition, p: float, t: float, k_values):
+    def __init__(
+        self, composition: Composition, p: float, t: float, k_values,
+        *, config: EngineConfig | None = None,
+    ):
         """
         Parameters
         ----------
@@ -94,6 +93,11 @@ class PhaseEquilibriumNewton:
         self._composition = composition
         self._p = float(p)
         self._t = float(t)
+        self.config = config or EngineConfig.defaults()
+        self._RR_EPS = self.config.flash_rr_epsilon
+        self._RR_NEWTON_TOL = self.config.flash_rr_newton_tolerance
+        self._RR_MAX_ITER = self.config.flash_rr_max_iterations
+        self._FUG_MAX_ITER = self.config.flash_fugacity_max_iterations
 
         self.zi = composition.composition
         self.k_values = validated_k
@@ -300,7 +304,7 @@ class PhaseEquilibriumNewton:
             f'(P={self._p} бар, T={self._t} K, residual={abs(self._rr_sum(fv)):.3e})'
         )
 
-    def find_solve_bisection_v4(self, tol=TOL_TWO_PHASE_FLASH_BISECTION_CONVERGENCE):
+    def find_solve_bisection_v4(self, tol=None):
         """
         Альтернативное (чисто бисекционное, без Ньютона) решение уравнения
         Рэчфорда-Райза. В основном цикле (`find_solve_loop`) не используется —
@@ -323,6 +327,7 @@ class PhaseEquilibriumNewton:
         ConvergenceError
             Если `_RR_MAX_ITER` исчерпан без достижения допуска.
         """
+        tol = self.config.flash_bisection_tolerance if tol is None else tol
         fv_left, fv_right = self._rr_bounds()
         f_left = self._rr_sum(fv_left)
 
@@ -480,7 +485,7 @@ class PhaseEquilibriumNewton:
         self.ri = self._array_to_dict(self._ri_arr)
         return self.ri
 
-    def check_convergence_ri(self, e=TOL_TWO_PHASE_FLASH_CONVERGENCE):
+    def check_convergence_ri(self, e=None):
         """
         Критерий сходимости по фугитивностям: `sum((r_i - 1)^2) < e`.
         Обновляет и возвращает `self.convergence`.
@@ -494,6 +499,7 @@ class PhaseEquilibriumNewton:
         -------
         bool
         """
+        e = self.config.flash_convergence_tolerance if e is None else e
         sum_ri = float(np.sum((self._ri_arr - 1.0) ** 2))
 
         if sum_ri < e:
@@ -515,7 +521,7 @@ class PhaseEquilibriumNewton:
         """
         trivial_metric = float(np.sum(self._log_k ** 2))
 
-        if trivial_metric < TOL_TWO_PHASE_FLASH_TRIVIAL_SOLUTION:
+        if trivial_metric < self.config.flash_trivial_tolerance:
             self.trivial_solution = True
             return True
 

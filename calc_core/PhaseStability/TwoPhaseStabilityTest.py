@@ -13,13 +13,10 @@ import logging
 
 import numpy as np
 
-from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from calc_core.Composition.Composition import Composition
+from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
+from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.Errors import StopIterationError
-from calc_core.Utils.Constants import (
-    TOL_TWO_PHASE_STABILITY_CONVERGENCE,
-    TOL_TWO_PHASE_STABILITY_CONVERGENCE_TRIVIAL_SOLUTION,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +31,10 @@ class TwoPhaseStabilityTest:
     (стартовые K для двухфазного расчёта, `None` если стабильно).
     """
 
-    def __init__(self, composition: Composition, p: float, t: float):
+    def __init__(
+        self, composition: Composition, p: float, t: float,
+        *, config: EngineConfig | None = None,
+    ):
         """
         Parameters
         ----------
@@ -50,6 +50,7 @@ class TwoPhaseStabilityTest:
 
         self.p = float(p)
         self.t = float(t)
+        self.config = config or EngineConfig.defaults()
 
         self.stable = None
         self.k_values_liquid = None
@@ -189,8 +190,7 @@ class TwoPhaseStabilityTest:
         """Итерационное обновление K-значений в методе последовательных подстановок: `K_new = K_old * r_i`."""
         return k_values_old * ri
 
-    @staticmethod
-    def _check_convergence(ri: np.ndarray) -> bool:
+    def _check_convergence(self, ri: np.ndarray) -> bool:
         """
         Критерий сходимости пробного цикла: `sum((r_i - 1)^2) < TOL_TWO_PHASE_STABILITY_CONVERGENCE`.
 
@@ -203,10 +203,9 @@ class TwoPhaseStabilityTest:
         bool
         """
         sum_sq_ri = float(np.sum((ri - 1.0) ** 2))
-        return sum_sq_ri < TOL_TWO_PHASE_STABILITY_CONVERGENCE
+        return sum_sq_ri < self.config.stability_convergence_tolerance
 
-    @staticmethod
-    def _check_trivial_solution(k_values: np.ndarray):
+    def _check_trivial_solution(self, k_values: np.ndarray):
         """
         Критерий тривиального решения пробного цикла: `sum(ln(K_i)^2) < TOL_TWO_PHASE_STABILITY_CONVERGENCE_TRIVIAL_SOLUTION`,
         то есть пробная фаза сходится к составу самого фида (K_i -> 1).
@@ -219,7 +218,7 @@ class TwoPhaseStabilityTest:
         -------
         bool
         """
-        return float(np.sum(np.log(k_values) ** 2)) < TOL_TWO_PHASE_STABILITY_CONVERGENCE_TRIVIAL_SOLUTION
+        return float(np.sum(np.log(k_values) ** 2)) < self.config.stability_trivial_tolerance
 
     # =====================================================================================
     # ИНТЕРПРЕТАЦИЯ РЕЗУЛЬТАТОВ
@@ -356,9 +355,15 @@ class TwoPhaseStabilityTest:
                 break
 
             i += 1
-            if i > 100000:
-                logger.warning("_loop_vapour: не сошёлся за 100000 итераций (P=%s, T=%s)", self.p, self.t)
-                raise StopIterationError('Число итераций теста стабильности превысило 100000')
+            if i > self.config.stability_max_iterations:
+                logger.warning(
+                    "_loop_vapour: не сошёлся за %s итераций (P=%s, T=%s)",
+                    self.config.stability_max_iterations, self.p, self.t,
+                )
+                raise StopIterationError(
+                    f'Число итераций теста стабильности превысило '
+                    f'{self.config.stability_max_iterations}'
+                )
 
     # =====================================================================================
     # ЦИКЛ ПО LIQUID-ТЕСТУ
@@ -413,9 +418,15 @@ class TwoPhaseStabilityTest:
                 break
 
             i += 1
-            if i > 100000:
-                logger.warning("_loop_liquid: не сошёлся за 100000 итераций (P=%s, T=%s)", self.p, self.t)
-                raise StopIterationError('Число итераций теста стабильности превысило 100000')
+            if i > self.config.stability_max_iterations:
+                logger.warning(
+                    "_loop_liquid: не сошёлся за %s итераций (P=%s, T=%s)",
+                    self.config.stability_max_iterations, self.p, self.t,
+                )
+                raise StopIterationError(
+                    f'Число итераций теста стабильности превысило '
+                    f'{self.config.stability_max_iterations}'
+                )
 
     # =====================================================================================
     # СВОЙСТВО ДЛЯ РАСЧЕТА ТОЧКИ НАСЫЩЕНИЯ

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.ResultDiagnostics import ResultDiagnostics
 
 
@@ -25,6 +26,7 @@ class FlashResult:
     is_two_phase : bool
     phase_type: str | None = None
     diagnostics: ResultDiagnostics = ResultDiagnostics()
+    engine_config: EngineConfig = EngineConfig.defaults()
 
     @property
     def quality_status(self) -> str:

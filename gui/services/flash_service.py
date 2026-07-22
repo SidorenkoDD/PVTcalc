@@ -15,6 +15,7 @@ import logging
 
 from calc_core.Composition.Composition import Composition
 from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
+from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.ResultDiagnostics import ResultDiagnostics
 from calc_core.VLE.FlashResult import FlashResult, PhaseState
 
@@ -77,6 +78,7 @@ def snapshot_flash_result(result: FlashResult) -> dict:
         "diagnostics": result.diagnostics.to_dict(),
         "pressure": _as_float(result.pressure),
         "temperature": _as_float(result.temperature),
+        "engine_config": result.engine_config.to_dict(),
         "vapor": phase(result.vapor),
         "liquid": phase(result.liquid),
     }
@@ -97,4 +99,5 @@ def restore_flash_result(snap: dict) -> FlashResult:
         is_two_phase=bool(snap.get("is_two_phase")),
         phase_type=snap.get("phase_type"),
         diagnostics=ResultDiagnostics.from_dict(snap.get("diagnostics")),
+        engine_config=EngineConfig.from_dict(snap.get("engine_config")),
     )

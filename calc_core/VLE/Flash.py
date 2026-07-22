@@ -18,6 +18,7 @@ from dataclasses import replace
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from calc_core.Utils.Conditions import Conditions
+from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.FluidPropertiesCalculator import FluidPropertiesCalculator
 from calc_core.Utils.ResultDiagnostics import ResultWarning, diagnose_flash_result
 from calc_core.VLE.FlashResult import FlashResult, PhaseState
@@ -36,7 +37,13 @@ class Flash:
     с другими условиями (для этого создавайте новый `Flash`).
     """
 
-    def __init__(self, composition_object: Composition, conditions_object: Conditions):
+    def __init__(
+        self,
+        composition_object: Composition,
+        conditions_object: Conditions,
+        *,
+        config: EngineConfig | None = None,
+    ):
         """
         Parameters
         ----------
@@ -48,6 +55,7 @@ class Flash:
         """
         self.composition = composition_object
         self.conditions = conditions_object
+        self.config = config or EngineConfig.defaults()
         self.composition.T = conditions_object.t
 
     def calculate(self) -> FlashResult: # <-- Указываем тип возврата
@@ -77,7 +85,10 @@ class Flash:
         """
         logger.debug("Flash.calculate(): P=%s бар, T=%s K", self.conditions.p, self.conditions.t)
 
-        self.phase_stability_object = TwoPhaseStabilityTest(self.composition, self.conditions.p, self.conditions.t)
+        self.phase_stability_object = TwoPhaseStabilityTest(
+            self.composition, self.conditions.p, self.conditions.t,
+            config=self.config,
+        )
         self.phase_stability_object.calculate_phase_stability()
 
         if not self.phase_stability_object.stable:
@@ -87,7 +98,8 @@ class Flash:
                 self.composition,
                 self.conditions.p,
                 self.conditions.t,
-                self.phase_stability_object.k_values_for_flash
+                self.phase_stability_object.k_values_for_flash,
+                config=self.config,
             )
             self.phase_equil_result = phase_equil_object.find_solve_loop()
 
@@ -111,7 +123,8 @@ class Flash:
             result = FlashResult(pressure = self.conditions.p, temperature = self.conditions.t,
                 vapor=PhaseState(mole_fraction=vapor_frac, composition=self.phase_equil_result['yi_v'], properties=self.vapour_phase_props),
                 liquid=PhaseState(mole_fraction=liquid_frac, composition=self.phase_equil_result['xi_l'], properties=self.liquid_phase_props),
-                is_two_phase=True
+                is_two_phase=True,
+                engine_config=self.config,
             )
             extra = ()
             if phase_equil_object.trivial_solution:
@@ -148,6 +161,7 @@ class Flash:
                 liquid=PhaseState(mole_fraction=1.0, composition=self.composition.composition, properties=self.one_phase_stability_props),
                 is_two_phase=False,
                 phase_type=phase_type,
+                engine_config=self.config,
             )
             return replace(
                 result,

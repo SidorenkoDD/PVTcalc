@@ -11,6 +11,7 @@ from calc_core.Composition.Composition import Composition
 from calc_core.Experiments.ExperimentsFacade import ExperimentsFacade
 from calc_core.PhaseEnvelope.PhaseEnvelopeFacade import PhaseEnvelopeFacade
 from calc_core.Utils.Conditions import Conditions
+from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.Results import ResultStore
 from calc_core.Utils.Validation import (
     validate_composition_normalized,
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 class CompositionalModel:
     """Обёртка над составом с историей расчётов."""
 
-    def __init__(self, composition: Composition):
+    def __init__(self, composition: Composition, config: EngineConfig | None = None):
         """
         Parameters
         ----------
@@ -41,6 +42,7 @@ class CompositionalModel:
         """
         validate_composition_normalized(composition.composition)
         self.composition = composition
+        self.config = config or EngineConfig.defaults()
         self.result_store_object = ResultStore()
         self.phase_envelope = PhaseEnvelopeFacade(self)
         self.experiments = ExperimentsFacade(self)
@@ -77,7 +79,9 @@ class CompositionalModel:
             self.composition.composition,
             deep_copy=True,
         )
-        result = Flash(work, Conditions(p_bar, t_celsius)).calculate()
+        result = Flash(
+            work, Conditions(p_bar, t_celsius), config=self.config,
+        ).calculate()
         self.result_store_object.add(
             module="Flash",
             params={"p_bar": p_bar, "t_celsius": t_celsius},
