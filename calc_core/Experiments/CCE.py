@@ -10,6 +10,7 @@
 import logging
 
 from calc_core.Composition.Composition import Composition
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
 from calc_core.Utils.Conditions import Conditions
 from calc_core.VLE.Flash import Flash
 from calc_core.PhaseEnvelope.new_methodv2 import SaturationPressure
@@ -49,7 +50,7 @@ class CCE:
         self.reservoir_temperature = reservoir_temperature
         self.composition.T = self.reservoir_temperature
 
-    def _calc_stage(self, stage_pressure:float):
+    def _calc_stage(self, stage_pressure:float, cancellation_token=None, progress_callback=None):
         """
         Флэш на одной ступени давления, на **копии** исходного состава
         (`deep_copy=True`) — в отличие от `calculate()`, здесь `self.composition`
@@ -66,7 +67,11 @@ class CCE:
         """
         comp = self.composition.new_composition(self.composition.composition, deep_copy=True)
         condition_object = Conditions(stage_pressure, self.reservoir_temperature)
-        flash_object = Flash(comp, condition_object)
+        flash_object = Flash(
+            comp, condition_object,
+            cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
+        )
         return flash_object.calculate()
 
     def _calc_saturation_pressure(self):
@@ -83,7 +88,8 @@ class CCE:
         self.pressure_arr.append(self.saturation_pressure)
 
 
-    def calculate(self):
+    def calculate(self, cancellation_token: CancellationToken | None = None,
+                  progress_callback: ProgressCallback | None = None):
         """
         Главная точка входа: последовательный (не параллельный, см.
         `calculate_parallel`) прогон CCE.
@@ -103,6 +109,8 @@ class CCE:
             `_vectorize_dle_results`) + `v/v_res`, `v/v_sat`, `Compressibility`.
         """
         logger.info("CCE: старт, %d ступеней, T=%s°C", len(self.pressure_arr), self.reservoir_temperature)
+        if cancellation_token is not None:
+            cancellation_token.throw_if_cancelled()
         self._calc_saturation_pressure()
         logger.info("CCE: P_sat=%.4f бар", self.saturation_pressure)
         result = []
@@ -117,9 +125,20 @@ class CCE:
         # result.append(saturation_flash_result)
 
         for stage_num, stage_pressure in enumerate(self.pressure_arr, start=1):
+            if cancellation_token is not None:
+                cancellation_token.throw_if_cancelled()
+            report_progress(
+                progress_callback,
+                0.2 + 0.65 * (stage_num - 1) / max(1, len(self.pressure_arr)),
+                f"CCE stage {stage_num}/{len(self.pressure_arr)}",
+            )
             logger.debug("CCE: ступень %d/%d, P=%s бар", stage_num, len(self.pressure_arr), stage_pressure)
             stage_conditions = Conditions(stage_pressure, self.reservoir_temperature)
-            stage_pressure_flash_object = Flash(self.composition, stage_conditions)
+            stage_pressure_flash_object = Flash(
+                self.composition, stage_conditions,
+                cancellation_token=cancellation_token,
+                progress_callback=progress_callback,
+            )
             result.append(stage_pressure_flash_object.calculate())
 
         df_res = self._vectorize_dle_results(result)

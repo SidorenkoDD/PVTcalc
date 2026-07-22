@@ -1,5 +1,6 @@
 """Фоновые задачи адресуются полным NodeRef и не зависят от DPG."""
 
+import threading
 import time
 
 import pytest
@@ -29,3 +30,29 @@ def test_only_one_job_and_cancel_discards_flag():
     assert jobs.cancel() is True
     assert job.done.wait(1.0)
     assert jobs.take_finished().cancelled is True
+
+
+def test_cancelled_operation_receives_token_and_progress():
+    jobs = CalculationCoordinator()
+    ref = NodeRef("model", "base", "ssm_1")
+    started = threading.Event()
+
+    def operation(token, progress):
+        started.set()
+        progress(0.25, "working")
+        while True:
+            token.throw_if_cancelled()
+            time.sleep(0.001)
+
+    job = jobs.start(ref, "envelope", operation)
+    assert started.wait(1.0)
+    assert job.progress == 0.25
+    assert job.progress_message == "working"
+    assert jobs.cancel() is True
+    assert job.done.wait(1.0)
+
+    finished = jobs.take_finished()
+    assert finished is not None
+    assert finished.cancelled is True
+    assert finished.result is None
+    assert finished.error is None

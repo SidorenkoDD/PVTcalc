@@ -17,6 +17,11 @@ import numpy as np
 from calc_core.Composition.Composition import Composition
 from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from calc_core.Utils.EngineConfig import EngineConfig
+from calc_core.Utils.Cancellation import (
+    CancellationToken,
+    ProgressCallback,
+    report_progress,
+)
 from calc_core.Utils.Errors import ConvergenceError, InputValidationError
 from calc_core.Utils.Validation import validate_positive_pressure, validate_temperature_kelvin
 
@@ -41,6 +46,8 @@ class PhaseEquilibriumNewton:
     def __init__(
         self, composition: Composition, p: float, t: float, k_values,
         *, config: EngineConfig | None = None,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: ProgressCallback | None = None,
     ):
         """
         Parameters
@@ -98,6 +105,8 @@ class PhaseEquilibriumNewton:
         self._RR_NEWTON_TOL = self.config.flash_rr_newton_tolerance
         self._RR_MAX_ITER = self.config.flash_rr_max_iterations
         self._FUG_MAX_ITER = self.config.flash_fugacity_max_iterations
+        self.cancellation_token = cancellation_token
+        self.progress_callback = progress_callback
 
         self.zi = composition.composition
         self.k_values = validated_k
@@ -276,6 +285,8 @@ class PhaseEquilibriumNewton:
         fv = float(np.clip(self.fv, fv_left, fv_right))
 
         for _ in range(self._RR_MAX_ITER):
+            if self.cancellation_token is not None:
+                self.cancellation_token.throw_if_cancelled()
             rr_sum, rr_der = self._rr_sum_and_derivative(fv)
 
             if rr_sum > 0.0:
@@ -564,6 +575,13 @@ class PhaseEquilibriumNewton:
         i = 0
 
         while True:
+            if self.cancellation_token is not None:
+                self.cancellation_token.throw_if_cancelled()
+            report_progress(
+                self.progress_callback,
+                0.55 + 0.22 * min(i / max(1, self._FUG_MAX_ITER), 1.0),
+                "Solving phase equilibrium",
+            )
             self.fv = self.find_solve_newton()
             self.L = 1.0 - self.fv
 

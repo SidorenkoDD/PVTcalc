@@ -81,6 +81,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, effective_n_jobs
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
 
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseEnvelope.Diagnostics import (
@@ -660,7 +661,11 @@ class PhaseEnvelopeSSM:
 
         self.results['Dew_lower_bar'].append(secondary.pressure if secondary is not None else np.nan)
 
-    def calculate(self) -> pd.DataFrame:
+    def calculate(
+        self,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> pd.DataFrame:
         """Последовательный марш по температуре с continuation (см. докстринг класса)."""
         logger.info(
             "Расчёт фазовой огибающей (SSM): T=[%.1f, %.1f] °C, шаг %.1f °C",
@@ -672,7 +677,12 @@ class PhaseEnvelopeSSM:
         prev_pb: float | None = None
         prev_pdew: float | None = None
 
-        for t_c in self.temps_c:
+        total = max(1, len(self.temps_c))
+        for index, t_c in enumerate(self.temps_c, start=1):
+            if cancellation_token is not None:
+                cancellation_token.throw_if_cancelled()
+            report_progress(progress_callback, (index - 1) / total,
+                            f"Envelope temperature {index}/{total}")
             t_k = float(t_c) + 273.15
 
             finder = SaturationPointSSM(
@@ -700,6 +710,9 @@ class PhaseEnvelopeSSM:
                 prev_pb = primary.pressure
             if secondary is not None:
                 prev_pdew = secondary.pressure
+
+            report_progress(progress_callback, index / total,
+                            f"Envelope temperature {index}/{total}")
 
         return self._frame()
 

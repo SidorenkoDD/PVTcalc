@@ -16,6 +16,11 @@ import numpy as np
 from calc_core.Composition.Composition import Composition
 from calc_core.EOS.BrusilovskiyEOS import BrusilovskiyEOS
 from calc_core.Utils.EngineConfig import EngineConfig
+from calc_core.Utils.Cancellation import (
+    CancellationToken,
+    ProgressCallback,
+    report_progress,
+)
 from calc_core.Utils.Errors import StopIterationError
 
 logger = logging.getLogger(__name__)
@@ -34,6 +39,8 @@ class TwoPhaseStabilityTest:
     def __init__(
         self, composition: Composition, p: float, t: float,
         *, config: EngineConfig | None = None,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: ProgressCallback | None = None,
     ):
         """
         Parameters
@@ -51,6 +58,8 @@ class TwoPhaseStabilityTest:
         self.p = float(p)
         self.t = float(t)
         self.config = config or EngineConfig.defaults()
+        self.cancellation_token = cancellation_token
+        self.progress_callback = progress_callback
 
         self.stable = None
         self.k_values_liquid = None
@@ -107,6 +116,13 @@ class TwoPhaseStabilityTest:
         # Публичные dict-представления для совместимости
         self.yi_v = None
         self.xi_l = None
+
+    def _check_cancelled(self) -> None:
+        if self.cancellation_token is not None:
+            self.cancellation_token.throw_if_cancelled()
+
+    def _report(self, fraction: float, message: str) -> None:
+        report_progress(self.progress_callback, fraction, message)
 
     # =====================================================================================
     # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
@@ -287,15 +303,19 @@ class TwoPhaseStabilityTest:
         результату определяет стабильность (`_interpetate_stability_analysis`).
         После вызова читайте `self.stable`/`self.k_values_for_flash`.
         """
+        self._check_cancelled()
         self.initial_eos = BrusilovskiyEOS(composition=self._composition, p=self.p, t=self.t)
         self.initial_eos.calc_eos()
         self._mixture_fugacities_arr = self.initial_eos.fugacities.copy()
 
         k_init = self._calc_k_values_wilson_array()
         self._loop_vapour(k_init.copy())
+        self._report(0.25, "Vapour stability tested")
         self._loop_liquid(k_init.copy())
+        self._report(0.45, "Liquid stability tested")
 
         self._interpetate_stability_analysis()
+        self._report(0.55, "Phase stability complete")
         logger.debug(
             "P=%s, T=%s: stable=%s, S_v=%s, S_l=%s",
             self.p, self.t, self.stable, self.S_v, self.S_l,
@@ -327,6 +347,7 @@ class TwoPhaseStabilityTest:
         self.k_values_vapour = self._array_to_dict(self._k_v_arr)
 
         while True:
+            self._check_cancelled()
             Yi_v = self._calc_Yi_v(self._k_v_arr)
             self.S_v = self._calc_S(Yi_v)
             self._yi_v_arr = self._normalize_mole_fractions(Yi_v, self.S_v)
@@ -390,6 +411,7 @@ class TwoPhaseStabilityTest:
         self.k_values_liquid = self._array_to_dict(self._k_l_arr)
 
         while True:
+            self._check_cancelled()
             Xi_l = self._calc_Xi_l(self._k_l_arr)
             self.S_l = self._calc_S(Xi_l)
             self._xi_l_arr = self._normalize_mole_fractions(Xi_l, self.S_l)

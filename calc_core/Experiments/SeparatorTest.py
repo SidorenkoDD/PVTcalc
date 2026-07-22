@@ -13,6 +13,7 @@
 import logging
 
 from calc_core.Composition.Composition import Composition
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
 from calc_core.Utils.Conditions import Conditions
 from calc_core.VLE.Flash import Flash
 from calc_core.PhaseEnvelope.new_methodv2 import SaturationPressure
@@ -96,7 +97,7 @@ class SeparatorTest:
         ...
 
 
-    def _calculate_stage(self, p_bar, t_c):
+    def _calculate_stage(self, p_bar, t_c, cancellation_token=None, progress_callback=None):
         """
         Флэш на текущем `self.composition` для одной ступени.
 
@@ -111,7 +112,11 @@ class SeparatorTest:
         FlashResult
         """
         current_conditions = Conditions(p_bar, t_c)
-        flash_object = Flash(self.composition, current_conditions)
+        flash_object = Flash(
+            self.composition, current_conditions,
+            cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
+        )
         return flash_object.calculate()
 
 
@@ -258,7 +263,8 @@ class SeparatorTest:
         return df
 
 
-    def calculate(self):
+    def calculate(self, cancellation_token: CancellationToken | None = None,
+                  progress_callback: ProgressCallback | None = None):
             """
             Главная точка входа: полный прогон сепараторного теста.
 
@@ -279,12 +285,18 @@ class SeparatorTest:
                 Если `pressure_arr` и `temperature_arr` разной длины.
             """
             logger.info("SeparatorTest: старт, %d ступеней", len(self.pressure_arr))
+            if cancellation_token is not None:
+                cancellation_token.throw_if_cancelled()
             result = []
             self._check_length_arr(self.pressure_arr, self.temperature_arr)
 
             ## Расчет для пластовых условий
             reservoir_conditions = Conditions(self.reservoir_pressure, self.reservoir_temperature)
-            reservoir_flash_object = Flash(self.composition, reservoir_conditions)
+            reservoir_flash_object = Flash(
+                self.composition, reservoir_conditions,
+                cancellation_token=cancellation_token,
+                progress_callback=progress_callback,
+            )
             reservoir_flash_result = reservoir_flash_object.calculate()
             result.append(reservoir_flash_result)
             self._liquid_molar_fractions = reservoir_flash_result.liquid_composition
@@ -297,7 +309,11 @@ class SeparatorTest:
             logger.info("SeparatorTest: P_sat=%.4f бар", saturation_pressure)
 
             saturation_conditions = Conditions(saturation_pressure, self.reservoir_temperature)
-            saturation_flash_object = Flash(self.composition, saturation_conditions)
+            saturation_flash_object = Flash(
+                self.composition, saturation_conditions,
+                cancellation_token=cancellation_token,
+                progress_callback=progress_callback,
+            )
             saturation_flash_result = saturation_flash_object.calculate()
 
             result.append(saturation_flash_result)
@@ -305,6 +321,13 @@ class SeparatorTest:
 
             ## ОСНОВНОЙ ЦИКЛ РАСЧЕТА ПО СТУПЕНЯМ
             for stage_num, (stage_pressure, stage_temperature) in enumerate(zip(self.pressure_arr, self.temperature_arr), start=1):
+                if cancellation_token is not None:
+                    cancellation_token.throw_if_cancelled()
+                report_progress(
+                    progress_callback,
+                    0.2 + 0.65 * (stage_num - 1) / max(1, len(self.pressure_arr)),
+                    f"Separator stage {stage_num}/{len(self.pressure_arr)}",
+                )
                 logger.debug(
                     "SeparatorTest: ступень %d/%d, P=%s бар, T=%s°C",
                     stage_num, len(self.pressure_arr), stage_pressure, stage_temperature,
@@ -312,7 +335,10 @@ class SeparatorTest:
                 # Обновляем состав объекта композиции перед новым флешем
                 self.composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
                 self.composition.T = stage_temperature
-                self._stage_result = self._calculate_stage(stage_pressure, stage_temperature)
+                self._stage_result = self._calculate_stage(
+                    stage_pressure, stage_temperature,
+                    cancellation_token, progress_callback,
+                )
                 result.append(self._stage_result)
 
                 # Снова безопасно берем состав жидкости для следующей итерации
@@ -323,7 +349,11 @@ class SeparatorTest:
             final_composition = self.composition.new_composition(self._liquid_molar_fractions, deep_copy=True)
             final_composition.T = self.stc_conditions.t
             
-            stc_flash_object = Flash(final_composition, self.stc_conditions)
+            stc_flash_object = Flash(
+                final_composition, self.stc_conditions,
+                cancellation_token=cancellation_token,
+                progress_callback=progress_callback,
+            )
             stc_flash_result = stc_flash_object.calculate()
             result.append(stc_flash_result)
 

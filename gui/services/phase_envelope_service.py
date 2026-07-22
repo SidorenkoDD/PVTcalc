@@ -38,6 +38,7 @@ import math
 
 from calc_core.Composition.Composition import Composition
 from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,13 @@ def _reservoir(params: dict, psat) -> dict | None:
     return {"T_c": float(t_res_c), "P_sat": psat}
 
 
-def run_envelope(composition: Composition, params: dict) -> dict:
+def run_envelope(
+    composition: Composition,
+    params: dict,
+    *,
+    cancellation_token: CancellationToken | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict:
     """
     Считает фазовую огибающую выбранным методом (`params["method"]`).
 
@@ -149,11 +156,11 @@ def run_envelope(composition: Composition, params: dict) -> dict:
     """
     method = params.get("method", "ssm")
     if method == "grid":
-        return _run_grid(composition, params)
-    return _run_ssm(composition, params)
+        return _run_grid(composition, params, cancellation_token, progress_callback)
+    return _run_ssm(composition, params, cancellation_token, progress_callback)
 
 
-def _run_ssm(composition: Composition, params: dict) -> dict:
+def _run_ssm(composition, params, cancellation_token=None, progress_callback=None) -> dict:
     """Огибающая методом SSM (непрерывная кривая) — см. `run_envelope`."""
     t_min_c = float(params["t_min_c"])
     t_max_c = float(params["t_max_c"])
@@ -171,7 +178,11 @@ def _run_ssm(composition: Composition, params: dict) -> dict:
     logger.info("Огибающая (SSM): T=[%s..%s] шаг %s °C, P_max=%s бар",
                 t_min_c, t_max_c, t_step_c, p_max_bar)
 
-    df = model.phase_envelope.ssm(t_min_c, t_max_c, t_step_c, p_max_bar, parallel=True)
+    df = model.phase_envelope.ssm(
+        t_min_c, t_max_c, t_step_c, p_max_bar, parallel=True,
+        cancellation_token=cancellation_token,
+        progress_callback=progress_callback,
+    )
     diagnostics = df.attrs.get("diagnostics", {
         "method": "ssm",
         "partial": False,
@@ -215,7 +226,7 @@ def _run_ssm(composition: Composition, params: dict) -> dict:
     }
 
 
-def _run_grid(composition: Composition, params: dict) -> dict:
+def _run_grid(composition, params, cancellation_token=None, progress_callback=None) -> dict:
     """Скан стабильности P×T (`PhaseEnvelopeGrid`) — см. `run_envelope`."""
     t_max_c = float(params.get("grid_t_max_c", 300.0))
     p_max_bar = float(params.get("grid_p_max_bar", 700.0))
@@ -235,7 +246,10 @@ def _run_grid(composition: Composition, params: dict) -> dict:
 
     calc = model.phase_envelope.grid(
         max_temperature=t_max_c, max_pressure=p_max_bar,
-        temperature_points=t_points, pressure_points=p_points)
+        temperature_points=t_points, pressure_points=p_points,
+        cancellation_token=cancellation_token,
+        progress_callback=progress_callback,
+    )
 
     T = [_f(t) for t in calc.result_temperature_arr]   # уже °C
     P = [_f(p) for p in calc.result_pressure_arr]       # бар

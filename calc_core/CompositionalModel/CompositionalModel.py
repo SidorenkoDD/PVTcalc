@@ -11,6 +11,7 @@ from calc_core.Composition.Composition import Composition
 from calc_core.Experiments.ExperimentsFacade import ExperimentsFacade
 from calc_core.PhaseEnvelope.PhaseEnvelopeFacade import PhaseEnvelopeFacade
 from calc_core.Utils.Conditions import Conditions
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
 from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.Results import ResultStore
 from calc_core.Utils.Validation import (
@@ -47,7 +48,14 @@ class CompositionalModel:
         self.phase_envelope = PhaseEnvelopeFacade(self)
         self.experiments = ExperimentsFacade(self)
 
-    def flash(self, p_bar: float, t_celsius: float) -> FlashResult:
+    def flash(
+        self,
+        p_bar: float,
+        t_celsius: float,
+        *,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> FlashResult:
         """Рассчитывает одно- или двухфазный Flash через единый контракт.
 
         Parameters
@@ -71,6 +79,9 @@ class CompositionalModel:
         """
         validate_positive_pressure(p_bar, name="p_bar")
         validate_temperature_celsius(t_celsius, name="t_celsius")
+        if cancellation_token is not None:
+            cancellation_token.throw_if_cancelled()
+        report_progress(progress_callback, 0.0, "Preparing flash")
         logger.info(
             "CompositionalModel.flash: P=%s bar, T=%s °C", p_bar, t_celsius,
         )
@@ -81,7 +92,10 @@ class CompositionalModel:
         )
         result = Flash(
             work, Conditions(p_bar, t_celsius), config=self.config,
+            cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
         ).calculate()
+        report_progress(progress_callback, 1.0, "Flash complete")
         self.result_store_object.add(
             module="Flash",
             params={"p_bar": p_bar, "t_celsius": t_celsius},

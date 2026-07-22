@@ -18,6 +18,11 @@ from dataclasses import replace
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
 from calc_core.Utils.Conditions import Conditions
+from calc_core.Utils.Cancellation import (
+    CancellationToken,
+    ProgressCallback,
+    report_progress,
+)
 from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.FluidPropertiesCalculator import FluidPropertiesCalculator
 from calc_core.Utils.ResultDiagnostics import ResultWarning, diagnose_flash_result
@@ -43,6 +48,8 @@ class Flash:
         conditions_object: Conditions,
         *,
         config: EngineConfig | None = None,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: ProgressCallback | None = None,
     ):
         """
         Parameters
@@ -56,6 +63,8 @@ class Flash:
         self.composition = composition_object
         self.conditions = conditions_object
         self.config = config or EngineConfig.defaults()
+        self.cancellation_token = cancellation_token
+        self.progress_callback = progress_callback
         self.composition.T = conditions_object.t
 
     def calculate(self) -> FlashResult: # <-- Указываем тип возврата
@@ -84,10 +93,15 @@ class Flash:
             `molar_volume`, `molar_density`, `density`, `z`, `viscosity`.
         """
         logger.debug("Flash.calculate(): P=%s бар, T=%s K", self.conditions.p, self.conditions.t)
+        if self.cancellation_token is not None:
+            self.cancellation_token.throw_if_cancelled()
+        report_progress(self.progress_callback, 0.05, "Testing phase stability")
 
         self.phase_stability_object = TwoPhaseStabilityTest(
             self.composition, self.conditions.p, self.conditions.t,
             config=self.config,
+            cancellation_token=self.cancellation_token,
+            progress_callback=self.progress_callback,
         )
         self.phase_stability_object.calculate_phase_stability()
 
@@ -100,8 +114,11 @@ class Flash:
                 self.conditions.t,
                 self.phase_stability_object.k_values_for_flash,
                 config=self.config,
+                cancellation_token=self.cancellation_token,
+                progress_callback=self.progress_callback,
             )
             self.phase_equil_result = phase_equil_object.find_solve_loop()
+            report_progress(self.progress_callback, 0.82, "Calculating phase properties")
 
             # ВАЖНО: Замените 'V' на реальный ключ мольной доли пара из вашего phase_equil_result
             vapor_frac = self.phase_equil_result['Fv']
@@ -149,6 +166,7 @@ class Flash:
                 self.phase_stability_object.liquid_eos, self.conditions.p, self.conditions.t
             )
             self.one_phase_stability_props = self.one_phase_stability_props_object.calc_all_properties()
+            report_progress(self.progress_callback, 0.82, "Calculating phase properties")
             from calc_core.PhaseStability.PhaseIdentificator import PhaseIdentificator
             phase_type = PhaseIdentificator(self).identify_phase()
 

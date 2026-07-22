@@ -31,6 +31,7 @@ import logging
 
 import pandas as pd
 
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback
 from calc_core.Experiments.DLE import DLE
 from calc_core.Experiments.CCE import CCE
 from calc_core.Experiments.SeparatorTest import SeparatorTest
@@ -58,7 +59,9 @@ class ExperimentsFacade:
         return composition.new_composition(composition.composition, deep_copy=True)
 
     def dle(self, pressure_arr_bar: list, reservoir_pressure_bar: float,
-            reservoir_temperature_c: float) -> pd.DataFrame:
+            reservoir_temperature_c: float, *,
+            cancellation_token: CancellationToken | None = None,
+            progress_callback: ProgressCallback | None = None) -> pd.DataFrame:
         """
         Дифференциальная конденсация (см. `calc_core/Experiments/DLE.py`).
 
@@ -86,7 +89,7 @@ class ExperimentsFacade:
         validate_temperature_celsius(reservoir_temperature_c, name='reservoir_temperature_c')
         calc = DLE(self._composition_copy(), list(pressure_arr_bar),
                    reservoir_pressure_bar, reservoir_temperature_c)
-        calc.calculate()
+        calc.calculate(cancellation_token, progress_callback)
         df = calc._dle_df
 
         self._model.result_store_object.add(
@@ -100,7 +103,9 @@ class ExperimentsFacade:
         )
         return df
 
-    def cce(self, pressure_arr_bar: list, reservoir_temperature_k: float) -> pd.DataFrame:
+    def cce(self, pressure_arr_bar: list, reservoir_temperature_k: float, *,
+            cancellation_token: CancellationToken | None = None,
+            progress_callback: ProgressCallback | None = None) -> pd.DataFrame:
         """
         Дифференциация при постоянном составе (см. `calc_core/Experiments/CCE.py`).
 
@@ -127,7 +132,7 @@ class ExperimentsFacade:
         validate_positive_pressure(pressure_arr_bar, name='pressure_arr_bar')
         validate_temperature_kelvin(reservoir_temperature_k, name='reservoir_temperature_k')
         calc = CCE(self._composition_copy(), list(pressure_arr_bar), reservoir_temperature_k)
-        df = calc.calculate()
+        df = calc.calculate(cancellation_token, progress_callback)
 
         self._model.result_store_object.add(
             module='Experiments.cce',
@@ -140,7 +145,9 @@ class ExperimentsFacade:
         return df
 
     def separator(self, pressure_arr_bar: list, temperature_arr_c: list,
-                  reservoir_pressure_bar: float, reservoir_temperature_c: float) -> pd.DataFrame:
+                  reservoir_pressure_bar: float, reservoir_temperature_c: float, *,
+                  cancellation_token: CancellationToken | None = None,
+                  progress_callback: ProgressCallback | None = None) -> pd.DataFrame:
         """
         Многоступенчатая сепарация (см. `calc_core/Experiments/SeparatorTest.py`).
 
@@ -175,7 +182,7 @@ class ExperimentsFacade:
             validate_temperature_celsius(stage_t, name='temperature_arr_c')
         calc = SeparatorTest(self._composition_copy(), list(pressure_arr_bar), list(temperature_arr_c),
                              reservoir_pressure_bar, reservoir_temperature_c)
-        calc.calculate()
+        calc.calculate(cancellation_token, progress_callback)
         df = calc._dle_df
 
         self._model.result_store_object.add(

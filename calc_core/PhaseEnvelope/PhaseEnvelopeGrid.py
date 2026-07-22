@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 from calc_core.Composition.Composition import Composition
 from calc_core.PhaseStability.TwoPhaseStabilityTest import TwoPhaseStabilityTest
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback, report_progress
 
 class PhaseEnvelopeGrid:
     def __init__(self, composition: Composition,
@@ -25,7 +26,7 @@ class PhaseEnvelopeGrid:
         self.pressure_array = np.linspace(1, max_pressure, pressure_points)
         self.temperature_array = np.linspace(273.15, max_temperature + 273.15, temperature_points)
 
-    def _calc_single_point(self, p: float, t: float):
+    def _calc_single_point(self, p: float, t: float, cancellation_token=None):
         """
         Чистая функция расчёта для одной точки. 
         Не изменяет self, а возвращает кортеж результатов.
@@ -33,7 +34,10 @@ class PhaseEnvelopeGrid:
         composition = self.composition.new_composition(self.composition.composition, deep_copy=True)
         composition.T = t
         # Передаём t напрямую, чтобы избежать гонки за self.composition.T
-        stab_test_obj = TwoPhaseStabilityTest(composition=composition, p=p, t=t)
+        stab_test_obj = TwoPhaseStabilityTest(
+            composition=composition, p=p, t=t,
+            cancellation_token=cancellation_token,
+        )
         stab_test_obj.calculate_phase_stability()
 
         flag = 0.0 if stab_test_obj.stable else 1.0
@@ -61,6 +65,24 @@ class PhaseEnvelopeGrid:
             self.result_pressure_arr = []
             self.result_temperature_arr = []
             self.result_stability_flag_arr = []
+
+    def run(
+        self,
+        cancellation_token: CancellationToken,
+        progress_callback: ProgressCallback | None = None,
+    ):
+        """Последовательный отменяемый путь для GUI."""
+        P_grid, T_grid = np.meshgrid(self.pressure_array, self.temperature_array)
+        points = list(zip(P_grid.ravel(), T_grid.ravel()))
+        results = []
+        total = max(1, len(points))
+        for index, (p, t) in enumerate(points, start=1):
+            cancellation_token.throw_if_cancelled()
+            results.append(self._calc_single_point(p, t, cancellation_token))
+            report_progress(progress_callback, index / total, f"Grid point {index}/{total}")
+        self.result_pressure_arr = [r[0] for r in results]
+        self.result_temperature_arr = [r[1] for r in results]
+        self.result_stability_flag_arr = [r[2] for r in results]
 
     def plot(self):
         plt.scatter(x=self.result_temperature_arr, y=self.result_pressure_arr, c=self.result_stability_flag_arr)

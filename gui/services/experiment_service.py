@@ -17,6 +17,7 @@ import pandas as pd
 
 from calc_core.Composition.Composition import Composition
 from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback
 from calc_core.Utils.Validation import (
     validate_positive_pressure,
     validate_temperature_celsius,
@@ -81,7 +82,14 @@ def _normalized_copy(composition: Composition) -> Composition:
     return composition.new_composition(composition.composition, deep_copy=True)
 
 
-def run_experiment(composition: Composition, kind: str, params: dict) -> dict:
+def run_experiment(
+    composition: Composition,
+    kind: str,
+    params: dict,
+    *,
+    cancellation_token: CancellationToken | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict:
     """
     Считает эксперимент и возвращает таблицу как словарь.
 
@@ -116,10 +124,18 @@ def run_experiment(composition: Composition, kind: str, params: dict) -> dict:
 
     if kind == "cce":
         # facade.cce ждёт температуру в K (см. его докстринг)
-        df = model.experiments.cce(pressures, t_c + 273.15)
+        df = model.experiments.cce(
+            pressures, t_c + 273.15,
+            cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
+        )
     elif kind == "dle":
         validate_positive_pressure(float(params["P_res"]), name="P_res")
-        df = model.experiments.dle(pressures, float(params["P_res"]), t_c)
+        df = model.experiments.dle(
+            pressures, float(params["P_res"]), t_c,
+            cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
+        )
     else:  # separator
         stage_temps = [float(t) for t in params["stage_temps_c"]]
         if len(stage_temps) != len(pressures):
@@ -127,8 +143,11 @@ def run_experiment(composition: Composition, kind: str, params: dict) -> dict:
         for stage_t in stage_temps:
             validate_temperature_celsius(stage_t, name="stage temperature")
         validate_positive_pressure(float(params["P_res"]), name="P_res")
-        df = model.experiments.separator(pressures, stage_temps,
-                                         float(params["P_res"]), t_c)
+        df = model.experiments.separator(
+            pressures, stage_temps, float(params["P_res"]), t_c,
+            cancellation_token=cancellation_token,
+            progress_callback=progress_callback,
+        )
 
     return _dataframe_to_result(df, kind)
 

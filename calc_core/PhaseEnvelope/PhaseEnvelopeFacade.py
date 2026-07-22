@@ -39,6 +39,7 @@ from calc_core.PhaseEnvelope.PhaseEnvelopeNewton import (
 )
 from calc_core.PhaseEnvelope.PhaseEnvelopeSuccessiveSubstitution import PhaseEnvelopeSSM
 from calc_core.Utils.Errors import ConvergenceError, InputValidationError, StopIterationError
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback
 from calc_core.Utils.Validation import (
     validate_positive_pressure,
     validate_temperature_celsius,
@@ -258,7 +259,13 @@ class PhaseEnvelopeFacade:
             raise ConvergenceError('CriticalPointCalculator не нашёл критическую точку')
         return result
 
-    def grid(self, **kwargs) -> PhaseEnvelopeGrid:
+    def grid(
+        self,
+        *,
+        cancellation_token: CancellationToken | None = None,
+        progress_callback: ProgressCallback | None = None,
+        **kwargs,
+    ) -> PhaseEnvelopeGrid:
         """
         Сеточный скан стабильности P×T (затравка нижней ветки SSM).
 
@@ -283,7 +290,10 @@ class PhaseEnvelopeFacade:
         if 'max_pressure' in kwargs:
             validate_positive_pressure(kwargs['max_pressure'], name='max_pressure')
         calc = PhaseEnvelopeGrid(self._composition_copy(), **kwargs)
-        calc.run_parallel()
+        if cancellation_token is None:
+            calc.run_parallel(n_jobs=self._model.config.parallel_jobs)
+        else:
+            calc.run(cancellation_token, progress_callback)
 
         self._model.result_store_object.add(
             module='PhaseEnvelope.grid',
@@ -297,7 +307,10 @@ class PhaseEnvelopeFacade:
         return calc
 
     def ssm(self, t_min_c: float, t_max_c: float, t_step_c: float, p_max_bar: float,
-            parallel: bool = True, **kwargs):
+            parallel: bool = True,
+            cancellation_token: CancellationToken | None = None,
+            progress_callback: ProgressCallback | None = None,
+            **kwargs):
         """
         Фазовая огибающая методом последовательных приближений (основная реализация).
 
@@ -326,7 +339,10 @@ class PhaseEnvelopeFacade:
         """
         self._validate_envelope_range(t_min_c, t_max_c, t_step_c, p_max_bar)
         calc = PhaseEnvelopeSSM(self._composition_copy(), t_min_c, t_max_c, t_step_c, p_max_bar, **kwargs)
-        df = calc.calculate_parallel() if parallel else calc.calculate()
+        if cancellation_token is not None:
+            df = calc.calculate(cancellation_token, progress_callback)
+        else:
+            df = calc.calculate_parallel(n_jobs=self._model.config.parallel_jobs) if parallel else calc.calculate()
 
         self._model.result_store_object.add(
             module='PhaseEnvelope.ssm',

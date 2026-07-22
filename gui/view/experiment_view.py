@@ -610,8 +610,14 @@ class ExperimentViewMixin(ContextBoundView):
         ref = self._state.node_ref(nid)
         if ref is None:
             return
-        self._jobs.start(ref, kind,
-                         lambda: exp_svc.run_experiment(composition, kind, params))
+        self._jobs.start(
+            ref, kind,
+            lambda token, progress: exp_svc.run_experiment(
+                composition, kind, params,
+                cancellation_token=token,
+                progress_callback=progress,
+            ),
+        )
         self._state.set_node_running(ref)
         self._set_status(f"{kind.upper()} running...")
         self._arm_flash_poll()

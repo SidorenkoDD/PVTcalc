@@ -356,8 +356,14 @@ class FlashViewMixin(ContextBoundView):
         ref = self._state.node_ref(nid)
         if ref is None:
             return
-        self._jobs.start(ref, "flash",
-                         lambda: flash_service.run_flash(composition, p, t))
+        self._jobs.start(
+            ref, "flash",
+            lambda token, progress: flash_service.run_flash(
+                composition, p, t,
+                cancellation_token=token,
+                progress_callback=progress,
+            ),
+        )
         self._state.set_flash_running(ref)
         self._set_status(f"Flash running at P={p:.3f} bar, T={t:.2f} C...")
         self._arm_flash_poll()
@@ -370,6 +376,11 @@ class FlashViewMixin(ContextBoundView):
         if job is None:
             return
         if not job.done.is_set():
+            if job.progress_message:
+                self._set_status(
+                    f"{job.label.capitalize()}: {job.progress_message} "
+                    f"({job.progress:.0%})"
+                )
             self._arm_flash_poll()
             return
         job = self._jobs.take_finished()

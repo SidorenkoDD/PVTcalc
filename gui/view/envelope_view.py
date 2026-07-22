@@ -291,8 +291,14 @@ class EnvelopeViewMixin(ContextBoundView):
         ref = self._state.node_ref(nid)
         if ref is None:
             return
-        self._jobs.start(ref, "phase envelope",
-                         lambda: pe_svc.run_envelope(composition, params))
+        self._jobs.start(
+            ref, "phase envelope",
+            lambda token, progress: pe_svc.run_envelope(
+                composition, params,
+                cancellation_token=token,
+                progress_callback=progress,
+            ),
+        )
         self._state.set_node_running(ref)
         self._set_status("Phase envelope running...")
         self._arm_flash_poll()

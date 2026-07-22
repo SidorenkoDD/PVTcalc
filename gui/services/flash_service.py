@@ -15,6 +15,7 @@ import logging
 
 from calc_core.Composition.Composition import Composition
 from calc_core.CompositionalModel.CompositionalModel import CompositionalModel
+from calc_core.Utils.Cancellation import CancellationToken, ProgressCallback
 from calc_core.Utils.EngineConfig import EngineConfig
 from calc_core.Utils.ResultDiagnostics import ResultDiagnostics
 from calc_core.VLE.FlashResult import FlashResult, PhaseState
@@ -33,7 +34,14 @@ PHASE_PROPERTY_ROWS: list[tuple[str, str]] = [
 ]
 
 
-def run_flash(composition: Composition, p_bar: float, t_celsius: float) -> FlashResult:
+def run_flash(
+    composition: Composition,
+    p_bar: float,
+    t_celsius: float,
+    *,
+    cancellation_token: CancellationToken | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> FlashResult:
     """
     Считает флэш для состава при заданных давлении (бар) и температуре (°C).
 
@@ -47,7 +55,11 @@ def run_flash(composition: Composition, p_bar: float, t_celsius: float) -> Flash
     # Сохранённые инженерные составы часто округлены до 5-6 знаков; фасад
     # принимает уже нормированный Composition, поэтому нормализуем копию здесь.
     work = composition.new_composition(composition.composition, deep_copy=True)
-    return CompositionalModel(work).flash(p_bar, t_celsius)
+    return CompositionalModel(work).flash(
+        p_bar, t_celsius,
+        cancellation_token=cancellation_token,
+        progress_callback=progress_callback,
+    )
 
 
 def _as_float(value):
