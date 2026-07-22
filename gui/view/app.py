@@ -71,6 +71,10 @@ class PVTcalcApp(
         # состояние разворота дерева (во View, чтобы переживать перерисовку)
         self._expanded_models: set[str] = set()
         self._expanded_cats: set[str] = set()
+        # Корень модели, который пользователь явно выбрал в дереве. Нужен,
+        # чтобы Del удалял модель только после выбора именно её корня, а не
+        # случайно вместе с активным расчётным узлом.
+        self._selected_tree_model_id: str | None = None
         # Выбор узлов для сравнения (Ctrl+клик в дереве). Полный адрес нужен
         # для Flash и Experiments: локальные exp_1/flash_1 повторяются в
         # разных моделях одного проекта.
@@ -266,8 +270,14 @@ class PVTcalcApp(
     def _on_key_delete(self, sender, app_data) -> None:
         if self._state.current_screen != "workspace":
             return
+        if self._has_open_modal():
+            return
         # только когда курсор над панелью дерева (не мешаем вводу в поля)
         if not (dpg.is_item_hovered(_TREE_PANEL) or dpg.is_item_hovered(_MODEL_TREE)):
+            return
+        model_id = self._selected_tree_model_id
+        if model_id is not None and model_id in self._state.models:
+            self._on_delete_model_confirm(None, None, model_id)
             return
         node = self._state.active_node
         # удаляем любой узел-расчёт (Composition не удаляется — см. delete_node)

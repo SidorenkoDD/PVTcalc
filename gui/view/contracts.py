@@ -90,6 +90,9 @@ class ContextBoundView:
     def _on_duplicate_model_confirm(self, sender, app_data, user_data) -> None:
         raise NotImplementedError
 
+    def _on_delete_model_confirm(self, sender, app_data, user_data) -> None:
+        raise NotImplementedError
+
     def _on_view_composition(self, sender, app_data, user_data) -> None:
         raise NotImplementedError
 

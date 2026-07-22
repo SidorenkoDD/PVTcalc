@@ -328,6 +328,67 @@ def test_discard_restores_previous_saved_workspace_not_empty_model(tmp_path):
         dpg.destroy_context()
 
 
+def test_delete_model_confirmation_warns_and_removes_only_that_model(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState(workspaces={
+        "KRSNL_PVTSIM": {"legacy": "will be removed"},
+    }))
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        saved_id = state.new_envelope({"method": "ssm", "t_min_c": 10.0})
+        assert saved_id is not None
+        state.set_node_result(saved_id, {"points": [[10.0, 42.0]]})
+        state.save_model()
+        state.new_flash_run()  # несохранённое изменение тоже должно быть уничтожено
+
+        app._on_delete_model_confirm(None, None, "KRSNL_PVTSIM")
+
+        modal = app._modals[-1]
+        texts = _text_values(modal)
+        assert any("all saved calculation results" in text for text in texts)
+        assert any("unsaved changes will be discarded" in text for text in texts)
+        app._on_delete_model_do(None, None, ("KRSNL_PVTSIM", modal))
+
+        raw = json.loads(db_path.read_text(encoding="utf-8"))
+        assert "KRSNL_PVTSIM" not in raw
+        assert copy_id in raw
+        assert "KRSNL_PVTSIM" not in state.models
+        assert state.active_model_id == copy_id
+        assert state.current_screen == "workspace"
+        assert app._session.workspaces == {}
+    finally:
+        dpg.destroy_context()
+
+
+def test_delete_key_for_selected_model_opens_confirmation(tmp_path, monkeypatch):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        app._on_model_row(None, None, "KRSNL_PVTSIM")
+        monkeypatch.setattr(dpg, "is_item_hovered", lambda _item: True)
+
+        app._on_key_delete(None, None)
+
+        assert "KRSNL_PVTSIM" in state.models  # Del сначала требует подтверждения
+        assert any("Delete model" in text for text in _text_values(app._modals[-1]))
+    finally:
+        dpg.destroy_context()
+
+
 def test_compare_selection_distinguishes_same_local_id_across_models(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)

@@ -42,6 +42,9 @@ class ProjectsViewMixin(ContextBoundView):
     _last_proj_click: str | None
     _last_proj_click_time: float
     _expanded_models: set[str]
+    _expanded_cats: set[str]
+    _selected_tree_model_id: str | None
+    _compare_selection: list
     _restored_models: set[str]
     _excel_path: str | None
     _excel_win: int | None
@@ -303,6 +306,84 @@ class ProjectsViewMixin(ContextBoundView):
                                callback=self._on_delete_project_do)
                 dpg.add_button(label="Cancel", width=120,
                                callback=lambda: dpg.delete_item(win))
+
+    def _on_delete_model_confirm(self, sender, app_data, user_data) -> None:
+        """Запрашивает подтверждение удаления одной модели и её workspace."""
+        model_id = str(user_data)
+        model = self._state.models.get(model_id)
+        if model is None:
+            self._set_status(f"Model '{model_id}' is no longer available.")
+            return
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        height = 205 if model.dirty else 175
+        with dpg.window(label="Delete model", modal=True, no_resize=True,
+                        width=500, height=height,
+                        pos=(max(0, w // 2 - 250), max(0, h // 2 - height // 2))) as win:
+            self._track_modal(win)
+            dpg.add_text(f"Delete model '{model.title}'?")
+            dpg.add_text("Its composition, workspace and all saved calculation "
+                         "results will be removed.")
+            if model.dirty:
+                warning = dpg.add_text("Warning: unsaved changes will be discarded too.")
+                dpg.bind_item_theme(warning, self._theme_stale())
+            dpg.add_text("This cannot be undone.")
+            dpg.add_spacer(height=8)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Delete", width=120,
+                               user_data=(model_id, win),
+                               callback=self._on_delete_model_do)
+                dpg.add_button(label="Cancel", width=120,
+                               callback=lambda: dpg.delete_item(win))
+
+    def _on_delete_model_do(self, sender, app_data, user_data) -> None:
+        """Удаляет модель из store и все локальные ссылки на неё."""
+        model_id, win = user_data
+        if dpg.does_item_exist(win):
+            dpg.delete_item(win)
+        model = self._state.models.get(model_id)
+        if model is None:
+            self._set_status(f"Model '{model_id}' is no longer available.")
+            return
+        project_id = model.project_id
+        was_active = model_id == self._state.active_model_id
+        try:
+            ok = proj_svc.delete_model(self._state.db_path, model_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось удалить модель %s", model_id)
+            self._set_status(f"Delete failed: {exc}")
+            return
+        if not ok:
+            self._set_status(f"Model '{model_id}' not found.")
+            return
+
+        if self._session.workspaces is not None:
+            self._session.workspaces.pop(model_id, None)
+        self._expanded_models.discard(model_id)
+        self._expanded_cats = {
+            key for key in self._expanded_cats
+            if not key.startswith(f"{model_id}:")
+        }
+        self._restored_models.discard(model_id)
+        self._selected_tree_model_id = None
+        self._compare_selection = [
+            ref for ref in self._compare_selection if ref.model_id != model_id
+        ]
+        if self._session.active_model_id == model_id:
+            self._session.active_model_id = None
+            self._session.active_project_id = None
+
+        self._state.refresh_model_list()
+        if was_active:
+            remaining = self._state.projects.get(project_id)
+            if remaining is not None and remaining.model_ids:
+                next_model_id = remaining.model_ids[0]
+                self._state.enter_model(next_model_id, notify=False)
+                self._expanded_models.add(next_model_id)
+                self._restore_workspace(next_model_id)
+                self._state.notify(StateChange(StateChangeKind.NAVIGATION))
+            else:
+                self._state.show_projects()
+        self._set_status(f"Model '{model_id}' and its saved results deleted.")
 
     def _on_duplicate_model_confirm(self, sender, app_data, user_data) -> None:
         """Открывает форму копирования с безопасными уникальными defaults."""

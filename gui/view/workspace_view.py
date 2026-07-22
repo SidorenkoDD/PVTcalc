@@ -22,6 +22,7 @@ class WorkspaceViewMixin(ContextBoundView):
 
     _expanded_models: set[str]
     _expanded_cats: set[str]
+    _selected_tree_model_id: str | None
     _compare_selection: list[NodeRef]
     _tabbar_id: int | None
     _tab_ids: dict[str, int]
@@ -214,6 +215,8 @@ class WorkspaceViewMixin(ContextBoundView):
                               enabled=bool(model and model.loaded and model.dirty))
             dpg.add_menu_item(label="Duplicate model...", user_data=model_id,
                               callback=self._on_duplicate_model_confirm)
+            dpg.add_menu_item(label="Delete model...", user_data=model_id,
+                              callback=self._on_delete_model_confirm)
 
     def _on_save_tree_model(self, sender, app_data, user_data) -> None:
         """Сохраняет именно модель, из контекстного меню которой вызвано действие."""
@@ -231,6 +234,7 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_model_row(self, sender, app_data, user_data) -> None:
         mid = str(user_data)
+        self._selected_tree_model_id = mid
         model = self._state.models.get(mid)
         if model is None:
             self._set_status(f"Model '{mid}' is no longer available.")
@@ -252,6 +256,7 @@ class WorkspaceViewMixin(ContextBoundView):
         self._render_tree()
 
     def _on_cat_toggle(self, sender, app_data, user_data) -> None:
+        self._selected_tree_model_id = None
         cat_key = str(user_data)
         model_id, separator, _category = cat_key.partition(":")
         if separator and model_id in self._state.models:
@@ -268,6 +273,7 @@ class WorkspaceViewMixin(ContextBoundView):
         self._render_tree()
 
     def _on_tree_open_node(self, sender, app_data, user_data) -> None:
+        self._selected_tree_model_id = None
         mid, nid = user_data
         ref = self._compare_ref(mid, nid)
         node = self._state.node_by_ref(ref)
