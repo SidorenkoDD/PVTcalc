@@ -203,12 +203,15 @@ def test_tree_search_groups_dle_runs_by_source_model(tmp_path):
 
         app._on_tree_query(None, "DLE")
 
-        labels = [
-            dpg.get_item_label(child)
-            for children in dpg.get_item_children(_MODEL_TREE).values()
-            for child in children
-            if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
-        ]
+        labels: list[str] = []
+        pending: list[int | str] = [_MODEL_TREE]
+        while pending:
+            for children in dpg.get_item_children(pending.pop()).values():
+                pending.extend(children)
+                labels.extend(
+                    dpg.get_item_label(child) for child in children
+                    if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
+                )
         assert any(state.models["KRSNL_PVTSIM"].title in label for label in labels)
         assert any(state.models[copy_id].title in label for label in labels)
         assert sum("DLE —" in label for label in labels) == 2
@@ -218,6 +221,41 @@ def test_tree_search_groups_dle_runs_by_source_model(tmp_path):
         assert state.active_model_id == copy_id
         assert state.active_variant is not None
         assert state.active_variant.active_node_id == second_id
+    finally:
+        dpg.destroy_context()
+
+
+def test_search_selects_models_and_opens_cross_model_compare(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        params = {"pressures": [300, 200], "T_c": 50.0, "P_res": 300.0}
+        first_id = state.new_experiment("dle", params)
+        assert first_id is not None
+        app._on_model_row(None, None, copy_id)
+        second_id = state.new_experiment("dle", params)
+        assert second_id is not None
+
+        app._on_tree_query(None, "DLE")
+        app._on_search_model_selected(None, True, "KRSNL_PVTSIM")
+        app._on_search_model_selected(None, True, copy_id)
+        assert app._search_selected_model_ids == {"KRSNL_PVTSIM", copy_id}
+
+        app._on_compare_search_models(None, None)
+
+        compare = state.node_by_id("compare")
+        assert compare is not None
+        assert [member["model_id"] for member in compare.params["member_refs"]] == [
+            "KRSNL_PVTSIM", copy_id,
+        ]
+        assert len(app._compare_selection) == 2
     finally:
         dpg.destroy_context()
 

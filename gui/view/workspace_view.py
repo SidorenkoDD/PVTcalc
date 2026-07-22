@@ -24,6 +24,7 @@ class WorkspaceViewMixin(ContextBoundView):
     _expanded_models: set[str]
     _expanded_cats: set[str]
     _tree_query: str
+    _search_selected_model_ids: set[str]
     _selected_tree_model_id: str | None
     _compare_selection: list[NodeRef]
     _tabbar_id: int | None
@@ -116,11 +117,15 @@ class WorkspaceViewMixin(ContextBoundView):
                 self._render_model_children(model)
 
     def _on_tree_query(self, sender, app_data, user_data=None) -> None:
-        self._tree_query = str(app_data).strip().lower()
+        query = str(app_data).strip().lower()
+        if query != self._tree_query:
+            self._search_selected_model_ids.clear()
+        self._tree_query = query
         self._render_tree()
 
     def _on_tree_search_clear(self, sender, app_data, user_data=None) -> None:
         self._tree_query = ""
+        self._search_selected_model_ids.clear()
         self._render_tree()
 
     def _search_node_text(self, node) -> str:
@@ -180,6 +185,8 @@ class WorkspaceViewMixin(ContextBoundView):
     def _render_search_results(self, models) -> None:
         matches = [(model, self._search_hits(model)) for model in models]
         matches = [(model, hits) for model, hits in matches if hits]
+        matching_model_ids = {model.model_id for model, _hits in matches}
+        self._search_selected_model_ids.intersection_update(matching_model_ids)
         total = sum(len(hits) for _model, hits in matches)
         dpg.add_text(
             f"Search results for '{self._tree_query}': {total} calculation(s) "
@@ -189,18 +196,89 @@ class WorkspaceViewMixin(ContextBoundView):
         if not matches:
             dpg.add_text("No calculations match this search.", parent=_MODEL_TREE)
             return
+        selected_count = len(self._search_selected_model_ids)
+        dpg.add_text(
+            "Select model groups, then compare the matching calculations.",
+            parent=_MODEL_TREE, wrap=290,
+        )
+        dpg.add_button(
+            label=f"Compare selected models ({selected_count})",
+            parent=_MODEL_TREE, callback=self._on_compare_search_models,
+            enabled=selected_count >= 2,
+        )
         for model, hits in matches:
-            dpg.add_selectable(
-                label=f"  {model.title}  [{len(hits)} match(es)]",
-                parent=_MODEL_TREE, user_data=model.model_id,
-                callback=self._on_model_row,
-            )
+            with dpg.group(horizontal=True, parent=_MODEL_TREE):
+                dpg.add_checkbox(
+                    label="", default_value=model.model_id in self._search_selected_model_ids,
+                    user_data=model.model_id, callback=self._on_search_model_selected,
+                )
+                dpg.add_selectable(
+                    label=f"{model.title}  [{len(hits)} match(es)]",
+                    user_data=model.model_id, callback=self._on_model_row,
+                )
             for node_id, label in hits:
                 dpg.add_selectable(
                     label="      " + label, parent=_MODEL_TREE,
                     user_data=(model.model_id, node_id),
                     callback=self._on_tree_open_node,
                 )
+
+    def _on_search_model_selected(self, sender, app_data, user_data) -> None:
+        model_id = str(user_data)
+        if bool(app_data):
+            self._search_selected_model_ids.add(model_id)
+        else:
+            self._search_selected_model_ids.discard(model_id)
+        self._render_tree()
+
+    def _on_compare_search_models(self, sender, app_data, user_data=None) -> None:
+        """Открывает Compare для совпадающих запусков отмеченных моделей."""
+        project_id = self._state.active_project_id
+        models = [model for model in self._state.models.values()
+                  if (model.model_id in self._search_selected_model_ids
+                      and (project_id is None or model.project_id == project_id))]
+        if len(models) < 2 or not self._tree_query:
+            self._set_status("Select at least two model groups from the search results.")
+            return
+
+        candidates: list[tuple[NodeRef, GraphNode]] = []
+        for model in models:
+            if model.model_id != self._state.active_model_id:
+                self._state.set_active_model(model.model_id, notify=False)
+            self._restore_workspace(model.model_id)
+            variant = model.variants.get("base")
+            if variant is None:
+                continue
+            candidates.extend(
+                (NodeRef(model.model_id, variant.variant_id, node.node_id), node)
+                for node in variant.nodes.values()
+                if (node.kind in (NodeKind.FLASH, NodeKind.EXPERIMENT)
+                    and self._tree_query in self._search_node_text(node))
+            )
+
+        groups: dict[tuple[NodeKind, str | None], list[NodeRef]] = {}
+        for ref, node in candidates:
+            key = (node.kind, str(node.params.get("kind"))
+                   if node.kind is NodeKind.EXPERIMENT else None)
+            groups.setdefault(key, []).append(ref)
+        compatible_groups = [refs for refs in groups.values() if len(refs) >= 2]
+        if len(compatible_groups) != 1:
+            self._set_status(
+                "Search a single calculation type (for example DLE) before Compare.",
+            )
+            return
+
+        refs = compatible_groups[0]
+        self._compare_selection = refs
+        compare_members: list[str | NodeRef] = []
+        compare_members.extend(refs)
+        if self._state.open_compare(compare_members) is None:
+            self._set_status("Selected calculations could not be compared.")
+            return
+        self._set_status(
+            f"Compare opened: {len(refs)} matching calculation(s) from "
+            f"{len({ref.model_id for ref in refs})} model(s).",
+        )
 
     def _render_model_children(self, model) -> None:
         variant = model.variants.get("base")
