@@ -261,7 +261,7 @@ def test_search_selects_models_and_opens_cross_model_compare(tmp_path):
         dpg.destroy_context()
 
 
-def test_project_lab_tree_creates_dataset_with_manual_editor(tmp_path):
+def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)
     state = AppState(ModelRepository(str(db_path)))
@@ -274,16 +274,27 @@ def test_project_lab_tree_creates_dataset_with_manual_editor(tmp_path):
 
         app._on_new_lab_dataset(None, None, ("dle", "project", None))
         assert app._lab_catalog_editor is not None
+        assert _item_by_label(app._lab_catalog_modal, "Save") is None
+        assert _has_label(app._lab_catalog_modal, "Close")
+        assert lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
+                                     experiment_kind="dle") == []
         app._on_catalog_lab_add_row()
-        app._on_catalog_lab_cell(None, "300", (0, 0))
-        app._on_catalog_lab_cell(None, "1.2", (0, 1))
-        app._on_catalog_lab_save()
+        columns = app._lab_catalog_editor["columns"]
+        for index in range(len(columns)):
+            app._on_catalog_lab_cell(None, str(300 - index), (0, index))
 
         datasets = lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                          experiment_kind="dle")
         assert len(datasets) == 1
-        assert datasets[0]["rows"][0][:2] == [300.0, 1.2]
-        assert app._lab_catalog_editor is None
+        assert datasets[0]["rows"][0] == [float(300 - i)
+                                           for i in range(len(columns))]
+        assert app._lab_catalog_editor is not None
+
+        # Del в открытом редакторе вызывает то же подтверждение, что и меню
+        # дерева: отдельной кнопки удаления в редакторе больше нет.
+        app._on_key_delete(None, None)
+        assert any("Linked experiments will lose this source" in text
+                   for text in _text_values(app._modals[-1]))
     finally:
         dpg.destroy_context()
 

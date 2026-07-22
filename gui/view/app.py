@@ -80,6 +80,9 @@ class PVTcalcApp(
         # чтобы Del удалял модель только после выбора именно её корня, а не
         # случайно вместе с активным расчётным узлом.
         self._selected_tree_model_id: str | None = None
+        # Выбранный набор каталога LAB DATA. В отличие от расчётных узлов он
+        # не принадлежит AppState, поэтому хранится как адрес в представлении.
+        self._selected_tree_lab_dataset: tuple[str, str, str | None] | None = None
         # Выбор узлов для сравнения (Ctrl+клик в дереве). Полный адрес нужен
         # для Flash и Experiments: локальные exp_1/flash_1 повторяются в
         # разных моделях одного проекта.
@@ -287,7 +290,16 @@ class PVTcalcApp(
     def _on_key_delete(self, sender, app_data) -> None:
         if self._state.current_screen != "workspace":
             return
-        if self._has_open_modal():
+        open_modals = [win for win in self._modals if dpg.does_item_exist(win)]
+        editor = self._lab_catalog_editor
+        # Открытый редактор LAB DATA — естественное место для Del. Кнопку
+        # удаления в нём не держим, но не даём клавише породить второе окно
+        # подтверждения поверх уже открытого.
+        if (editor is not None and editor.get("dataset_id")
+                and open_modals == [self._lab_catalog_modal]):
+            self._on_lab_editor_delete_confirm()
+            return
+        if open_modals:
             return
         # Не мешаем вводу в поля: действие доступно над деревом или когда его
         # корневой/дочерний item получил keyboard focus.
@@ -296,6 +308,10 @@ class PVTcalcApp(
         model_id = self._selected_tree_model_id
         if model_id is not None and model_id in self._state.models:
             self._on_delete_model_confirm(None, None, model_id)
+            return
+        lab_dataset = self._selected_tree_lab_dataset
+        if lab_dataset is not None:
+            self._on_lab_dataset_delete_confirm(None, None, lab_dataset)
             return
         node = self._state.active_node
         # удаляем любой узел-расчёт (Composition не удаляется — см. delete_node)

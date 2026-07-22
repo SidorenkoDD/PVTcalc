@@ -29,6 +29,7 @@ class WorkspaceViewMixin(ContextBoundView):
     _tree_query: str
     _search_selected_model_ids: set[str]
     _selected_tree_model_id: str | None
+    _selected_tree_lab_dataset: tuple[str, str, str | None] | None
     _compare_selection: list[NodeRef]
     _tabbar_id: int | None
     _tab_ids: dict[str, int]
@@ -147,6 +148,8 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_project_lab_dataset(self, sender, app_data, user_data) -> None:
         dataset_id, scope, model_id = user_data
+        self._selected_tree_model_id = None
+        self._selected_tree_lab_dataset = (dataset_id, scope, model_id)
         project_id = self._state.active_project_id
         if not project_id:
             return
@@ -213,6 +216,8 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_new_lab_dataset(self, sender, app_data, user_data) -> None:
         kind, scope, model_id = user_data
+        self._selected_tree_model_id = None
+        self._selected_tree_lab_dataset = None
         self._open_lab_dataset_editor({
             "dataset_id": None,
             "title": f"{str(kind).upper()} Lab Data",
@@ -238,7 +243,8 @@ class WorkspaceViewMixin(ContextBoundView):
             self._track_modal(win)
             self._lab_catalog_modal = win
             data["title_id"] = dpg.add_input_text(
-                label="Name", width=430, default_value=data["title"], parent=win)
+                label="Name", width=430, default_value=data["title"], parent=win,
+                callback=self._on_catalog_lab_metadata_changed)
             dpg.add_text(
                 f"{data['scope'].title()} scope / "
                 f"{data['experiment_kind'].upper()} / manual input only",
@@ -248,21 +254,24 @@ class WorkspaceViewMixin(ContextBoundView):
                 data["t_id"] = dpg.add_input_text(
                     label="T, C (optional)", width=160,
                     default_value=(self._g(data["conditions"]["T_c"])
-                                   if "T_c" in data["conditions"] else ""))
+                                   if "T_c" in data["conditions"] else ""),
+                    callback=self._on_catalog_lab_metadata_changed)
                 if data["experiment_kind"] in ("dle", "separator"):
                     data["p_id"] = dpg.add_input_text(
                         label="P res, bar (optional)", width=180,
                         default_value=(self._g(data["conditions"]["P_res"])
-                                       if "P_res" in data["conditions"] else ""))
+                                       if "P_res" in data["conditions"] else ""),
+                        callback=self._on_catalog_lab_metadata_changed)
             with dpg.group(horizontal=True, parent=win):
                 dpg.add_button(label="Add point", callback=self._on_catalog_lab_add_row)
                 dpg.add_button(label="Remove last", callback=self._on_catalog_lab_remove_row,
                                enabled=True)
-                dpg.add_button(label="Save", callback=self._on_catalog_lab_save)
-                if data.get("dataset_id"):
-                    dpg.add_button(label="Delete...",
-                                   callback=self._on_lab_editor_delete_confirm)
-                dpg.add_button(label="Cancel", callback=self._on_catalog_lab_cancel)
+                dpg.add_button(label="Close", callback=self._on_catalog_lab_cancel)
+            dpg.add_text(
+                "Saved automatically after the first complete measured point. "
+                "An empty draft is not added to Lab Data.",
+                parent=win, wrap=780,
+            )
             data["holder"] = dpg.add_group(parent=win)
             self._render_catalog_lab_table()
 
@@ -306,6 +315,7 @@ class WorkspaceViewMixin(ContextBoundView):
             return
         data["rows"].pop()
         self._render_catalog_lab_table()
+        self._autosave_catalog_lab()
 
     def _on_catalog_lab_cell(self, sender, app_data, user_data) -> None:
         data = self._lab_catalog_editor
@@ -321,6 +331,11 @@ class WorkspaceViewMixin(ContextBoundView):
             self._set_status("Lab Data values must be finite numbers.")
             return
         data["rows"][row][column] = value
+        self._autosave_catalog_lab()
+
+    def _on_catalog_lab_metadata_changed(self, sender=None, app_data=None,
+                                         user_data=None) -> None:
+        self._autosave_catalog_lab()
 
     def _catalog_lab_conditions(self, data) -> dict[str, float]:
         conditions: dict[str, float] = {}
@@ -338,11 +353,19 @@ class WorkspaceViewMixin(ContextBoundView):
             conditions[key] = value
         return conditions
 
-    def _on_catalog_lab_save(self, sender=None, app_data=None, user_data=None) -> None:
+    @staticmethod
+    def _catalog_lab_has_measured_point(data) -> bool:
+        """Only complete rows may publish a newly created Lab Data dataset."""
+        return any(row and all(value is not None for value in row)
+                   for row in data["rows"])
+
+    def _autosave_catalog_lab(self) -> bool:
         data = self._lab_catalog_editor
         project_id = self._state.active_project_id
         if data is None or not project_id:
-            return
+            return False
+        if not data.get("dataset_id") and not self._catalog_lab_has_measured_point(data):
+            return False
         try:
             title = str(dpg.get_value(data["title_id"])).strip()
             if not title:
@@ -365,17 +388,24 @@ class WorkspaceViewMixin(ContextBoundView):
                 raise ValueError("Lab Data dataset is no longer available")
         except (ValueError, lab_svc.LabDataStoreError) as exc:
             self._set_status(f"Could not save Lab Data: {exc}")
-            return
-        self._on_catalog_lab_cancel()
+            return False
+        is_new = not data.get("dataset_id")
+        data["dataset_id"] = saved["dataset_id"]
         self._render_tree()
-        self._render_workspace()
-        self._set_status("Lab Data saved.")
+        self._set_status("Lab Data created automatically." if is_new
+                         else "Lab Data saved automatically.")
+        return True
+
+    def _on_catalog_lab_save(self, sender=None, app_data=None, user_data=None) -> None:
+        """Compatibility entry point for callers from older GUI tests/plugins."""
+        self._autosave_catalog_lab()
 
     def _on_catalog_lab_cancel(self, sender=None, app_data=None, user_data=None) -> None:
         if self._lab_catalog_modal and dpg.does_item_exist(self._lab_catalog_modal):
             dpg.delete_item(self._lab_catalog_modal)
         self._lab_catalog_modal = None
         self._lab_catalog_editor = None
+        self._selected_tree_lab_dataset = None
 
     def _on_lab_editor_delete_confirm(self, sender=None, app_data=None, user_data=None) -> None:
         data = self._lab_catalog_editor
@@ -423,6 +453,7 @@ class WorkspaceViewMixin(ContextBoundView):
         if win and dpg.does_item_exist(win):
             dpg.delete_item(win)
         self._on_catalog_lab_cancel()
+        self._selected_tree_lab_dataset = None
         self._render_tree()
         self._render_workspace()
         self._set_status("Lab Data deleted." if deleted else "Lab Data was not found.")
@@ -734,6 +765,7 @@ class WorkspaceViewMixin(ContextBoundView):
     def _on_model_row(self, sender, app_data, user_data) -> None:
         mid = str(user_data)
         self._selected_tree_model_id = mid
+        self._selected_tree_lab_dataset = None
         model = self._state.models.get(mid)
         if model is None:
             self._set_status(f"Model '{mid}' is no longer available.")
@@ -756,6 +788,7 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_cat_toggle(self, sender, app_data, user_data) -> None:
         self._selected_tree_model_id = None
+        self._selected_tree_lab_dataset = None
         cat_key = str(user_data)
         model_id, separator, _category = cat_key.partition(":")
         if separator and model_id in self._state.models:
@@ -773,6 +806,7 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_tree_open_node(self, sender, app_data, user_data) -> None:
         self._selected_tree_model_id = None
+        self._selected_tree_lab_dataset = None
         mid, nid = user_data
         ref = self._compare_ref(mid, nid)
         node = self._state.node_by_ref(ref)
