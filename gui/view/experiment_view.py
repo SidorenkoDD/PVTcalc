@@ -499,10 +499,13 @@ class ExperimentViewMixin(ContextBoundView):
             dpg.add_text("No plottable columns.", parent=holder)
             return
         lab_data = self._lab_chart_data(node)
-        for offset in range(0, len(charts), 2):
-            with dpg.group(horizontal=True, parent=holder) as row:
-                for col in charts[offset:offset + 2]:
-                    with dpg.child_window(width=440, height=270,
+        cards_per_row = self._chart_grid_columns()
+        for offset in range(0, len(charts), cards_per_row):
+            with dpg.group(horizontal=(cards_per_row > 1), parent=holder) as row:
+                for col in charts[offset:offset + cards_per_row]:
+                    with dpg.child_window(
+                            width=self._chart_card_width(cards_per_row),
+                            height=self._chart_card_height(),
                                           border=True, parent=row) as card:
                         self._add_one_chart(result, col, card, lab_data)
 
@@ -553,7 +556,8 @@ class ExperimentViewMixin(ContextBoundView):
         if not xs and not lab_x:
             return
         xr = self._exp_x_range(result, lab_result)
-        with dpg.plot(label=f"{col} vs pressure", height=235, width=-1,
+        with dpg.plot(label=f"{col} vs pressure", height=self._chart_plot_height(),
+                      width=-1,
                       parent=parent):
             dpg.add_plot_legend()
             xax = dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")

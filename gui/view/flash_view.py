@@ -207,10 +207,13 @@ class FlashViewMixin(ContextBoundView):
 
     def _render_experiment_compare_charts(self, comparison, parent) -> None:
         columns = comparison["columns"]
-        for offset in range(0, len(columns), 2):
-            with dpg.group(horizontal=True, parent=parent) as row:
-                for column in columns[offset:offset + 2]:
-                    with dpg.child_window(width=440, height=285, border=True,
+        cards_per_row = self._chart_grid_columns()
+        for offset in range(0, len(columns), cards_per_row):
+            with dpg.group(horizontal=(cards_per_row > 1), parent=parent) as row:
+                for column in columns[offset:offset + cards_per_row]:
+                    with dpg.child_window(
+                            width=self._chart_card_width(cards_per_row),
+                            height=self._chart_card_height(), border=True,
                                           parent=row) as card:
                         self._add_experiment_compare_chart(
                             column, comparison["series"][column], card,
@@ -221,7 +224,8 @@ class FlashViewMixin(ContextBoundView):
                  for values in (item["x"], item["lab_x"])
                  for value in values if isinstance(value, (int, float))
                  and not isinstance(value, bool) and math.isfinite(float(value))]
-        with dpg.plot(label=f"{column} vs pressure", height=250, width=-1,
+        with dpg.plot(label=f"{column} vs pressure",
+                      height=self._chart_plot_height(), width=-1,
                       parent=parent):
             dpg.add_plot_legend()
             x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="Pressure, bar")
@@ -323,11 +327,15 @@ class FlashViewMixin(ContextBoundView):
         render_readonly_table(parent, ["Component (K=yi/xi)"] + headers, rows)
 
     def _compare_panels(self, members, headers, parent) -> None:
-        with dpg.group(horizontal=True, parent=parent):
-            for m, h in zip(members, headers):
-                with dpg.child_window(width=380, height=-1, border=True) as cw:
-                    dpg.add_text(h)
-                    self._render_flash_result(m.result, cw)
+        cards_per_row = self._chart_grid_columns()
+        for offset in range(0, len(members), cards_per_row):
+            with dpg.group(horizontal=(cards_per_row > 1), parent=parent):
+                for m, h in zip(members[offset:offset + cards_per_row],
+                                headers[offset:offset + cards_per_row]):
+                    with dpg.child_window(width=self._chart_card_width(cards_per_row),
+                                          height=-1, border=True) as cw:
+                        dpg.add_text(h)
+                        self._render_flash_result(m.result, cw)
 
     def _flash_pt(self, nid: str) -> tuple[float, float]:
         """Текущие значения полей P/T вкладки флэша по её id узла."""

@@ -104,7 +104,10 @@ Save all / Discard / Cancel, а удаление одной модели из д
 и очищает её результаты. Для UX добавлены безопасные keyboard shortcuts:
 Del учитывает keyboard focus дерева, Ctrl+S/Ctrl+Z/Ctrl+Y не срабатывают за
 модальным окном, а ручной release checklist лежит в
-[`RELEASE_SMOKE_CHECKLIST.md`](RELEASE_SMOKE_CHECKLIST.md).
+[`RELEASE_SMOKE_CHECKLIST.md`](RELEASE_SMOKE_CHECKLIST.md). В этой же
+итерации графики Experiments/Compare получили адаптивные карточки: одна
+колонка на средней/узкой области, две растянутые на широком мониторе; перенос
+окна пересобирает только активную вкладку с графиком.
 
 **ModelStore 2026-07-18 выполнен**: все живые пути `models.json` используют версионированную валидацию, атомарную запись, lock, optimistic concurrency и три ротационных backup. Битая база диагностируется в Projects без падения и без автоматической перезаписи. Полный набор — 139 тестов.
 

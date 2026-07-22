@@ -89,8 +89,8 @@ class EnvelopeViewMixin(ContextBoundView):
             return
         p_hi = max(all_p) * 1.05
 
-        # фиксированная высота — надёжнее, чем height=-1 во вложенном таб-баре
-        with dpg.plot(label="Phase envelope (P-T)", height=520, width=-1, parent=parent):
+        with dpg.plot(label="Phase envelope (P-T)",
+                      height=self._envelope_plot_height(), width=-1, parent=parent):
             dpg.add_plot_legend()
             dpg.add_plot_axis(dpg.mvXAxis, label="Temperature, C")
             yax = dpg.add_plot_axis(dpg.mvYAxis, label="Pressure, bar")

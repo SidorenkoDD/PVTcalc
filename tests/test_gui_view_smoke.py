@@ -610,16 +610,43 @@ def test_experiment_lab_data_and_chart_grid_render():
         assert _has_label(_WORKSPACE, "Copy table")
         assert _has_label(_WORKSPACE, "Bo vs pressure")
         assert _has_label(_WORKSPACE, "vapor_density vs pressure")
-        assert len([item for item in dpg.get_item_children(
-            app._exp_chart_holder[nid], 1)
-            if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]) == 2
         chart_groups = [item for item in dpg.get_item_children(
             app._exp_chart_holder[nid], 1)
             if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]
+        assert len(chart_groups) == 4 // app._chart_grid_columns()
         app._rebuild_exp_chart_grid(nid)
         assert len([item for item in dpg.get_item_children(
             app._exp_chart_holder[nid], 1)
             if dpg.get_item_type(item) == "mvAppItemType::mvGroup"]) == len(chart_groups)
+    finally:
+        dpg.destroy_context()
+
+
+def test_chart_layout_expands_on_wide_viewport_and_rebuilds_after_resize(monkeypatch):
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState(window_width=1920, window_height=1080))
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=1920, height=1080)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        nid = state.new_experiment("dle", {"pressures": [400.0, 200.0]})
+
+        assert app._chart_grid_columns() == 2
+        assert app._chart_card_width(2) > 440
+        assert app._envelope_plot_height() > 520
+
+        calls: list[str] = []
+        callbacks = []
+        monkeypatch.setattr(app, "_render_node_content", calls.append)
+        monkeypatch.setattr(dpg, "get_frame_count", lambda: 100)
+        monkeypatch.setattr(dpg, "set_frame_callback",
+                            lambda _frame, callback: callbacks.append(callback))
+        app._on_viewport_resize()
+        callbacks[-1]()
+
+        assert calls == [nid]
     finally:
         dpg.destroy_context()
 

@@ -108,6 +108,21 @@ class ContextBoundView:
     def _render_workspace(self) -> None:
         raise NotImplementedError
 
+    def _chart_grid_columns(self) -> int:
+        raise NotImplementedError
+
+    def _chart_card_width(self, columns: int) -> int:
+        raise NotImplementedError
+
+    def _chart_card_height(self) -> int:
+        raise NotImplementedError
+
+    def _chart_plot_height(self) -> int:
+        raise NotImplementedError
+
+    def _envelope_plot_height(self) -> int:
+        raise NotImplementedError
+
     def _render_composition_tab(self, parent: DpgId, node: GraphNode) -> None:
         raise NotImplementedError
 

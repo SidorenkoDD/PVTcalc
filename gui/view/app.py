@@ -115,6 +115,9 @@ class PVTcalcApp(
         self._settings_ids: dict = {}
         # debounce снимка UI-сессии (номер последнего поколения)
         self._session_save_generation: int = 0
+        # debounce адаптивной раскладки карточек/графиков после переноса окна
+        # на другой монитор или resize viewport.
+        self._viewport_resize_generation: int = 0
         # модели, чей workspace уже восстановлен из постоянного store либо
         # старой сессии в этом запуске
         self._restored_models: set[str] = set()
@@ -156,6 +159,7 @@ class PVTcalcApp(
 
         dpg.create_viewport(title="PVTcalc", width=self._session.window_width,
                             height=self._session.window_height)
+        dpg.set_viewport_resize_callback(self._on_viewport_resize)
         self._build_menu()
         self._build_layout()
         self._build_shortcuts()
@@ -427,6 +431,67 @@ class PVTcalcApp(
                 self._persist_session()
 
         dpg.set_frame_callback(dpg.get_frame_count() + 60, save_if_latest)
+
+    def _on_viewport_resize(self, sender=None, app_data=None) -> None:
+        """Пересобирает только открытую вкладку с графиками после debounce."""
+        self._viewport_resize_generation += 1
+        generation = self._viewport_resize_generation
+
+        def rebuild_if_latest(*_args) -> None:
+            if generation != self._viewport_resize_generation:
+                return
+            if self._state.current_screen != "workspace":
+                return
+            node = self._state.active_node
+            if node is not None and node.kind in (
+                    NodeKind.EXPERIMENT, NodeKind.PHASE_ENVELOPE,
+                    NodeKind.COMPARE):
+                self._render_node_content(node.node_id)
+
+        # Серия системных resize-событий при перетаскивании окна не должна
+        # многократно пересобирать тяжёлый DPG layout.
+        dpg.set_frame_callback(dpg.get_frame_count() + 4, rebuild_if_latest)
+
+    def _workspace_content_width(self) -> int:
+        """Текущая полезная ширина рабочей области с fallback до первого кадра."""
+        try:
+            width = int(dpg.get_item_rect_size(_WORKSPACE_PANEL)[0])
+            if width >= 320:
+                return width
+        except Exception:  # pragma: no cover - layout может ещё не существовать
+            pass
+        return max(320, self._viewport_width() - _TREE_W - 32)
+
+    def _viewport_width(self) -> int:
+        try:
+            return dpg.get_viewport_width()
+        except Exception:  # pragma: no cover - headless context до viewport
+            return self._session.window_width
+
+    def _viewport_height(self) -> int:
+        try:
+            return dpg.get_viewport_height()
+        except Exception:  # pragma: no cover - headless context до viewport
+            return self._session.window_height
+
+    def _chart_grid_columns(self) -> int:
+        """Одна крупная карточка на среднем экране, две — на широком."""
+        return 2 if self._workspace_content_width() >= 1120 else 1
+
+    def _chart_card_width(self, columns: int) -> int:
+        """Ширина карточки; ``-1`` даёт DearPyGui заполнить строку целиком."""
+        if columns <= 1:
+            return -1
+        return max(360, (self._workspace_content_width() - 32) // columns)
+
+    def _chart_card_height(self) -> int:
+        return max(285, min(520, int(self._viewport_height() * 0.42)))
+
+    def _chart_plot_height(self) -> int:
+        return self._chart_card_height() - 35
+
+    def _envelope_plot_height(self) -> int:
+        return max(400, min(760, self._viewport_height() - 260))
 
     def _build_layout(self) -> None:
         """
