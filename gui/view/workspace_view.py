@@ -75,6 +75,11 @@ class WorkspaceViewMixin(ContextBoundView):
         project = self._state.projects.get(project_id) if project_id else None
         project_label = project.title if project else (project_id or "Current")
         dpg.add_text(f"Models in project: {project_label}", parent=_MODEL_TREE)
+        dpg.add_text(
+            "Shortcuts: Ctrl+S save | Ctrl+Z/Y undo/redo | Del delete selected "
+            "tree item | Esc close dialog.",
+            parent=_MODEL_TREE, wrap=290,
+        )
         for model in models:
             expanded = model.model_id in self._expanded_models
             arrow = "v " if expanded else "> "

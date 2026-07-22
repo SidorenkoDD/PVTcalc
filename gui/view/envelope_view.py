@@ -266,7 +266,8 @@ class EnvelopeViewMixin(ContextBoundView):
                 if params["p_max_bar"] <= 0:
                     raise ValueError("P max must be positive")
         except (ValueError, KeyError) as exc:
-            self._set_status(f"Invalid input: {exc}")
+            self._set_status(
+                f"Invalid phase-envelope input: {exc}. Correct the fields and press Run again.")
             return
 
         if node_id is None:

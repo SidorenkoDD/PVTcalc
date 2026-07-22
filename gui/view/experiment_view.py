@@ -602,7 +602,8 @@ class ExperimentViewMixin(ContextBoundView):
                     raise ValueError("stage T count must match pressure count")
                 params["stage_temps_c"] = temps
         except (ValueError, KeyError) as exc:
-            self._state.set_node_error(nid, f"Invalid input: {exc}")
+            self._state.set_node_error(
+                nid, f"Invalid input: {exc}. Correct the fields above and run again.")
             return
         self._state.update_node_params(nid, params, notify=False)
         kind = node.params["kind"]

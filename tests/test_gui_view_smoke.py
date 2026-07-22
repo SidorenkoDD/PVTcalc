@@ -101,6 +101,8 @@ def test_dpg_context_builds_and_renders_projects():
         assert dpg.does_item_exist(_WORKSPACE)
         assert any(text.startswith("Models in project")
                    for text in _text_values(_MODEL_TREE))
+        assert any(text.startswith("Shortcuts: Ctrl+S save")
+                   for text in _text_values(_MODEL_TREE))
         root_labels = [
             dpg.get_item_label(child)
             for children in dpg.get_item_children(_MODEL_TREE).values()
@@ -379,12 +381,44 @@ def test_delete_key_for_selected_model_opens_confirmation(tmp_path, monkeypatch)
         state.refresh_model_list()
         app._open_project("KRSNL_PVTSIM")
         app._on_model_row(None, None, "KRSNL_PVTSIM")
-        monkeypatch.setattr(dpg, "is_item_hovered", lambda _item: True)
+        root_id = next(
+            child for children in dpg.get_item_children(_MODEL_TREE).values()
+            for child in children
+            if (dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
+                and state.models["KRSNL_PVTSIM"].title in dpg.get_item_label(child))
+        )
+        monkeypatch.setattr(dpg, "is_item_hovered", lambda _item: False)
+        monkeypatch.setattr(dpg, "get_focused_item", lambda: root_id)
 
         app._on_key_delete(None, None)
 
         assert "KRSNL_PVTSIM" in state.models  # Del сначала требует подтверждения
         assert any("Delete model" in text for text in _text_values(app._modals[-1]))
+    finally:
+        dpg.destroy_context()
+
+
+def test_global_edit_shortcuts_do_not_run_behind_modal(monkeypatch):
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        with dpg.window(label="test modal", modal=True) as modal:
+            app._track_modal(modal)
+            calls: list[str] = []
+            monkeypatch.setattr(app, "_on_save_model", lambda: calls.append("save"))
+            monkeypatch.setattr(app, "_do_undo", lambda: calls.append("undo"))
+            monkeypatch.setattr(app, "_do_redo", lambda: calls.append("redo"))
+            monkeypatch.setattr(dpg, "is_key_down", lambda _key: True)
+
+            app._on_key_s(None, None)
+            app._on_key_z(None, None)
+            app._on_key_y(None, None)
+
+            assert calls == []
     finally:
         dpg.destroy_context()
 

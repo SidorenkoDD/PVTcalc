@@ -272,8 +272,9 @@ class PVTcalcApp(
             return
         if self._has_open_modal():
             return
-        # только когда курсор над панелью дерева (не мешаем вводу в поля)
-        if not (dpg.is_item_hovered(_TREE_PANEL) or dpg.is_item_hovered(_MODEL_TREE)):
+        # Не мешаем вводу в поля: действие доступно над деревом или когда его
+        # корневой/дочерний item получил keyboard focus.
+        if not self._tree_is_active():
             return
         model_id = self._selected_tree_model_id
         if model_id is not None and model_id in self._state.models:
@@ -285,20 +286,38 @@ class PVTcalcApp(
             self._state.delete_node(node.node_id)
             self._set_status(f"{node.kind.name.capitalize()} node deleted (Del).")
 
+    @staticmethod
+    def _tree_is_active() -> bool:
+        """Проверяет hover или keyboard-focus внутри дерева моделей."""
+        if dpg.is_item_hovered(_TREE_PANEL) or dpg.is_item_hovered(_MODEL_TREE):
+            return True
+        try:
+            item = dpg.get_focused_item()
+            while item and dpg.does_item_exist(item):
+                if item == _MODEL_TREE:
+                    return True
+                parent = dpg.get_item_parent(item)
+                if parent == item:
+                    break
+                item = parent
+        except Exception:  # pragma: no cover - defensive for DPG focus edge cases
+            return False
+        return False
+
     def _on_key_z(self, sender, app_data) -> None:
-        if self._state.current_screen != "workspace":
+        if self._state.current_screen != "workspace" or self._has_open_modal():
             return
         if self._ctrl_down():
             self._do_redo() if self._shift_down() else self._do_undo()
 
     def _on_key_y(self, sender, app_data) -> None:
-        if self._state.current_screen != "workspace":
+        if self._state.current_screen != "workspace" or self._has_open_modal():
             return
         if self._ctrl_down():
             self._do_redo()
 
     def _on_key_s(self, sender, app_data) -> None:
-        if self._ctrl_down():
+        if not self._has_open_modal() and self._ctrl_down():
             self._on_save_model()
 
     def _on_key_enter(self, sender, app_data) -> None:
