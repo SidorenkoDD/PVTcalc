@@ -109,10 +109,10 @@ class PVTcalcApp(
         # окно настроек (константы/условия/критерии сходимости)
         self._settings_win: int | None = None
         self._settings_ids: dict = {}
-        # debounce автосохранения модели/сессии (номер последнего поколения)
-        self._model_save_generation: int = 0
+        # debounce снимка UI-сессии (номер последнего поколения)
         self._session_save_generation: int = 0
-        # модели, чей workspace уже восстановлен из сессии в этом запуске
+        # модели, чей workspace уже восстановлен из постоянного store либо
+        # старой сессии в этом запуске
         self._restored_models: set[str] = set()
         # стек открытых модальных окон (для закрытия по Esc, верхнее первым)
         self._modals: list[int] = []
@@ -143,7 +143,6 @@ class PVTcalcApp(
         )
         state.subscribe_changes(self._render_change)
         state.subscribe(self._schedule_session_autosave)
-        state.subscribe_dirty(self._schedule_model_autosave)
 
     # --- жизненный цикл --------------------------------------------------
 
@@ -165,7 +164,6 @@ class PVTcalcApp(
 
         dpg.start_dearpygui()
 
-        self._save_dirty_models()
         self._persist_session()
         dpg.destroy_context()
 
@@ -180,6 +178,9 @@ class PVTcalcApp(
                                   callback=self._on_back_to_projects)
                 dpg.add_menu_item(label="Refresh models",
                                   callback=lambda: self._state.refresh_model_list())
+                dpg.add_separator()
+                dpg.add_menu_item(label="Exit application...",
+                                  callback=self._on_exit_application)
             with dpg.menu(label="Edit"):
                 dpg.add_menu_item(label="Undo   (Ctrl+Z)",
                                   callback=lambda: self._do_undo())
@@ -325,27 +326,62 @@ class PVTcalcApp(
             return
         self._set_status(f"Model '{model.model_id}' saved.")
 
-    def _save_dirty_models(self) -> None:
-        """Сохраняет все dirty-модели; используется debounce и shutdown."""
+    def _confirm_save_before(self, continue_action, *, action_name: str) -> None:
+        """Запрашивает единое решение для всех несохранённых моделей."""
+        dirty = [model for model in self._state.models.values()
+                 if model.loaded and model.dirty]
+        if not dirty:
+            continue_action()
+            return
+
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        height = 220
+        with dpg.window(label="Save changes", modal=True, no_resize=True,
+                        no_collapse=True, width=540, height=height,
+                        pos=(max(0, w // 2 - 270), max(0, h // 2 - height // 2))) as win:
+            self._track_modal(win)
+            dpg.add_text(f"Save {len(dirty)} changed model(s) before {action_name}?")
+            dpg.add_text(
+                "Save writes composition, calculation settings and results to the "
+                "projects database. Projects will then show the saved state.",
+                wrap=500,
+            )
+            dpg.add_spacer(height=10)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Save all", width=135,
+                               callback=lambda: self._save_then_continue(win,
+                                                                         continue_action))
+                dpg.add_button(label="Discard changes", width=135,
+                               callback=lambda: self._discard_then_continue(
+                                   win, continue_action))
+                dpg.add_button(label="Cancel", width=110,
+                               callback=lambda: dpg.delete_item(win))
+
+    def _save_then_continue(self, win: int, continue_action) -> None:
         try:
             saved = self._state.save_all_dirty()
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Автосохранение моделей не удалось")
-            self._set_status(f"Autosave failed: {exc}")
+            logger.exception("Не удалось сохранить модели перед переходом")
+            self._set_status(f"Save failed: {exc}")
             return
-        if saved:
-            self._set_status("Autosaved: " + ", ".join(saved))
+        if dpg.does_item_exist(win):
+            dpg.delete_item(win)
+        self._persist_session()
+        self._set_status("Saved: " + ", ".join(saved))
+        continue_action()
 
-    def _schedule_model_autosave(self, model_id: str) -> None:
-        """Debounce сохранения правок состава примерно на одну секунду."""
-        self._model_save_generation += 1
-        generation = self._model_save_generation
+    def _discard_then_continue(self, win: int, continue_action) -> None:
+        discarded = self._state.discard_all_dirty()
+        if dpg.does_item_exist(win):
+            dpg.delete_item(win)
+        self._set_status("Discarded changes: " + ", ".join(discarded))
+        continue_action()
 
-        def save_if_latest(*_args) -> None:
-            if generation == self._model_save_generation:
-                self._save_dirty_models()
-
-        dpg.set_frame_callback(dpg.get_frame_count() + 60, save_if_latest)
+    def _on_exit_application(self, sender=None, app_data=None, user_data=None) -> None:
+        self._confirm_save_before(
+            dpg.stop_dearpygui,
+            action_name="closing the application",
+        )
 
     def _schedule_session_autosave(self) -> None:
         """Debounce снимка UI-сессии после изменений состояния."""
@@ -517,23 +553,34 @@ class PVTcalcApp(
 
     def _restore_workspace(self, model_id: str) -> None:
         """
-        Лениво восстанавливает workspace модели из `session.workspaces[mid]`
-        (узлы/результаты/вкладки/сравнение). Повторный вызов для той же модели —
-        no-op (guard `_restored_models`). Активный выбор не меняется.
+        Лениво восстанавливает постоянный workspace модели из `models.json`.
+        Старый снимок `session.workspaces[mid]` читается однократно только как
+        миграция, если постоянной записи ещё нет. Повторный вызов для той же
+        модели — no-op (guard `_restored_models`). Активный выбор не меняется.
         """
         if model_id in self._restored_models:
             return
         self._restored_models.add(model_id)
-        ws = (self._session.workspaces or {}).get(model_id) or {}
         try:
             model = self._state.ensure_model_loaded(model_id)
+            ws = self._state.load_saved_workspace(model_id)
         except KeyError:
             return
         variant = model.variants.get("base")
-        if variant is None or not ws:
+        if variant is None:
+            return
+        migrated_from_session = False
+        if not ws:
+            ws = (self._session.workspaces or {}).get(model_id) or {}
+            migrated_from_session = bool(ws)
+        if not ws:
             return
 
         restore_workspace(variant, ws)
+        if migrated_from_session:
+            # Старые результаты не теряются, но до явного Save остаются
+            # временными и будут показаны в Projects только после сохранения.
+            model.dirty = True
 
         # Развернуть только реально заполненные категории восстановленного дерева.
         self._expanded_models.add(model_id)
@@ -578,12 +625,11 @@ class PVTcalcApp(
         except Exception:  # noqa: BLE001
             pass
 
-        # merge: обновляем workspaces загруженных моделей, не трогая остальные
-        if self._session.workspaces is None:
-            self._session.workspaces = {}
-        for mid, model in self._state.models.items():
-            variant = model.variants.get("base") if model.loaded else None
-            if variant is not None:
-                self._session.workspaces[mid] = self._workspace_snapshot(variant)
+        # Результаты принадлежат models.json. Не перезаписываем ими session;
+        # сохраняем здесь только ещё не открытые legacy-workspace, чтобы их
+        # можно было мигрировать при первом входе, затем удаляем и их.
+        if self._session.workspaces:
+            for mid in self._restored_models:
+                self._session.workspaces.pop(mid, None)
 
         save_session(self._session)

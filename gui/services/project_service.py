@@ -496,27 +496,33 @@ def import_e300(db_path: str, path: str, t_res: float = 373.15,
 
 # --- сводка «что рассчитано» ------------------------------------------------
 
-def calc_summary(summary, session_ws: Optional[dict]) -> dict:
-    """
-    Счётчики для колонки Calculated страницы Projects.
+def calc_summary(summary, _legacy_session_ws: Optional[dict] = None) -> dict:
+    """Счётчики сохранённых расчётов для колонки Calculated.
 
-    Parameters
-    ----------
-    summary : ModelSummary
-        Сводка модели (persisted-результаты из models.json).
-    session_ws : dict | None
-        Workspace модели из сессии v2 (`{flashes, experiments, ...}`).
+    Второй аргумент оставлен для совместимости: c R2.4 `gui_session.json`
+    не участвует в представлении результатов.
     """
-    ws = session_ws or {}
-    flashes = [f for f in ws.get("flashes", []) if f.get("result")]
-    exps = [e for e in ws.get("experiments", []) if e.get("result")]
+    records = [item for item in summary.results_brief if isinstance(item, dict)]
+    computed = [item for item in records if item.get("has_result", True)]
+    flashes = [item for item in computed
+               if str(item.get("kind") or item.get("module") or "").lower()
+               in {"flash", "flashresult"}]
+    exps = [item for item in computed
+            if str(item.get("kind") or "").lower() == "experiment"]
+    envelopes = [item for item in computed
+                 if str(item.get("kind") or "").lower() == "phase_envelope"]
     exp_kinds: dict[str, int] = {}
-    for e in exps:
-        k = str(e.get("kind", "?")).upper()
-        exp_kinds[k] = exp_kinds.get(k, 0) + 1
+    for item in exps:
+        kind = str(item.get("experiment_kind") or item.get("module")
+                   or "experiment").upper()
+        exp_kinds[kind] = exp_kinds.get(kind, 0) + 1
     return {
-        "persisted": len(summary.results_brief),
+        "persisted": len(computed),
         "flashes": len(flashes),
         "experiments": len(exps),
+        "envelopes": len(envelopes),
         "exp_kinds": exp_kinds,
+        "stale": sum(1 for item in computed
+                     if str(item.get("status") or "").upper() == "STALE"),
+        "saved_at": getattr(summary, "workspace_saved_at", None),
     }

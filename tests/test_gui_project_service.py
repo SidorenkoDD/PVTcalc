@@ -12,8 +12,10 @@ import pytest
 
 from calc_core.Composition.Composition import Composition
 from calc_core.Utils.ModelStore import ModelStoreCorruptError
+from gui.app_state import AppState
 from gui.services import project_service as svc
 from gui.services.model_repository import ModelRepository
+from gui.workspace_codec import restore_workspace
 
 MODELS_JSON = Path(__file__).resolve().parent / "fixtures" / "models.json"
 
@@ -262,3 +264,37 @@ def test_repository_saves_edited_composition_and_preserves_metadata(tmp_path):
     assert raw["updated_at"]
     assert raw["correlations"]["critical_temperature"] == "pedersen"
     assert Path(db + ".bak").exists()
+
+
+def test_save_model_persists_workspace_results_and_provenance(tmp_path):
+    db = str(tmp_path / "models.json")
+    svc.create_model(db, "A", "Original", "Field", "PREOS", 373.15, dict(_ZI))
+    state = AppState(ModelRepository(db))
+    state.refresh_model_list()
+    state.enter_model("A")
+    node_id = state.new_envelope({"method": "ssm", "t_min_c": 10.0})
+    assert node_id is not None
+    state.set_node_result(node_id, {"points": [[10.0, 42.0]]})
+    state.save_model()
+
+    raw = json.loads(Path(db).read_text(encoding="utf-8"))["A"]
+    stored = raw["workspace"]
+    assert stored["schema_version"] == 1
+    assert stored["provenance"]["composition_sha256"]
+    assert stored["snapshot"]["nodes"][0]["node_id"] == node_id
+    assert raw["results"][0]["has_result"] is True
+
+    fresh = AppState(ModelRepository(db))
+    fresh.refresh_model_list()
+    model = fresh.ensure_model_loaded("A")
+    saved_workspace = fresh.load_saved_workspace("A")
+    assert saved_workspace is not None
+    restore_workspace(model.variants["base"], saved_workspace)
+    restored = model.variants["base"].nodes[node_id]
+    assert restored.result == {"points": [[10.0, 42.0]]}
+    summary = fresh.models["A"].summary
+    assert summary is not None
+    assert summary.workspace_saved_at == stored["saved_at"]
+    info = svc.calc_summary(summary, {"flashes": [{"result": {"temporary": True}}]})
+    assert info["persisted"] == 1 and info["flashes"] == 0
+    assert info["envelopes"] == 1

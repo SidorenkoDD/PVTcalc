@@ -440,6 +440,11 @@ class AppState:
         """Лениво загружает модель, не меняя активный выбор."""
         return self._ensure_loaded(model_id)
 
+    def load_saved_workspace(self, model_id: str) -> Optional[dict]:
+        """Возвращает постоянный workspace модели, не меняя активный выбор."""
+        self._ensure_loaded(model_id)
+        return self._repo.load_workspace(model_id)
+
     # обратная совместимость со старым именем
     open_model = set_active_model
 
@@ -608,7 +613,7 @@ class AppState:
             self._mark_dirty()
 
     def save_model(self, model_id: Optional[str] = None) -> None:
-        """Сохраняет загруженную модель и сбрасывает её dirty-флаг."""
+        """Сохраняет состав, workspace и результаты, сбрасывая dirty-флаг."""
         mid = model_id or self.active_model_id
         model = self.models.get(mid) if mid else None
         if model is None or not model.loaded:
@@ -620,9 +625,13 @@ class AppState:
         comp_node = variant.nodes.get("composition")
         correlations = (comp_node.params.get("correlations", {})
                         if comp_node is not None else {})
-        self._repo.save_composition(mid, variant.composition, correlations)
+        # Локальный импорт исключает цикл: codec типизирует AppState, а state
+        # использует codec только в момент явного постоянного сохранения.
+        from gui.workspace_codec import snapshot_workspace
+        self._repo.save_model_snapshot(
+            mid, variant.composition, correlations, snapshot_workspace(variant))
         model.dirty = False
-        self._notify(StateChange(StateChangeKind.MODEL_LIST))
+        self.refresh_model_list()
 
     def save_all_dirty(self) -> list[str]:
         """Сохраняет все загруженные изменённые модели; возвращает их id."""
@@ -632,6 +641,19 @@ class AppState:
                 self.save_model(mid)
                 saved.append(mid)
         return saved
+
+    def discard_all_dirty(self) -> list[str]:
+        """Отбрасывает несохранённые модели и заново читает их из базы."""
+        discarded: list[str] = []
+        for mid, model in self.models.items():
+            if model.loaded and model.dirty:
+                model.loaded = False
+                model.dirty = False
+                model.variants.clear()
+                discarded.append(mid)
+        if discarded:
+            self.refresh_model_list()
+        return discarded
 
     # --- узлы «Флэш» (история расчётов) ----------------------------------
     #
@@ -695,6 +717,7 @@ class AppState:
             upstream=["composition"],
         )
         self.open_node(node_id)
+        self._mark_dirty()
         return node_id
 
     def new_experiment(self, kind: str, defaults: dict) -> Optional[str]:
@@ -719,6 +742,7 @@ class AppState:
             upstream=["composition"],
         )
         self.open_node(node_id)
+        self._mark_dirty()
         return node_id
 
     def new_envelope(self, defaults: dict) -> Optional[str]:
@@ -742,6 +766,7 @@ class AppState:
             upstream=["composition"],
         )
         self.open_node(node_id)
+        self._mark_dirty()
         return node_id
 
     def open_compare(self, member_ids: list[str | NodeRef]) -> Optional[str]:
@@ -800,6 +825,7 @@ class AppState:
             variant.nodes[nid].params.update(params)
             variant.nodes[nid].title = title
         self.open_node(nid)
+        self._mark_dirty()
         return nid
 
     def duplicate_flash(self, node_id: str) -> Optional[str]:
@@ -820,6 +846,7 @@ class AppState:
             node.params["label"] = name
         else:
             node.params.pop("label", None)
+        self._mark_dirty()
         self._notify(StateChange(StateChangeKind.NODE, self.node_ref(node_id)))
 
     def delete_node(self, node_id: str) -> None:
@@ -839,6 +866,7 @@ class AppState:
                     variant.open_node_ids[min(idx, len(variant.open_node_ids) - 1)]
                     if variant.open_node_ids else None)
         variant.nodes.pop(node_id, None)
+        self._mark_dirty()
         self._notify(StateChange(StateChangeKind.WORKSPACE))
 
     def _invalidate_flash(self) -> None:
@@ -857,6 +885,7 @@ class AppState:
         if node is not None:
             node.params["P"] = float(p)
             node.params["T"] = float(t)
+            self._mark_dirty()
 
     def update_node_params(self, node_id: str | NodeRef, params: dict,
                            *, notify: bool = True) -> None:
@@ -868,6 +897,7 @@ class AppState:
         node.params.update(params)
         if node.result is not None and node.status is NodeStatus.FRESH:
             node.status = NodeStatus.STALE
+        self._mark_dirty()
         if notify:
             ref = node_id if isinstance(node_id, NodeRef) else self.node_ref(node.node_id)
             self._notify(StateChange(StateChangeKind.NODE, ref))
@@ -1048,6 +1078,7 @@ class AppState:
             node.result = result
             node.status = NodeStatus.FRESH
             node.error = None
+            self._mark_dirty()
             self._notify(StateChange(StateChangeKind.NODE, ref))
 
     def set_node_error(self, node_id: str | NodeRef, message: str) -> None:
@@ -1058,6 +1089,7 @@ class AppState:
             node.result = None
             node.status = NodeStatus.STALE
             node.error = message
+            self._mark_dirty()
             self._notify(StateChange(StateChangeKind.NODE, ref))
 
     def reset_node(self, node_id: str | NodeRef) -> None:
@@ -1067,6 +1099,7 @@ class AppState:
             ref = node_id if isinstance(node_id, NodeRef) else self.node_ref(node.node_id)
             node.status = NodeStatus.EMPTY
             node.error = None
+            self._mark_dirty()
             self._notify(StateChange(StateChangeKind.NODE, ref))
 
     # обратная совместимость (флэш-именованные вызовы)

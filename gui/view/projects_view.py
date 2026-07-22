@@ -6,6 +6,7 @@ composition root `PVTcalcApp` и изолирует крупный DPG-срез 
 
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import dearpygui.dearpygui as dpg
@@ -51,6 +52,7 @@ class ProjectsViewMixin(ContextBoundView):
     _e300_win: int | None
     _duplicate_win: int | None
     _duplicate_ids: dict[str, int]
+    _confirm_save_before: Callable[..., None]
 
     def _render_projects(self) -> None:
         if not dpg.does_item_exist(_PROJECTS_CONTENT):
@@ -105,9 +107,8 @@ class ProjectsViewMixin(ContextBoundView):
                        borders_outerV=True, resizable=True, scrollY=True,
                        height=380, freeze_rows=1):
             for label in ("Project", "Models", "Field", "EOS", "Components",
-                          "Calculated", "Created"):
+                          "Calculated", "Last saved", "Created"):
                 dpg.add_table_column(label=label)
-            workspaces = self._session.workspaces or {}
             for project in self._state.projects.values():
                 models = [self._state.models[mid] for mid in project.model_ids
                           if mid in self._state.models]
@@ -120,7 +121,7 @@ class ProjectsViewMixin(ContextBoundView):
                 component_counts = ", ".join(
                     str(model.n_components) for model in models)
                 calculated = "; ".join(
-                    f"{model.title}: {self._calc_summary_text(model, workspaces)}"
+                    f"{model.title}: {self._calc_summary_text(model)}"
                     for model in models)
                 with dpg.table_row():
                     sel = dpg.add_selectable(
@@ -135,6 +136,9 @@ class ProjectsViewMixin(ContextBoundView):
                     dpg.add_text(", ".join(sorted(eos_values)) if eos_values else "-")
                     dpg.add_text(component_counts)
                     dpg.add_text(calculated or "-")
+                    saved_at = max((s.workspace_saved_at for s in summaries
+                                    if s.workspace_saved_at), default=None)
+                    dpg.add_text(self._format_saved_at(saved_at) or "-")
                     created = min((s.created_at for s in summaries if s.created_at),
                                   default=None)
                     dpg.add_text((created or "-")[:10])
@@ -147,19 +151,20 @@ class ProjectsViewMixin(ContextBoundView):
             dpg.add_button(label="Import Excel", callback=self._on_import_excel)
             dpg.add_button(label="Import E300", callback=self._on_import_e300)
 
-    def _calc_summary_text(self, model, workspaces: dict) -> str:
-        """Текст колонки Calculated: persisted + сессионные расчёты."""
+    def _calc_summary_text(self, model) -> str:
+        """Текст колонки Calculated только из сохранённого workspace."""
         if model.summary is None:
             return "-"
-        info = proj_svc.calc_summary(model.summary,
-                                     workspaces.get(model.model_id))
+        info = proj_svc.calc_summary(model.summary)
         parts: list[str] = []
         if info["flashes"]:
             parts.append(f"{info['flashes']} flash")
         for kind, n in info["exp_kinds"].items():
             parts.append(f"{n} {kind}")
-        if info["persisted"]:
-            parts.append(f"{info['persisted']} stored")
+        if info["envelopes"]:
+            parts.append(f"{info['envelopes']} envelope")
+        if info["stale"]:
+            parts.append(f"{info['stale']} stale")
         return ", ".join(parts) if parts else "-"
 
     # --- навигация ---------------------------------------------------------
@@ -206,6 +211,13 @@ class ProjectsViewMixin(ContextBoundView):
                     else (self._state.active_model_id
                           if self._state.active_model_id in project.model_ids
                           else project.model_ids[0]))
+        if (self._state.current_screen == "workspace"
+                and self._state.active_model_id != model_id):
+            self._confirm_save_before(
+                lambda: self._open_project(project_id),
+                action_name="opening another project",
+            )
+            return
         try:
             self._state.enter_model(model_id, notify=False)
         except Exception as exc:  # noqa: BLE001
@@ -421,7 +433,10 @@ class ProjectsViewMixin(ContextBoundView):
         if self._jobs.busy:
             self._set_status("Calculation in progress - wait or cancel first.")
             return
-        self._state.show_projects()
+        self._confirm_save_before(
+            self._state.show_projects,
+            action_name="returning to Projects",
+        )
 
     def _on_new_fluid_manual(self, sender=None, app_data=None, user_data=None) -> None:
         self._new_fluid_form.clear_prefill()

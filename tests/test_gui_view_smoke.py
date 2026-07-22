@@ -1,5 +1,6 @@
 """Headless-smoke реального DearPyGui View без показа окна."""
 
+import json
 import shutil
 from pathlib import Path
 
@@ -255,6 +256,36 @@ def test_project_delete_dialog_warns_about_dirty_loaded_models(tmp_path):
         assert any("1 model(s) have unsaved changes" in text
                    for text in _text_values(modal))
         dpg.delete_item(modal)
+    finally:
+        dpg.destroy_context()
+
+
+def test_back_to_projects_confirms_and_saves_full_workspace(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        state.enter_model("KRSNL_PVTSIM")
+        node_id = state.new_envelope({"method": "ssm", "t_min_c": 10.0})
+        assert node_id is not None
+        state.set_node_result(node_id, {"points": [[10.0, 42.0]]})
+
+        app._on_back_to_projects()
+
+        assert state.current_screen == "workspace"
+        modal = app._modals[-1]
+        assert any("Save 1 changed model(s)" in text for text in _text_values(modal))
+        app._save_then_continue(modal, state.show_projects)
+
+        assert state.current_screen == "projects"
+        raw = json.loads(db_path.read_text(encoding="utf-8"))
+        assert raw["KRSNL_PVTSIM"]["workspace"]["snapshot"]["nodes"]
+        assert raw["KRSNL_PVTSIM"]["results"][0]["has_result"] is True
     finally:
         dpg.destroy_context()
 
