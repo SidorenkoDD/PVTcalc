@@ -372,6 +372,11 @@ class PVTcalcApp(
 
     def _discard_then_continue(self, win: int, continue_action) -> None:
         discarded = self._state.discard_all_dirty()
+        # AppState вернул модель к записи базы, поэтому прежний in-memory
+        # workspace больше не существует. Разрешаем `_restore_workspace()`
+        # заново загрузить последний сохранённый snapshot при следующем входе.
+        for model_id in discarded:
+            self._restored_models.discard(model_id)
         if dpg.does_item_exist(win):
             dpg.delete_item(win)
         self._set_status("Discarded changes: " + ", ".join(discarded))

@@ -290,6 +290,44 @@ def test_back_to_projects_confirms_and_saves_full_workspace(tmp_path):
         dpg.destroy_context()
 
 
+def test_discard_restores_previous_saved_workspace_not_empty_model(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    # Сначала создаём именно постоянный расчёт, который пользователь откроет
+    # в следующей сессии.
+    seed = AppState(ModelRepository(str(db_path)))
+    seed.refresh_model_list()
+    seed.enter_model("KRSNL_PVTSIM")
+    saved_id = seed.new_envelope({"method": "ssm", "t_min_c": 10.0})
+    assert saved_id == "env_1"
+    seed.set_node_result(saved_id, {"points": [[10.0, 42.0]]})
+    seed.save_model()
+
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        dpg.create_viewport(title="test", width=800, height=600)
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        assert state.node_by_id(saved_id).result == {"points": [[10.0, 42.0]]}
+
+        unsaved_id = state.new_envelope({"method": "grid", "grid_t_points": 5})
+        assert unsaved_id == "env_2"
+        state.set_node_result(unsaved_id, {"points": [[20.0, 99.0]]})
+        app._on_back_to_projects()
+        modal = app._modals[-1]
+        app._discard_then_continue(modal, state.show_projects)
+
+        app._open_project("KRSNL_PVTSIM")
+        restored = state.active_variant.nodes
+        assert restored[saved_id].result == {"points": [[10.0, 42.0]]}
+        assert unsaved_id not in restored
+    finally:
+        dpg.destroy_context()
+
+
 def test_compare_selection_distinguishes_same_local_id_across_models(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)
