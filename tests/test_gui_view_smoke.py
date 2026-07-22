@@ -184,19 +184,24 @@ def test_project_overview_lists_models_and_opens_selected_model(tmp_path):
         dpg.destroy_context()
 
 
-def test_tree_filter_shows_attention_runs_only():
-    state = AppState(ModelRepository(str(MODELS_JSON)))
+def test_tree_search_groups_dle_runs_by_source_model(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    copy_id = proj_svc.duplicate_model(str(db_path), "KRSNL_PVTSIM")
+    state = AppState(ModelRepository(str(db_path)))
     app = PVTcalcApp(state, SessionState())
     dpg.create_context()
     try:
         app._build_layout()
         state.refresh_model_list()
         app._open_project("KRSNL_PVTSIM")
-        flash_id = state.new_flash_run(100.0, 50.0)
-        state.set_node_error(flash_id, "input needs review")
-        app._expanded_cats.add("KRSNL_PVTSIM:flash")
+        first_id = state.new_experiment("dle", {"T_c": 50.0, "P_res": 100.0})
+        assert first_id is not None
+        app._on_model_row(None, None, copy_id)
+        second_id = state.new_experiment("dle", {"T_c": 60.0, "P_res": 120.0})
+        assert second_id is not None
 
-        app._on_tree_filter(None, "Needs attention")
+        app._on_tree_query(None, "DLE")
 
         labels = [
             dpg.get_item_label(child)
@@ -204,9 +209,15 @@ def test_tree_filter_shows_attention_runs_only():
             for child in children
             if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
         ]
-        assert any("Flash (1)" in label for label in labels)
-        assert any("100 bar / 50 C" in label for label in labels)
-        assert not any("Composition" in label for label in labels)
+        assert any(state.models["KRSNL_PVTSIM"].title in label for label in labels)
+        assert any(state.models[copy_id].title in label for label in labels)
+        assert sum("DLE —" in label for label in labels) == 2
+
+        app._on_tree_open_node(None, None, (copy_id, second_id))
+
+        assert state.active_model_id == copy_id
+        assert state.active_variant is not None
+        assert state.active_variant.active_node_id == second_id
     finally:
         dpg.destroy_context()
 

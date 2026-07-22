@@ -16,7 +16,6 @@ from gui.view.contracts import ContextBoundView
 
 _MODEL_TREE = "model_tree"
 _WORKSPACE = "workspace_content"
-_TREE_FILTERS = ["All", "Results only", "Needs attention"]
 
 
 class WorkspaceViewMixin(ContextBoundView):
@@ -25,7 +24,6 @@ class WorkspaceViewMixin(ContextBoundView):
     _expanded_models: set[str]
     _expanded_cats: set[str]
     _tree_query: str
-    _tree_filter: str
     _selected_tree_model_id: str | None
     _compare_selection: list[NodeRef]
     _tabbar_id: int | None
@@ -87,20 +85,17 @@ class WorkspaceViewMixin(ContextBoundView):
         )
         with dpg.group(horizontal=True, parent=_MODEL_TREE):
             dpg.add_input_text(
-                hint="Search models and calculations + Enter", width=195,
+                hint="Find calculations: DLE, Flash... + Enter", width=255,
                 default_value=self._tree_query, callback=self._on_tree_query,
                 on_enter=True,
             )
-            dpg.add_combo(
-                items=_TREE_FILTERS, width=105, default_value=self._tree_filter,
-                callback=self._on_tree_filter,
-            )
-        visible_models = 0
+            if self._tree_query:
+                dpg.add_button(label="Clear", small=True,
+                               callback=self._on_tree_search_clear)
+        if self._tree_query:
+            self._render_search_results(models)
+            return
         for model in models:
-            if not self._tree_model_visible(model):
-                continue
-            visible_models += 1
-            model_matches = self._tree_model_matches(model)
             expanded = model.model_id in self._expanded_models
             arrow = "v " if expanded else "> "
             # ASCII-маркер не зависит от шрифта DPG: Unicode `●` в некоторых
@@ -118,80 +113,106 @@ class WorkspaceViewMixin(ContextBoundView):
             # при этом только одна модель, но несколько корней могут оставаться
             # раскрытыми одновременно — как в обычном IDE-дереве.
             if expanded and model.loaded:
-                self._render_model_children(model, model_matches)
-        if not visible_models:
-            dpg.add_text("No models or calculations match the current filter.",
-                         parent=_MODEL_TREE, wrap=290)
+                self._render_model_children(model)
 
     def _on_tree_query(self, sender, app_data, user_data=None) -> None:
         self._tree_query = str(app_data).strip().lower()
         self._render_tree()
 
-    def _on_tree_filter(self, sender, app_data, user_data=None) -> None:
-        value = str(app_data)
-        self._tree_filter = value if value in _TREE_FILTERS else "All"
+    def _on_tree_search_clear(self, sender, app_data, user_data=None) -> None:
+        self._tree_query = ""
         self._render_tree()
 
-    def _tree_model_matches(self, model) -> bool:
-        if not self._tree_query:
-            return True
-        text = " ".join(filter(None, (
-            model.model_id, model.title, model.field_name, model.eos,
-        ))).lower()
-        return self._tree_query in text
-
-    def _tree_node_visible(self, model, node, model_matches: bool) -> bool:
-        if self._tree_filter == "Results only" and node.result is None:
-            return False
-        if self._tree_filter == "Needs attention" and not (
-                node.status is NodeStatus.STALE or node.error):
-            return False
-        if not self._tree_query or model_matches:
-            return True
+    def _search_node_text(self, node) -> str:
         if node.kind is NodeKind.FLASH:
             label = self._flash_tree_label(node)
         elif node.kind is NodeKind.EXPERIMENT:
-            label = self._exp_run_leaf_label(node)
+            label = self._exp_tree_label(node)
         elif node.kind is NodeKind.PHASE_ENVELOPE:
             label = self._env_run_leaf_label(node)
         else:
             label = node.title
-        return self._tree_query in f"{node.node_id} {label}".lower()
+        return " ".join(filter(None, (
+            node.node_id, node.title, node.kind.name,
+            str(node.params.get("kind") or ""), label,
+        ))).lower()
 
-    def _tree_model_visible(self, model) -> bool:
-        model_matches = self._tree_model_matches(model)
-        if not model.loaded:
-            if self._tree_filter == "Results only":
-                return bool(model_matches and model.summary
-                            and proj_svc.calc_summary(model.summary)["persisted"])
-            if self._tree_filter == "Needs attention":
-                return bool(model_matches and model.summary
-                            and proj_svc.calc_summary(model.summary)["stale"])
-            return model_matches
+    def _search_hits(self, model) -> list[tuple[str, str]]:
+        """Возвращает расчёты модели, подходящие под запрос, без её загрузки."""
+        if not self._tree_query:
+            return []
         variant = model.variants.get("base")
-        if variant is None:
-            return model_matches
-        if model_matches and self._tree_filter == "All":
-            return True
-        return any(self._tree_node_visible(model, node, model_matches)
-                   for node in variant.nodes.values()
-                   if node.kind is not NodeKind.COMPOSITION)
+        if model.loaded and variant is not None:
+            return [
+                (node.node_id, self._search_node_label(node))
+                for node in variant.nodes.values()
+                if (node.kind not in (NodeKind.COMPOSITION, NodeKind.COMPARE)
+                    and self._tree_query in self._search_node_text(node))
+            ]
+        records = model.summary.results_brief if model.summary is not None else ()
+        hits: list[tuple[str, str]] = []
+        for record in records:
+            node_id = record.get("node_id") if isinstance(record, dict) else None
+            if not isinstance(node_id, str):
+                continue
+            text = " ".join(str(record.get(key) or "") for key in (
+                "node_id", "module", "kind", "experiment_kind",
+            )).lower()
+            if self._tree_query in text:
+                hits.append((node_id, self._saved_search_label(record)))
+        return hits
 
-    def _render_model_children(self, model, model_matches: bool) -> None:
+    def _search_node_label(self, node) -> str:
+        if node.kind is NodeKind.EXPERIMENT:
+            kind = str(node.params.get("kind") or "experiment")
+            return f"{kind.upper()} — {self._exp_run_leaf_label(node)}"
+        if node.kind is NodeKind.FLASH:
+            return "Flash — " + self._flash_tree_label(node)
+        return "Phase envelope — " + self._env_run_leaf_label(node)
+
+    @staticmethod
+    def _saved_search_label(record: dict) -> str:
+        kind = str(record.get("experiment_kind") or record.get("kind")
+                   or record.get("module") or "Calculation")
+        node_id = str(record.get("node_id") or "")
+        return f"{kind.upper()} — {node_id} (saved)"
+
+    def _render_search_results(self, models) -> None:
+        matches = [(model, self._search_hits(model)) for model in models]
+        matches = [(model, hits) for model, hits in matches if hits]
+        total = sum(len(hits) for _model, hits in matches)
+        dpg.add_text(
+            f"Search results for '{self._tree_query}': {total} calculation(s) "
+            f"in {len(matches)} model(s).",
+            parent=_MODEL_TREE, wrap=290,
+        )
+        if not matches:
+            dpg.add_text("No calculations match this search.", parent=_MODEL_TREE)
+            return
+        for model, hits in matches:
+            dpg.add_selectable(
+                label=f"  {model.title}  [{len(hits)} match(es)]",
+                parent=_MODEL_TREE, user_data=model.model_id,
+                callback=self._on_model_row,
+            )
+            for node_id, label in hits:
+                dpg.add_selectable(
+                    label="      " + label, parent=_MODEL_TREE,
+                    user_data=(model.model_id, node_id),
+                    callback=self._on_tree_open_node,
+                )
+
+    def _render_model_children(self, model) -> None:
         variant = model.variants.get("base")
         if variant is None:
             return
         is_active_model = model.model_id == self._state.active_model_id
         active_nid = variant.active_node_id if is_active_model else None
 
-        show_actions = not self._tree_query and self._tree_filter == "All"
-
         # Composition
         comp = variant.nodes.get("composition")
         stale = "  *" if (comp and comp.status is NodeStatus.STALE) else ""
-        if (comp is not None and self._tree_filter == "All"
-                and (model_matches or not self._tree_query
-                     or self._tree_query in "composition")):
+        if comp is not None:
             dpg.add_selectable(
                 label=f"    Composition{stale}", parent=_MODEL_TREE,
                 default_value=(active_nid == "composition"),
@@ -203,15 +224,12 @@ class WorkspaceViewMixin(ContextBoundView):
         cat_key = f"{model.model_id}:flash"
         cat_exp = cat_key in self._expanded_cats
         runs = variant.flash_runs()
-        visible_runs = [run for run in runs
-                        if self._tree_node_visible(model, run, model_matches)]
-        if visible_runs or show_actions:
-            dpg.add_selectable(
-                label=f"  {'v' if cat_exp else '>'} Flash ({len(visible_runs)})",
-                parent=_MODEL_TREE, user_data=cat_key, callback=self._on_cat_toggle,
-            )
-        if cat_exp and (visible_runs or show_actions):
-            for run in visible_runs:
+        dpg.add_selectable(
+            label=f"  {'v' if cat_exp else '>'} Flash ({len(runs)})",
+            parent=_MODEL_TREE, user_data=cat_key, callback=self._on_cat_toggle,
+        )
+        if cat_exp:
+            for run in runs:
                 mark = ("[*] " if self._compare_ref(model.model_id, run.node_id)
                         in self._compare_selection else "")
                 sel = dpg.add_selectable(
@@ -221,11 +239,10 @@ class WorkspaceViewMixin(ContextBoundView):
                     callback=self._on_tree_open_node,
                 )
                 self._attach_flash_context_menu(sel, model.model_id, run.node_id)
-            if show_actions:
-                dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
-                                   user_data=model.model_id, callback=self._on_new_flash)
+            dpg.add_selectable(label="      + New flash", parent=_MODEL_TREE,
+                               user_data=model.model_id, callback=self._on_new_flash)
             n_sel = self._compare_selection_count(NodeKind.FLASH)
-            if show_actions and n_sel >= 2:
+            if n_sel >= 2:
                 dpg.add_selectable(label=f"      = Compare selected ({n_sel})",
                                    parent=_MODEL_TREE, user_data=model.model_id,
                                    callback=self._on_open_compare)
@@ -235,23 +252,19 @@ class WorkspaceViewMixin(ContextBoundView):
         ecat_key = f"{mid}:exp"
         ecat_exp = ecat_key in self._expanded_cats
         exp_runs = variant.experiment_runs()
-        visible_exp_runs = [run for run in exp_runs
-                            if self._tree_node_visible(model, run, model_matches)]
-        if visible_exp_runs or show_actions:
-            dpg.add_selectable(
-                label=f"  {'v' if ecat_exp else '>'} Experiments ({len(visible_exp_runs)})",
-                parent=_MODEL_TREE, user_data=ecat_key, callback=self._on_cat_toggle)
-        if ecat_exp and (visible_exp_runs or show_actions):
+        dpg.add_selectable(
+            label=f"  {'v' if ecat_exp else '>'} Experiments ({len(exp_runs)})",
+            parent=_MODEL_TREE, user_data=ecat_key, callback=self._on_cat_toggle)
+        if ecat_exp:
             for kind in ("cce", "dle", "separator"):
                 lbl = exp_svc.EXPERIMENT_TYPES[kind]["label"]
-                kruns = [r for r in visible_exp_runs if r.params.get("kind") == kind]
+                kruns = [r for r in exp_runs if r.params.get("kind") == kind]
                 kkey = f"{mid}:exp:{kind}"
                 kexp = kkey in self._expanded_cats
-                if kruns or show_actions:
-                    dpg.add_selectable(
-                        label=f"    {'v' if kexp else '>'} {lbl} ({len(kruns)})",
-                        parent=_MODEL_TREE, user_data=kkey, callback=self._on_cat_toggle)
-                if kexp and (kruns or show_actions):
+                dpg.add_selectable(
+                    label=f"    {'v' if kexp else '>'} {lbl} ({len(kruns)})",
+                    parent=_MODEL_TREE, user_data=kkey, callback=self._on_cat_toggle)
+                if kexp:
                     for run in kruns:
                         mark = ("[*] " if self._compare_ref(mid, run.node_id)
                                 in self._compare_selection else "")
@@ -265,29 +278,25 @@ class WorkspaceViewMixin(ContextBoundView):
                     selected = self._compare_selection_count(
                         NodeKind.EXPERIMENT, kind,
                     )
-                    if show_actions and selected >= 2:
+                    if selected >= 2:
                         dpg.add_selectable(
                             label=f"        = Compare selected {lbl} ({selected})",
                             parent=_MODEL_TREE, user_data=mid,
                             callback=self._on_open_compare,
                         )
-                    if show_actions:
-                        dpg.add_selectable(label=f"        + New {lbl}",
-                                           parent=_MODEL_TREE, user_data=(mid, kind),
-                                           callback=self._on_new_experiment)
+                    dpg.add_selectable(label=f"        + New {lbl}",
+                                       parent=_MODEL_TREE, user_data=(mid, kind),
+                                       callback=self._on_new_experiment)
 
         # Phase envelope — категория с историей запусков (P-T огибающая + Psat)
         pcat_key = f"{mid}:env"
         pcat_exp = pcat_key in self._expanded_cats
         env_runs = variant.envelope_runs()
-        visible_env_runs = [run for run in env_runs
-                            if self._tree_node_visible(model, run, model_matches)]
-        if visible_env_runs or show_actions:
-            dpg.add_selectable(
-                label=f"  {'v' if pcat_exp else '>'} Phase envelope ({len(visible_env_runs)})",
-                parent=_MODEL_TREE, user_data=pcat_key, callback=self._on_cat_toggle)
-        if pcat_exp and (visible_env_runs or show_actions):
-            for run in visible_env_runs:
+        dpg.add_selectable(
+            label=f"  {'v' if pcat_exp else '>'} Phase envelope ({len(env_runs)})",
+            parent=_MODEL_TREE, user_data=pcat_key, callback=self._on_cat_toggle)
+        if pcat_exp:
+            for run in env_runs:
                 sel = dpg.add_selectable(
                     label="      " + self._env_run_leaf_label(run),
                     parent=_MODEL_TREE,
@@ -295,9 +304,8 @@ class WorkspaceViewMixin(ContextBoundView):
                     user_data=(mid, run.node_id),
                     callback=self._on_tree_open_node)
                 self._attach_env_context_menu(sel, mid, run.node_id)
-            if show_actions:
-                dpg.add_selectable(label="      + New envelope", parent=_MODEL_TREE,
-                                   user_data=mid, callback=self._on_new_envelope)
+            dpg.add_selectable(label="      + New envelope", parent=_MODEL_TREE,
+                               user_data=mid, callback=self._on_new_envelope)
 
     # --- обработчики дерева ----------------------------------------------
 
