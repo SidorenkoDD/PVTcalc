@@ -288,6 +288,40 @@ def test_project_lab_tree_creates_dataset_with_manual_editor(tmp_path):
         dpg.destroy_context()
 
 
+def test_lab_data_tree_groups_datasets_by_experiment_kind(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    common = {"columns": ["pressure"], "rows": [[300.0]]}
+    lab_svc.create_dataset(str(db_path), "KRSNL_PVTSIM", title="DLE A",
+                           experiment_kind="dle", **common)
+    lab_svc.create_dataset(str(db_path), "KRSNL_PVTSIM", title="DLE B",
+                           experiment_kind="dle", **common)
+    lab_svc.create_dataset(str(db_path), "KRSNL_PVTSIM", title="CCE A",
+                           experiment_kind="cce", **common)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        app._expanded_cats.update({"KRSNL_PVTSIM:lab", "KRSNL_PVTSIM:lab:dle"})
+        app._render_tree()
+
+        labels = [
+            dpg.get_item_label(child)
+            for children in dpg.get_item_children(_MODEL_TREE).values()
+            for child in children
+            if dpg.get_item_type(child) == "mvAppItemType::mvSelectable"
+        ]
+        assert "    v DLE (2)" in labels
+        assert "    > CCE (1)" in labels
+        assert any("DLE A" in label for label in labels)
+        assert not any("?" in label for label in labels if "DLE A" in label)
+    finally:
+        dpg.destroy_context()
+
+
 def test_workspace_tree_keeps_multiple_models_expanded(tmp_path):
     db_path = tmp_path / "models.json"
     shutil.copyfile(MODELS_JSON, db_path)
@@ -760,7 +794,7 @@ def test_experiment_lab_data_and_chart_grid_render():
 
         assert _has_label(_WORKSPACE, "Lab Data (measured)")
         assert _item_by_label(_WORKSPACE, "Paste from Excel") is None
-        assert any("Manual point-by-point input" in text
+        assert any("Legacy local Lab Data is read only" in text
                    for text in _text_values(_WORKSPACE))
         assert _has_label(_WORKSPACE, "Copy table")
         assert _has_label(_WORKSPACE, "Bo vs pressure")

@@ -134,7 +134,7 @@ class ExperimentViewMixin(ContextBoundView):
         with dpg.collapsing_header(label="Lab Data (measured)",
                                   default_open=True, parent=parent) as header:
             model = self._state.active_model
-            choices: dict[str, str | None] = {"Local to this run": None}
+            choices: dict[str, str | None] = {"No Lab Data": None}
             if model is not None:
                 try:
                     datasets = lab_svc.list_datasets(
@@ -150,7 +150,7 @@ class ExperimentViewMixin(ContextBoundView):
             self._lab_source_choices[node.node_id] = choices
             selected = next((label for label, value in choices.items()
                              if linked and value == linked["dataset_id"]),
-                            "Local to this run")
+                            "No Lab Data")
             dpg.add_combo(label="Data source", items=list(choices), width=360,
                           default_value=selected, user_data=node.node_id,
                           callback=self._on_lab_source_changed, parent=header)
@@ -160,42 +160,20 @@ class ExperimentViewMixin(ContextBoundView):
                     "(read only).",
                     parent=header,
                 )
-                dpg.add_button(label="Make local editable copy",
-                               user_data=node.node_id,
-                               callback=self._on_lab_make_local_copy,
-                               parent=header)
                 dpg.add_button(label="Edit selected Lab Data",
                                user_data=node.node_id,
                                callback=self._on_lab_open_selected,
                                parent=header)
             else:
-                dpg.add_text(
-                    "Enter measured points for this run. Blank cells are ignored.",
-                    parent=header,
-                )
-            with dpg.group(horizontal=True, parent=header):
-                if linked is None:
-                    dpg.add_button(label="Add point", user_data=node.node_id,
-                                   callback=self._on_lab_add_row)
-                    remove_id = dpg.add_button(
-                        label="Remove last", user_data=node.node_id,
-                        callback=self._on_lab_remove_row, enabled=bool(rows))
-                    clear_id = dpg.add_button(
-                        label="Clear", user_data=node.node_id,
-                        callback=self._on_lab_clear, enabled=bool(rows))
-                else:
-                    remove_id = clear_id = dpg.add_spacer(width=1)
-                count_id = dpg.add_text(f"{len(rows)} point(s)", parent=header)
-                self._lab_data_controls[node.node_id] = (
-                    remove_id, clear_id, count_id)
+                message = ("Choose a Project or Model Lab Data source in the list above."
+                           if not rows else
+                           "Legacy local Lab Data is read only; choose a catalog source.")
+                dpg.add_text(message, parent=header, wrap=620)
+            dpg.add_text(f"{len(rows)} point(s)", parent=header)
             holder = dpg.add_group(parent=header)
             self._lab_data_holder[node.node_id] = holder
-            if linked is None:
-                dpg.add_text("Manual point-by-point input. Create shared sources "
-                             "from Project or Model Lab Data in the tree.",
-                             parent=header)
             self._render_lab_data_table(node, holder, columns, rows,
-                                        readonly=linked is not None)
+                                        readonly=True)
 
     def _render_lab_data_table(self, node, holder, columns, rows, *, readonly=False) -> None:
         self._ensure_lab_navigation_handlers()

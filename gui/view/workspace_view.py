@@ -140,20 +140,10 @@ class WorkspaceViewMixin(ContextBoundView):
         )
         if not expanded:
             return
-        if not datasets:
-            dpg.add_text("    Create a measured-data set for this project.",
-                         parent=_MODEL_TREE, wrap=270)
-        for dataset in datasets:
-            label = (f"    {dataset['experiment_kind'].upper()} — {dataset['title']} "
-                     f"({len(dataset['rows'])} point(s))")
-            dpg.add_selectable(label=label, parent=_MODEL_TREE,
-                               user_data=(dataset["dataset_id"], "project", None),
-                               callback=self._on_project_lab_dataset)
-        for kind in ("dle", "cce", "separator"):
-            dpg.add_selectable(label=f"    + New project {kind.upper()} Lab Data",
-                               parent=_MODEL_TREE,
-                               user_data=(kind, "project", None),
-                               callback=self._on_new_lab_dataset)
+        self._render_lab_dataset_groups(
+            datasets, scope="project", model_id=None, indent="    ",
+            category_prefix=f"{project_id}:lab",
+        )
 
     def _on_project_lab_dataset(self, sender, app_data, user_data) -> None:
         dataset_id, scope, model_id = user_data
@@ -177,19 +167,49 @@ class WorkspaceViewMixin(ContextBoundView):
         )
         if not expanded:
             return
-        for dataset in datasets:
-            dpg.add_selectable(
-                label=(f"      {dataset['experiment_kind'].upper()} — "
-                       f"{dataset['title']} ({len(dataset['rows'])} point(s))"),
-                parent=_MODEL_TREE,
-                user_data=(dataset["dataset_id"], "model", model.model_id),
-                callback=self._on_project_lab_dataset,
-            )
+        self._render_lab_dataset_groups(
+            datasets, scope="model", model_id=model.model_id, indent="      ",
+            category_prefix=f"{model.model_id}:model_lab",
+        )
+
+    def _render_lab_dataset_groups(self, datasets, *, scope: str,
+                                   model_id: str | None, indent: str,
+                                   category_prefix: str) -> None:
         for kind in ("dle", "cce", "separator"):
-            dpg.add_selectable(label=f"      + New {kind.upper()} Lab Data",
+            items = [dataset for dataset in datasets
+                     if dataset["experiment_kind"] == kind]
+            key = f"{category_prefix}:{kind}"
+            expanded = key in self._expanded_cats
+            dpg.add_selectable(
+                label=f"{indent}{'v' if expanded else '>'} {kind.upper()} ({len(items)})",
+                parent=_MODEL_TREE, user_data=key, callback=self._on_cat_toggle,
+            )
+            if not expanded:
+                continue
+            for dataset in items:
+                item = dpg.add_selectable(
+                    label=(f"{indent}    {dataset['title']} "
+                           f"({len(dataset['rows'])} point(s))"),
+                    parent=_MODEL_TREE,
+                    user_data=(dataset["dataset_id"], scope, model_id),
+                    callback=self._on_project_lab_dataset,
+                )
+                self._attach_lab_dataset_context_menu(item, dataset, model_id)
+            dpg.add_selectable(label=f"{indent}    + New {kind.upper()} Lab Data",
                                parent=_MODEL_TREE,
-                               user_data=(kind, "model", model.model_id),
+                               user_data=(kind, scope, model_id),
                                callback=self._on_new_lab_dataset)
+
+    def _attach_lab_dataset_context_menu(self, item_id, dataset, model_id) -> None:
+        with dpg.popup(item_id, mousebutton=dpg.mvMouseButton_Right):
+            dpg.add_text(f"{dataset['experiment_kind'].upper()} - {dataset['title']}")
+            dpg.add_separator()
+            dpg.add_menu_item(label="Rename / edit", user_data=(dataset["dataset_id"],
+                              dataset["scope"], model_id),
+                              callback=self._on_project_lab_dataset)
+            dpg.add_menu_item(label="Delete...", user_data=(dataset["dataset_id"],
+                              dataset["scope"], model_id),
+                              callback=self._on_lab_dataset_delete_confirm)
 
     def _on_new_lab_dataset(self, sender, app_data, user_data) -> None:
         kind, scope, model_id = user_data
@@ -220,8 +240,8 @@ class WorkspaceViewMixin(ContextBoundView):
             data["title_id"] = dpg.add_input_text(
                 label="Name", width=430, default_value=data["title"], parent=win)
             dpg.add_text(
-                f"{data['scope'].title()} scope · "
-                f"{data['experiment_kind'].upper()} · manual input only",
+                f"{data['scope'].title()} scope / "
+                f"{data['experiment_kind'].upper()} / manual input only",
                 parent=win,
             )
             with dpg.group(horizontal=True, parent=win):
@@ -239,6 +259,9 @@ class WorkspaceViewMixin(ContextBoundView):
                 dpg.add_button(label="Remove last", callback=self._on_catalog_lab_remove_row,
                                enabled=True)
                 dpg.add_button(label="Save", callback=self._on_catalog_lab_save)
+                if data.get("dataset_id"):
+                    dpg.add_button(label="Delete...",
+                                   callback=self._on_lab_editor_delete_confirm)
                 dpg.add_button(label="Cancel", callback=self._on_catalog_lab_cancel)
             data["holder"] = dpg.add_group(parent=win)
             self._render_catalog_lab_table()
@@ -353,6 +376,56 @@ class WorkspaceViewMixin(ContextBoundView):
             dpg.delete_item(self._lab_catalog_modal)
         self._lab_catalog_modal = None
         self._lab_catalog_editor = None
+
+    def _on_lab_editor_delete_confirm(self, sender=None, app_data=None, user_data=None) -> None:
+        data = self._lab_catalog_editor
+        if data is not None and data.get("dataset_id"):
+            self._on_lab_dataset_delete_confirm(
+                sender, app_data,
+                (data["dataset_id"], data["scope"], data.get("model_id")),
+            )
+
+    def _on_lab_dataset_delete_confirm(self, sender, app_data, user_data) -> None:
+        dataset_id, scope, model_id = user_data
+        project_id = self._state.active_project_id
+        if not project_id:
+            return
+        dataset = lab_svc.get_dataset(self._state.db_path, project_id, dataset_id,
+                                      model_id=model_id)
+        if dataset is None:
+            return
+        with dpg.window(label="Delete Lab Data", modal=True, no_collapse=True,
+                        width=430, height=170) as win:
+            self._track_modal(win)
+            dpg.add_text(
+                f"Delete {dataset['experiment_kind'].upper()} dataset "
+                f"'{dataset['title']}'? Linked experiments will lose this source.",
+                wrap=390,
+            )
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Delete", width=100,
+                               user_data=(dataset_id, model_id, win),
+                               callback=self._on_lab_dataset_delete)
+                dpg.add_button(label="Cancel", width=100,
+                               callback=lambda: dpg.delete_item(win))
+
+    def _on_lab_dataset_delete(self, sender, app_data, user_data) -> None:
+        dataset_id, model_id, win = user_data
+        project_id = self._state.active_project_id
+        if not project_id:
+            return
+        try:
+            deleted = lab_svc.delete_dataset(self._state.db_path, project_id, dataset_id,
+                                              model_id=model_id)
+        except lab_svc.LabDataStoreError as exc:
+            self._set_status(f"Could not delete Lab Data: {exc}")
+            return
+        if win and dpg.does_item_exist(win):
+            dpg.delete_item(win)
+        self._on_catalog_lab_cancel()
+        self._render_tree()
+        self._render_workspace()
+        self._set_status("Lab Data deleted." if deleted else "Lab Data was not found.")
 
     def _on_tree_query(self, sender, app_data, user_data=None) -> None:
         query = str(app_data).strip().lower()

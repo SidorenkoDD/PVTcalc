@@ -66,6 +66,18 @@ def test_dataset_update_preserves_scope_and_manual_conditions(tmp_path):
     assert updated["rows"] == [[250.0, 1.1]]
 
 
+def test_dataset_can_be_deleted_within_its_scope(tmp_path):
+    db_path = tmp_path / "models.json"
+    dataset = lab_svc.create_dataset(
+        db_path, "project_a", title="Private DLE", experiment_kind="dle",
+        columns=["pressure"], rows=[[200.0]], scope="model", model_id="model_a",
+    )
+
+    assert lab_svc.delete_dataset(
+        db_path, "project_a", dataset["dataset_id"], model_id="model_a") is True
+    assert lab_svc.list_datasets(db_path, "project_a", model_id="model_a") == []
+
+
 def test_corrupt_catalog_is_not_overwritten(tmp_path):
     db_path = tmp_path / "models.json"
     path = lab_svc.catalog_path(db_path)
