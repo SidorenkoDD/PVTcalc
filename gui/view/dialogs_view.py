@@ -1,55 +1,19 @@
 """Общие модальные диалоги экспорта и настроек GUI."""
 
 import logging
-from typing import Any
 
 import dearpygui.dearpygui as dpg
 
 from gui.services import export_service as exp_out_svc
 from gui.services import model_report_service as report_svc
 from gui.services import settings_service as settings_svc
-from gui.view.contracts import ContextBoundView, ViewContext
+from gui.view.contracts import ContextBoundView
 
 logger = logging.getLogger(__name__)
 
 
-class DialogsController(ContextBoundView):
-    """Изолированный контроллер диалогов с явным UI-хостом."""
-
-    def __init__(self, context: ViewContext, host: Any):
-        self._view_context = context
-        self._host = host
-        self._export_comp: object | None = None
-        self._export_label = "model"
-        self._export_fmt = "e300"
-        self._export_eos = "MPR"
-        self._export_ids: dict[str, int] = {}
-        self._export_win: int | None = None
-        self._report_model_id: str | None = None
-        self._report_options: dict[str, bool] = {}
-        self._report_ids: dict[str, int] = {}
-        self._report_win: int | None = None
-        self._settings_ids: dict[str, int] = {}
-        self._settings_win: int | None = None
-
-    def __getattr__(self, name: str):
-        """Делегирует только общие UI-возможности composition root."""
-        return getattr(self._host, name)
-
-    def _set_status(self, text: str) -> None:
-        self._host._set_status(text)
-
-    def _track_modal(self, win: int) -> int:
-        return self._host._track_modal(win)
-
-    def _close_tracked_modal(self, win: int) -> None:
-        self._host._close_tracked_modal(win)
-
-    def _theme_stale(self):
-        return self._host._theme_stale()
-
-    def _restore_workspace(self, model_id: str) -> None:
-        self._host._restore_workspace(model_id)
+class DialogsViewMixin(ContextBoundView):
+    """Диалоги, доступные из главного меню приложения."""
 
     _selected_project: str | None
     _export_comp: object | None
@@ -91,7 +55,6 @@ class DialogsController(ContextBoundView):
                         pos=(max(0, w // 2 - 200), max(0, h // 2 - 115))) as win:
             self._track_modal(win)
             self._export_win = win
-            self._host._export_win = win
             ids: dict = {}
             ids["format"] = dpg.add_combo(
                 items=exp_out_svc.format_labels(), width=240, label="Format",
@@ -106,7 +69,6 @@ class DialogsController(ContextBoundView):
                              "pick PR (MPR) or SRK for the deck.")
             ids["_eos_grp"] = eos_grp
             self._export_ids = ids
-            self._host._export_ids = ids
             dpg.add_spacer(height=6)
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Choose file & export", width=180,
@@ -182,7 +144,6 @@ class DialogsController(ContextBoundView):
                         pos=(max(0, w // 2 - 215), max(0, h // 2 - 190))) as win:
             self._track_modal(win)
             self._report_win = win
-            self._host._report_win = win
             dpg.add_text("Choose report sections:")
             ids = {}
             ids["composition"] = dpg.add_checkbox(
@@ -198,7 +159,6 @@ class DialogsController(ContextBoundView):
             ids["lab_data"] = dpg.add_checkbox(
                 label="Linked laboratory data on experiment sheets", default_value=True)
             self._report_ids = ids
-            self._host._report_ids = ids
             dpg.add_spacer(height=6)
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Choose file & export", width=170,
@@ -321,7 +281,6 @@ class DialogsController(ContextBoundView):
                         pos=(max(0, w // 2 - 230), 60)) as win:
             self._track_modal(win)
             self._settings_win = win
-            self._host._settings_win = win
             self._settings_ids = {}
             note = dpg.add_text(
                 "Actual values used by the calculation engine. Editing will be\n"
@@ -338,7 +297,6 @@ class DialogsController(ContextBoundView):
                                 label=f["label"], width=180,
                                 readonly=True,
                                 default_value=self._fmt_setting(values.get(key), f))
-            self._host._settings_ids = self._settings_ids
             dpg.add_separator()
             dpg.add_button(label="Close", width=100,
                            callback=lambda: dpg.delete_item(win))
