@@ -20,6 +20,7 @@ from gui.view.contracts import ContextBoundView
 
 _MODEL_TREE = "model_tree"
 _WORKSPACE = "workspace_content"
+_LAB_EDITOR_INITIAL_ROWS = 10
 
 
 class WorkspaceViewMixin(ContextBoundView):
@@ -279,6 +280,8 @@ class WorkspaceViewMixin(ContextBoundView):
         data = dict(dataset)
         data["rows"] = [list(row) for row in data.get("rows", [])]
         data["conditions"] = dict(data.get("conditions") or {})
+        while len(data["rows"]) < _LAB_EDITOR_INITIAL_ROWS:
+            data["rows"].append([None] * len(data["columns"]))
         self._lab_catalog_editor = data
         title = ("New " if data.get("dataset_id") is None else "Edit ") + "Lab Data"
         with dpg.window(label=title, modal=True, no_collapse=True,
@@ -312,8 +315,8 @@ class WorkspaceViewMixin(ContextBoundView):
                                enabled=True)
                 dpg.add_button(label="Close", callback=self._on_catalog_lab_cancel)
             dpg.add_text(
-                "Saved automatically after the first complete measured point. "
-                "An empty draft is not added to Lab Data.",
+                "The first 10 rows are ready for input. Only complete rows are "
+                "saved and used as measured points.",
                 parent=win, wrap=780,
             )
             data["holder"] = dpg.add_group(parent=win)
@@ -398,17 +401,19 @@ class WorkspaceViewMixin(ContextBoundView):
         return conditions
 
     @staticmethod
-    def _catalog_lab_has_measured_point(data) -> bool:
-        """Only complete rows may publish a newly created Lab Data dataset."""
-        return any(row and all(value is not None for value in row)
-                   for row in data["rows"])
+    def _catalog_lab_measured_rows(data) -> list[list[float | None]]:
+        """Returns only fully specified measurements, never editor placeholders."""
+        return [list(row) for row in data["rows"]
+                if len(row) == len(data["columns"])
+                and all(value is not None for value in row)]
 
     def _autosave_catalog_lab(self) -> bool:
         data = self._lab_catalog_editor
         project_id = self._state.active_project_id
         if data is None or not project_id:
             return False
-        if not data.get("dataset_id") and not self._catalog_lab_has_measured_point(data):
+        measured_rows = self._catalog_lab_measured_rows(data)
+        if not data.get("dataset_id") and not measured_rows:
             return False
         try:
             title = str(dpg.get_value(data["title_id"])).strip()
@@ -418,14 +423,14 @@ class WorkspaceViewMixin(ContextBoundView):
             if data.get("dataset_id"):
                 saved = lab_svc.update_dataset(
                     self._state.db_path, project_id, data["dataset_id"], title=title,
-                    columns=data["columns"], rows=data["rows"], conditions=conditions,
+                    columns=data["columns"], rows=measured_rows, conditions=conditions,
                     model_id=data.get("model_id"),
                 )
             else:
                 saved = lab_svc.create_dataset(
                     self._state.db_path, project_id, title=title,
                     experiment_kind=data["experiment_kind"], columns=data["columns"],
-                    rows=data["rows"], conditions=conditions, scope=data["scope"],
+                    rows=measured_rows, conditions=conditions, scope=data["scope"],
                     model_id=data.get("model_id"),
                 )
             if saved is None:

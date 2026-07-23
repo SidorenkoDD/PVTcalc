@@ -279,9 +279,9 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
         assert _item_by_label(app._lab_catalog_modal, "Save") is None
         assert _has_label(app._lab_catalog_modal, "Close")
         assert _has_label(app._lab_catalog_modal, "T res, C (optional)")
+        assert len(app._lab_catalog_editor["rows"]) == 10
         assert lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                      experiment_kind="dle") == []
-        app._on_catalog_lab_add_row()
         columns = app._lab_catalog_editor["columns"]
         for index in range(len(columns)):
             app._on_catalog_lab_cell(None, str(300 - index), (0, index))
@@ -289,8 +289,8 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
         datasets = lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                          experiment_kind="dle")
         assert len(datasets) == 1
-        assert datasets[0]["rows"][0] == [float(300 - i)
-                                           for i in range(len(columns))]
+        assert datasets[0]["rows"] == [[float(300 - i)
+                                        for i in range(len(columns))]]
         assert app._lab_catalog_editor is not None
 
         # Del в открытом редакторе вызывает то же подтверждение, что и меню
