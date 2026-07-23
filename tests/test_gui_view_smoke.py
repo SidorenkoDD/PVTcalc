@@ -356,16 +356,18 @@ def test_lab_catalog_cells_navigate_then_edit_with_enter(tmp_path):
         app._on_catalog_lab_cell_click(None, None, (0, 0))
         first = app._lab_catalog_cell_ids[(0, 0)]
         assert app._lab_catalog_active_cell == (0, 0)
-        assert dpg.get_item_configuration(first)["readonly"] is True
+        assert dpg.get_item_type(first) == "mvAppItemType::mvButton"
 
         app._on_catalog_lab_arrow_key(None, None, (0, 1))
         second = app._lab_catalog_cell_ids[(0, 1)]
         assert app._lab_catalog_active_cell == (0, 1)
 
         app._on_catalog_lab_enter_key(None, None)
-        assert dpg.get_item_configuration(second)["readonly"] is False
+        second = app._lab_catalog_cell_ids[(0, 1)]
+        assert dpg.get_item_type(second) == "mvAppItemType::mvInputText"
         app._on_catalog_lab_cell(second, "1.2", (0, 1))
-        assert dpg.get_item_configuration(second)["readonly"] is True
+        committed = app._lab_catalog_cell_ids[(0, 1)]
+        assert dpg.get_item_type(committed) == "mvAppItemType::mvButton"
         assert app._lab_catalog_editor["rows"][0][1] == 1.2
     finally:
         dpg.destroy_context()

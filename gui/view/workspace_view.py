@@ -54,6 +54,7 @@ class WorkspaceViewMixin(ContextBoundView):
     _lab_catalog_navigation_registry_id: int | None
     _lab_catalog_cell_theme_id: int | None
     _lab_catalog_selected_cell_theme_id: int | None
+    _lab_catalog_edit_input_theme_id: int | None
     _lab_catalog_table_theme_id: int | None
     _lab_catalog_button_theme_id: int | None
     _modals: list[int]
@@ -341,19 +342,20 @@ class WorkspaceViewMixin(ContextBoundView):
         theme_id = getattr(self, attr)
         if theme_id is None:
             with dpg.theme() as theme_id:
-                with dpg.theme_component(dpg.mvInputText):
-                    dpg.add_theme_color(dpg.mvThemeCol_FrameBg,
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button,
                                         (218, 232, 246, 255) if selected
                                         else (235, 243, 250, 255))
-                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered,
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
                                         (209, 226, 242, 255))
-                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive,
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
                                         (201, 220, 239, 255))
                     dpg.add_theme_color(dpg.mvThemeCol_Border,
                                         (112, 145, 177, 255) if selected
                                         else (177, 196, 214, 255))
                     dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize,
                                         2 if selected else 1)
+                    dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.04, 0.5)
             setattr(self, attr, theme_id)
         return theme_id
 
@@ -410,26 +412,52 @@ class WorkspaceViewMixin(ContextBoundView):
                 with dpg.table_row():
                     dpg.add_text(str(row_index + 1))
                     for column_index, value in enumerate(row):
-                        cell_id = dpg.add_input_text(
-                            default_value="" if value is None else self._g(value),
-                            width=115, user_data=(row_index, column_index),
-                            callback=self._on_catalog_lab_cell, on_enter=True,
-                            readonly=True,
-                        )
                         key = (row_index, column_index)
-                        self._lab_catalog_cell_ids[key] = cell_id
-                        dpg.bind_item_theme(
-                            cell_id,
-                            self._lab_catalog_cell_theme(
-                                selected=key == self._lab_catalog_active_cell),
-                        )
-                        with dpg.item_handler_registry() as registry:
-                            dpg.add_item_clicked_handler(
-                                button=dpg.mvMouseButton_Left,
-                                callback=self._on_catalog_lab_cell_click,
-                                user_data=key,
+                        if data.get("editing_cell") == key:
+                            cell_id = dpg.add_input_text(
+                                default_value="" if value is None else self._g(value),
+                                width=115, user_data=key,
+                                callback=self._on_catalog_lab_cell, on_enter=True,
                             )
-                        dpg.bind_item_handler_registry(cell_id, registry)
+                        else:
+                            cell_id = dpg.add_button(
+                                label=" " if value is None else self._g(value),
+                                width=115, user_data=key,
+                                callback=self._on_catalog_lab_cell_click,
+                            )
+                        self._lab_catalog_cell_ids[key] = cell_id
+                        if data.get("editing_cell") == key:
+                            dpg.bind_item_theme(cell_id, self._lab_catalog_input_theme())
+                        else:
+                            dpg.bind_item_theme(
+                                cell_id,
+                                self._lab_catalog_cell_theme(
+                                    selected=key == self._lab_catalog_active_cell),
+                            )
+
+        editing = data.get("editing_cell")
+        if editing in self._lab_catalog_cell_ids:
+            cell_id = self._lab_catalog_cell_ids[editing]
+            dpg.set_frame_callback(
+                dpg.get_frame_count() + 1,
+                lambda *_args: (dpg.focus_item(cell_id)
+                                if dpg.does_item_exist(cell_id) else None),
+            )
+
+    def _lab_catalog_input_theme(self) -> int:
+        theme_id = self._lab_catalog_edit_input_theme_id
+        if theme_id is None:
+            with dpg.theme() as theme_id:
+                with dpg.theme_component(dpg.mvInputText):
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (218, 232, 246, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered,
+                                        (209, 226, 242, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive,
+                                        (201, 220, 239, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_Border, (112, 145, 177, 255))
+                    dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 2)
+            self._lab_catalog_edit_input_theme_id = theme_id
+        return theme_id
 
     def _ensure_catalog_lab_navigation_handlers(self) -> None:
         registry = self._lab_catalog_navigation_registry_id
@@ -484,12 +512,10 @@ class WorkspaceViewMixin(ContextBoundView):
     def _begin_catalog_lab_cell_edit(self, row: int, column: int) -> None:
         data = self._lab_catalog_editor
         key = (row, column)
-        cell_id = self._lab_catalog_cell_ids.get(key)
-        if data is None or cell_id is None:
+        if data is None or key not in self._lab_catalog_cell_ids:
             return
         data["editing_cell"] = key
-        dpg.configure_item(cell_id, readonly=False)
-        dpg.focus_item(cell_id)
+        self._render_catalog_lab_table()
 
     def _on_catalog_lab_arrow_key(self, sender, app_data, user_data) -> None:
         data = self._lab_catalog_editor
@@ -537,9 +563,8 @@ class WorkspaceViewMixin(ContextBoundView):
             return
         data["rows"][row][column] = value
         data["editing_cell"] = None
-        if dpg.does_item_exist(sender):
-            dpg.configure_item(sender, readonly=True)
-        self._select_catalog_lab_cell(row, column)
+        self._lab_catalog_active_cell = (row, column)
+        self._render_catalog_lab_table()
         self._autosave_catalog_lab()
 
     def _on_catalog_lab_metadata_changed(self, sender=None, app_data=None,
