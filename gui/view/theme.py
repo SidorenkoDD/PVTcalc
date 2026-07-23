@@ -20,7 +20,9 @@ import dearpygui.dearpygui as dpg
 _LIGHT_COLORS: dict[str, tuple[int, int, int, int]] = {
     "mvThemeCol_Text": (35, 45, 55, 255),
     "mvThemeCol_TextDisabled": (120, 133, 145, 255),
-    "mvThemeCol_WindowBg": (232, 238, 244, 255),
+    # Нейтральная рабочая поверхность: цвет фона оставлен прежним, чтобы
+    # серо-голубые поля и выделения читались как отдельные элементы.
+    "mvThemeCol_WindowBg": (240, 240, 240, 255),
     "mvThemeCol_ChildBg": (0, 0, 0, 0),
     "mvThemeCol_PopupBg": (238, 243, 248, 255),
     "mvThemeCol_Border": (143, 160, 177, 180),
