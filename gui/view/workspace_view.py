@@ -55,6 +55,8 @@ class WorkspaceViewMixin(ContextBoundView):
     _lab_catalog_navigation_registry_id: int | None
     _lab_catalog_cell_theme_id: int | None
     _lab_catalog_selected_cell_theme_id: int | None
+    _lab_catalog_invalid_cell_theme_id: int | None
+    _lab_catalog_required_input_theme_id: int | None
     _lab_catalog_table_theme_id: int | None
     _lab_catalog_button_theme_id: int | None
     _modals: list[int]
@@ -276,12 +278,12 @@ class WorkspaceViewMixin(ContextBoundView):
         self._lab_catalog_editor = data
         title = ("New " if data.get("dataset_id") is None else "Edit ") + "Lab Data"
         with dpg.window(label=title, modal=True, no_collapse=True,
-                        width=850, height=620,
+                        width=850, height=700,
                         on_close=self._on_lab_catalog_window_closed) as win:
             self._track_modal(win)
             self._lab_catalog_modal = win
             data["title_id"] = dpg.add_input_text(
-                label="Name", width=430, default_value=data["title"], parent=win,
+                label="Name *", width=430, default_value=data["title"], parent=win,
                 callback=self._on_catalog_lab_metadata_changed)
             dpg.add_text(
                 f"{data['scope'].title()} scope / "
@@ -290,16 +292,32 @@ class WorkspaceViewMixin(ContextBoundView):
             )
             with dpg.group(horizontal=True, parent=win):
                 data["t_id"] = dpg.add_input_text(
-                    label="T res, C (optional)", width=160,
+                    label="T res, C *", width=160,
                     default_value=(self._g(data["conditions"]["T_c"])
                                    if "T_c" in data["conditions"] else ""),
                     callback=self._on_catalog_lab_metadata_changed)
                 if data["experiment_kind"] in ("dle", "separator"):
                     data["p_id"] = dpg.add_input_text(
-                        label="P res, bar (optional)", width=180,
+                        label="P res, bar *", width=180,
                         default_value=(self._g(data["conditions"]["P_res"])
                                        if "P_res" in data["conditions"] else ""),
                         callback=self._on_catalog_lab_metadata_changed)
+            with dpg.collapsing_header(label="Measured columns", parent=win):
+                dpg.add_text(
+                    "Choose the measured parameters. Pressure is required; "
+                    "each saved row needs pressure and at least one selected value.",
+                    wrap=780,
+                )
+                data["column_selector_ids"] = {}
+                for column in self._lab_catalog_available_columns(data):
+                    selector = dpg.add_checkbox(
+                        label=column,
+                        default_value=column in data["columns"],
+                        enabled=column != "pressure",
+                        user_data=column,
+                        callback=self._on_catalog_lab_column_changed,
+                    )
+                    data["column_selector_ids"][column] = selector
             with dpg.group(horizontal=True, parent=win):
                 add_button = dpg.add_button(label="Add point",
                                             callback=self._on_catalog_lab_add_row)
@@ -313,8 +331,8 @@ class WorkspaceViewMixin(ContextBoundView):
                 for button in (add_button, paste_button, remove_button, close_button):
                     dpg.bind_item_theme(button, self._lab_catalog_button_theme())
             dpg.add_text(
-                "The first 10 rows are ready for input. Only complete rows are "
-                "saved and used as measured points.",
+                "The first 10 rows are ready for input. Fields marked * are "
+                "required; a measured point needs pressure and one value.",
                 parent=win, wrap=780,
             )
             with dpg.group(horizontal=True, parent=win):
@@ -325,10 +343,106 @@ class WorkspaceViewMixin(ContextBoundView):
                     callback=self._on_catalog_lab_editor_commit,
                 )
             data["holder"] = dpg.add_group(parent=win)
+            self._refresh_catalog_lab_validation()
             self._render_catalog_lab_table()
             self._ensure_catalog_lab_navigation_handlers()
 
-    def _lab_catalog_cell_theme(self, *, selected: bool) -> int:
+    @staticmethod
+    def _lab_catalog_available_columns(data) -> list[str]:
+        """Lists selectable result columns, retaining any legacy custom names."""
+        meta = exp_svc.EXPERIMENT_TYPES[data["experiment_kind"]]
+        ordered = ["pressure", *meta["main_columns"], *meta["charts"],
+                   *data["columns"]]
+        return list(dict.fromkeys(ordered))
+
+    def _on_catalog_lab_column_changed(self, sender, app_data, user_data) -> None:
+        """Applies a column selection while preserving values by column name."""
+        data = self._lab_catalog_editor
+        if data is None:
+            return
+        column = str(user_data)
+        if column == "pressure" and not bool(app_data):
+            dpg.set_value(sender, True)
+            return
+        selected = {
+            name for name, item_id in data.get("column_selector_ids", {}).items()
+            if bool(dpg.get_value(item_id))
+        }
+        selected.add("pressure")
+        new_columns = [name for name in self._lab_catalog_available_columns(data)
+                       if name in selected]
+        old_columns = list(data["columns"])
+        if new_columns == old_columns:
+            return
+        data["rows"] = [
+            [dict(zip(old_columns, row)).get(name) for name in new_columns]
+            for row in data["rows"]
+        ]
+        data["columns"] = new_columns
+        self._lab_catalog_active_cell = None
+        self._render_catalog_lab_table()
+        self._autosave_catalog_lab()
+
+    def _lab_catalog_required_input_theme(self) -> int:
+        """Soft warning treatment for missing required metadata fields."""
+        if self._lab_catalog_required_input_theme_id is None:
+            with dpg.theme() as theme_id:
+                with dpg.theme_component(dpg.mvInputText):
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (245, 232, 229, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered,
+                                        (241, 222, 218, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive,
+                                        (237, 214, 209, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_Border, (186, 132, 125, 255))
+                    dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
+            self._lab_catalog_required_input_theme_id = theme_id
+        return self._lab_catalog_required_input_theme_id
+
+    def _catalog_lab_missing_metadata(self, data) -> set[str]:
+        """Returns currently empty fields required for a usable dataset."""
+        required = {"title", "T_c"}
+        if data["experiment_kind"] in ("dle", "separator"):
+            required.add("P_res")
+        fields = {"title": "title_id", "T_c": "t_id", "P_res": "p_id"}
+        return {
+            key for key in required
+            if not data.get(fields[key])
+            or not str(dpg.get_value(data[fields[key]])).strip()
+        }
+
+    def _refresh_catalog_lab_validation(self) -> set[str]:
+        """Highlights required metadata immediately, before an autosave attempt."""
+        data = self._lab_catalog_editor
+        if data is None:
+            return set()
+        missing = self._catalog_lab_missing_metadata(data)
+        fields = {"title": "title_id", "T_c": "t_id", "P_res": "p_id"}
+        for key, item_key in fields.items():
+            item_id = data.get(item_key)
+            if item_id and dpg.does_item_exist(item_id):
+                dpg.bind_item_theme(
+                    item_id,
+                    self._lab_catalog_required_input_theme() if key in missing else 0,
+                )
+        return missing
+
+    def _lab_catalog_cell_theme(self, *, selected: bool, invalid: bool = False) -> int:
+        if invalid:
+            if self._lab_catalog_invalid_cell_theme_id is None:
+                with dpg.theme() as theme_id:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                            (245, 232, 229, 255))
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                            (241, 222, 218, 255))
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                            (237, 214, 209, 255))
+                        dpg.add_theme_color(dpg.mvThemeCol_Border,
+                                            (186, 132, 125, 255))
+                        dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
+                        dpg.add_theme_style(dpg.mvStyleVar_ButtonTextAlign, 0.04, 0.5)
+                self._lab_catalog_invalid_cell_theme_id = theme_id
+            return self._lab_catalog_invalid_cell_theme_id
         attr = ("_lab_catalog_selected_cell_theme_id" if selected
                 else "_lab_catalog_cell_theme_id")
         theme_id = getattr(self, attr)
@@ -401,7 +515,8 @@ class WorkspaceViewMixin(ContextBoundView):
             dpg.bind_item_theme(table_id, self._lab_catalog_table_theme())
             dpg.add_table_column(label="#", width_fixed=True, width=35)
             for column in columns:
-                dpg.add_table_column(label=column)
+                dpg.add_table_column(label="pressure *" if column == "pressure"
+                                     else column)
             for row_index, row in enumerate(rows):
                 with dpg.table_row():
                     dpg.add_text(str(row_index + 1))
@@ -416,7 +531,10 @@ class WorkspaceViewMixin(ContextBoundView):
                         dpg.bind_item_theme(
                             cell_id,
                             self._lab_catalog_cell_theme(
-                                selected=key == self._lab_catalog_active_cell),
+                                selected=key == self._lab_catalog_active_cell,
+                                invalid=self._catalog_lab_cell_is_required(
+                                    row, columns, column_index),
+                            ),
                         )
 
     def _ensure_catalog_lab_navigation_handlers(self) -> None:
@@ -620,6 +738,7 @@ class WorkspaceViewMixin(ContextBoundView):
 
     def _on_catalog_lab_metadata_changed(self, sender=None, app_data=None,
                                          user_data=None) -> None:
+        self._refresh_catalog_lab_validation()
         self._autosave_catalog_lab()
 
     def _catalog_lab_conditions(self, data) -> dict[str, float]:
@@ -639,11 +758,29 @@ class WorkspaceViewMixin(ContextBoundView):
         return conditions
 
     @staticmethod
-    def _catalog_lab_measured_rows(data) -> list[list[float | None]]:
-        """Returns only fully specified measurements, never editor placeholders."""
+    def _catalog_lab_cell_is_required(row, columns: list[str], column: int) -> bool:
+        """Marks a missing pressure only after the user started filling its row."""
+        if column >= len(columns) or columns[column] != "pressure":
+            return False
+        return any(value is not None for value in row) and row[column] is None
+
+    @staticmethod
+    def _catalog_lab_row_is_measured(row, columns: list[str]) -> bool:
+        """A point needs pressure and at least one other measured parameter."""
+        try:
+            pressure_index = columns.index("pressure")
+        except ValueError:
+            return False
+        if len(row) != len(columns) or row[pressure_index] is None:
+            return False
+        return any(value is not None for index, value in enumerate(row)
+                   if index != pressure_index)
+
+    @classmethod
+    def _catalog_lab_measured_rows(cls, data) -> list[list[float | None]]:
+        """Returns partial but meaningful measurements, never editor placeholders."""
         return [list(row) for row in data["rows"]
-                if len(row) == len(data["columns"])
-                and all(value is not None for value in row)]
+                if cls._catalog_lab_row_is_measured(row, data["columns"])]
 
     def _autosave_catalog_lab(self) -> bool:
         data = self._lab_catalog_editor
@@ -651,6 +788,15 @@ class WorkspaceViewMixin(ContextBoundView):
         if data is None or not project_id:
             return False
         measured_rows = self._catalog_lab_measured_rows(data)
+        missing_metadata = self._refresh_catalog_lab_validation()
+        if missing_metadata:
+            if measured_rows:
+                labels = {"title": "Name", "T_c": "T res", "P_res": "P res"}
+                self._set_status(
+                    "Fill required Lab Data fields: "
+                    + ", ".join(labels[key] for key in sorted(missing_metadata)),
+                )
+            return False
         if not data.get("dataset_id") and not measured_rows:
             return False
         try:

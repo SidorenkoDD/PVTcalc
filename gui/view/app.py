@@ -118,6 +118,8 @@ class PVTcalcApp(
         self._lab_catalog_navigation_registry_id: int | None = None
         self._lab_catalog_cell_theme_id: int | None = None
         self._lab_catalog_selected_cell_theme_id: int | None = None
+        self._lab_catalog_invalid_cell_theme_id: int | None = None
+        self._lab_catalog_required_input_theme_id: int | None = None
         self._lab_catalog_table_theme_id: int | None = None
         self._lab_catalog_button_theme_id: int | None = None
         self._lab_active_cell: tuple[str, int, int] | None = None

@@ -278,19 +278,25 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
         assert app._lab_catalog_editor["title"] == "DLE LAB-1"
         assert _item_by_label(app._lab_catalog_modal, "Save") is None
         assert _has_label(app._lab_catalog_modal, "Close")
-        assert _has_label(app._lab_catalog_modal, "T res, C (optional)")
+        assert _has_label(app._lab_catalog_modal, "T res, C *")
+        assert _has_label(app._lab_catalog_modal, "P res, bar *")
         assert len(app._lab_catalog_editor["rows"]) == 10
+        assert app._catalog_lab_missing_metadata(app._lab_catalog_editor) == {
+            "T_c", "P_res",
+        }
         assert lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                      experiment_kind="dle") == []
-        columns = app._lab_catalog_editor["columns"]
-        for index in range(len(columns)):
-            app._on_catalog_lab_cell(None, str(300 - index), (0, index))
+        dpg.set_value(app._lab_catalog_editor["t_id"], "80")
+        dpg.set_value(app._lab_catalog_editor["p_id"], "350")
+        app._on_catalog_lab_metadata_changed()
+        app._on_catalog_lab_cell(None, "300", (0, 0))
+        app._on_catalog_lab_cell(None, "1.2", (0, 1))
 
         datasets = lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
                                          experiment_kind="dle")
         assert len(datasets) == 1
-        assert datasets[0]["rows"] == [[float(300 - i)
-                                        for i in range(len(columns))]]
+        assert datasets[0]["conditions"] == {"T_c": 80.0, "P_res": 350.0}
+        assert datasets[0]["rows"] == [[300.0, 1.2, None, None, None]]
         assert app._lab_catalog_editor is not None
 
         # Del в открытом редакторе вызывает то же подтверждение, что и меню
@@ -298,6 +304,39 @@ def test_project_lab_tree_autosaves_only_nonempty_manual_dataset(tmp_path):
         app._on_key_delete(None, None)
         assert any("Linked experiments will lose this source" in text
                    for text in _text_values(app._modals[-1]))
+    finally:
+        dpg.destroy_context()
+
+
+def test_lab_catalog_columns_can_be_selected_and_preserve_named_values(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        app._on_new_lab_dataset(None, None, ("dle", "project", None))
+        data = app._lab_catalog_editor
+        assert data is not None
+        app._on_catalog_lab_cell(None, "300", (0, 0))
+        app._on_catalog_lab_cell(None, "1.2", (0, 1))
+
+        vapor_z = data["column_selector_ids"]["vapor_z"]
+        dpg.set_value(vapor_z, True)
+        app._on_catalog_lab_column_changed(vapor_z, True, "vapor_z")
+        assert data["columns"] == [
+            "pressure", "Bo", "Rs", "liquid_density", "vapor_density", "vapor_z",
+        ]
+        assert data["rows"][0][0:2] == [300.0, 1.2]
+
+        bo = data["column_selector_ids"]["Bo"]
+        dpg.set_value(bo, False)
+        app._on_catalog_lab_column_changed(bo, False, "Bo")
+        assert "Bo" not in data["columns"]
+        assert data["rows"][0][0] == 300.0
     finally:
         dpg.destroy_context()
 
