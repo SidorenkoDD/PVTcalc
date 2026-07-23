@@ -145,11 +145,13 @@ class CompositionViewMixin(ContextBoundView):
         try:
             self._state.edit_zi(user_data, app_data)
         except ValueError as exc:
+            self._show_input_validation({"value": sender}, {"value": str(exc)})
             composition = self._state.active_composition
             if composition is not None:
                 dpg.set_value(sender, composition.composition[user_data])
             self._set_status(f"Invalid mole fraction: {exc}")
             return
+        self._show_input_validation({"value": sender}, {})
         self._set_status(f"zi[{user_data}] = {app_data:.5f} (not normalized).")
 
     def _on_property_edited(self, sender, app_data, user_data) -> None:
@@ -157,11 +159,13 @@ class CompositionViewMixin(ContextBoundView):
         try:
             self._state.edit_component_property(name, key, app_data)
         except ValueError as exc:
+            self._show_input_validation({"value": sender}, {"value": str(exc)})
             composition = self._state.active_composition
             if composition is not None:
                 dpg.set_value(sender, composition.composition_data[key][name])
             self._set_status(f"Invalid property: {exc}")
             return
+        self._show_input_validation({"value": sender}, {})
         self._set_status(f"{key}[{name}] = {app_data:.5g}.")
 
     def _on_bip_cell_edited(self, sender, app_data, user_data) -> None:
@@ -173,10 +177,12 @@ class CompositionViewMixin(ContextBoundView):
         try:
             self._state.edit_bip(names[i], names[j], app_data)
         except ValueError as exc:
+            self._show_input_validation({"value": sender}, {"value": str(exc)})
             value = comp_svc.get_bip(composition, names[i], names[j])
             dpg.set_value(sender, value)
             self._set_status(f"Invalid BIP: {exc}")
             return
+        self._show_input_validation({"value": sender}, {})
         mirror = self._bip_ids.get((j, i))
         if mirror is not None and dpg.does_item_exist(mirror):
             dpg.set_value(mirror, app_data)

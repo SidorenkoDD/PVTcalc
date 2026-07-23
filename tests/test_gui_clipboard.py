@@ -1,5 +1,7 @@
+import pytest
+
 from gui.services.clipboard_service import parse_lab_clipboard
-from gui.view.table_clipboard import table_to_tsv
+from gui.view.table_clipboard import parse_row_selection, selected_table, table_to_tsv
 
 
 def test_parse_lab_clipboard_reorders_header_and_decimal_comma():
@@ -39,3 +41,20 @@ def test_table_to_tsv_is_excel_compatible_and_sanitizes_cells():
     assert table_to_tsv(["A", "B"], [[1, "two\tlines"], [None, 3]]) == (
         "A\tB\n1\ttwo lines\n\t3"
     )
+
+
+def test_copy_selection_parses_ranges_and_keeps_table_order():
+    assert parse_row_selection("4, 2-3", 5) == [1, 2, 3]
+    assert parse_row_selection("", 2) == [0, 1]
+    assert selected_table(
+        ["A", "B", "C"],
+        [[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+        [2, 0], [2, 0],
+    ) == (["C", "A"], [[9, 7], [3, 1]])
+
+
+def test_copy_selection_rejects_invalid_row_ranges_and_empty_columns():
+    with pytest.raises(ValueError, match="between 1 and 3"):
+        parse_row_selection("0", 3)
+    with pytest.raises(ValueError, match="at least one column"):
+        selected_table(["A"], [[1]], [0], [])

@@ -6,7 +6,7 @@ Feature-view пока подключаются через mixin-композиц
 """
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Mapping, Protocol, runtime_checkable
 
 from gui.app_state import AppState, GraphNode
 from gui.calculation_coordinator import CalculationCoordinator
@@ -22,6 +22,9 @@ class ViewHost(Protocol):
     def _set_status(self, text: str) -> None: ...
 
     def _theme_stale(self) -> DpgId: ...
+
+    def _show_input_validation(self, controls: Mapping[str, DpgId], errors: dict[str, str],
+                               message_id: DpgId | None = None) -> bool: ...
 
     def _track_modal(self, win: int) -> int: ...
 
@@ -62,6 +65,10 @@ class ContextBoundView:
     def _theme_stale(self) -> DpgId:
         raise NotImplementedError
 
+    def _show_input_validation(self, controls: Mapping[str, DpgId], errors: dict[str, str],
+                               message_id: DpgId | None = None) -> bool:
+        raise NotImplementedError
+
     def _track_modal(self, win: int) -> int:
         raise NotImplementedError
 
@@ -69,6 +76,13 @@ class ContextBoundView:
         raise NotImplementedError
 
     def _copy_table(self, columns, rows, label: str = "Table") -> None:
+        raise NotImplementedError
+
+    def _add_table_copy_controls(self, parent: DpgId, columns, rows,
+                                 label: str = "Table") -> None:
+        raise NotImplementedError
+
+    def _open_table_copy_dialog(self, columns, rows, label: str = "Table") -> None:
         raise NotImplementedError
 
     def _fmt(self, value: object) -> str:

@@ -1040,6 +1040,25 @@ def test_linked_lab_data_shows_conditions_and_mismatch_warning(tmp_path):
         dpg.destroy_context()
 
 
+def test_copy_selection_dialog_is_on_demand_and_has_row_column_controls():
+    state = AppState(ModelRepository(str(MODELS_JSON)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        app._open_table_copy_dialog(
+            ["Pressure, bar", "Bo"], [[300.0, 1.2], [200.0, 1.1]],
+            "Experiment results")
+
+        assert app._table_copy_win is not None
+        assert dpg.does_item_exist(app._table_copy_win)
+        assert _has_label(app._table_copy_win, "Rows (1-based; blank = all)")
+        assert _has_label(app._table_copy_win, "Pressure, bar")
+        assert _has_label(app._table_copy_win, "Copy selected")
+    finally:
+        dpg.destroy_context()
+
+
 def test_chart_layout_expands_on_wide_viewport_and_rebuilds_after_resize(monkeypatch):
     state = AppState(ModelRepository(str(MODELS_JSON)))
     app = PVTcalcApp(state, SessionState(window_width=1920, window_height=1080))

@@ -15,6 +15,7 @@
 """
 
 import logging
+from typing import Mapping
 
 import dearpygui.dearpygui as dpg
 
@@ -22,14 +23,14 @@ from gui.app_state import AppState, NodeKind, NodeRef, StateChange, StateChangeK
 from gui.calculation_coordinator import CalculationCoordinator
 from gui.session import SessionState, save_session
 from gui.view.composition_view import CompositionViewMixin
-from gui.view.contracts import ViewContext
+from gui.view.contracts import DpgId, ViewContext
 from gui.view.dialogs_view import DialogsViewMixin
 from gui.view.envelope_view import EnvelopeViewMixin
 from gui.view.experiment_view import ExperimentViewMixin
 from gui.view.flash_view import FlashViewMixin
 from gui.view.new_fluid_form import NewFluidForm
 from gui.view.projects_view import ProjectsViewMixin
-from gui.view.table_clipboard import table_to_tsv
+from gui.view.table_clipboard import parse_row_selection, selected_table, table_to_tsv
 from gui.view.theme import build_light_theme
 from gui.view.workspace_view import WorkspaceViewMixin
 from gui.workspace_codec import restore_workspace, snapshot_workspace
@@ -106,7 +107,9 @@ class PVTcalcApp(
         # id полей ввода (захватываем при отрисовке, без фиксированных алиасов)
         self._bip_ids: dict[tuple[int, int], int] = {}
         self._flash_input_ids: dict[str, tuple[int, int]] = {}
+        self._flash_validation_message_ids: dict[str, int] = {}
         self._exp_input_ids: dict[str, dict] = {}
+        self._exp_validation_message_ids: dict[str, int] = {}
         self._exp_chart_holder: dict[str, int] = {}  # контейнер графиков вкладки
         self._lab_data_holder: dict[str, int] = {}
         self._lab_data_controls: dict[str, tuple[int, int, int]] = {}
@@ -120,6 +123,8 @@ class PVTcalcApp(
         self._lab_catalog_selected_cell_theme_id: int | None = None
         self._lab_catalog_invalid_cell_theme_id: int | None = None
         self._lab_catalog_required_input_theme_id: int | None = None
+        self._input_validation_normal_theme_id: int | None = None
+        self._input_validation_error_theme_id: int | None = None
         self._lab_catalog_table_theme_id: int | None = None
         self._lab_catalog_button_theme_id: int | None = None
         self._lab_active_cell: tuple[str, int, int] | None = None
@@ -141,6 +146,7 @@ class PVTcalcApp(
         self._report_options: dict[str, bool] = {}
         self._report_ids: dict[str, int] = {}
         self._report_win: int | None = None
+        self._table_copy_win: int | None = None
         # окно настроек (константы/условия/критерии сходимости)
         self._settings_win: int | None = None
         self._settings_ids: dict = {}
@@ -732,6 +738,44 @@ class PVTcalcApp(
             self._stale_theme_id = theme_id
         return self._stale_theme_id
 
+    def _input_validation_theme(self, *, invalid: bool) -> int:
+        """Returns the calm normal/error frame theme used by calculation forms."""
+        attr = ("_input_validation_error_theme_id" if invalid
+                else "_input_validation_normal_theme_id")
+        theme_id = getattr(self, attr)
+        if theme_id is None:
+            frame = (244, 226, 216, 255) if invalid else (222, 229, 236, 255)
+            hovered = (241, 218, 205, 255) if invalid else (213, 225, 237, 255)
+            active = (236, 207, 191, 255) if invalid else (205, 219, 232, 255)
+            border = (202, 122, 88, 255) if invalid else (143, 160, 177, 255)
+            with dpg.theme() as theme_id:
+                for component in (dpg.mvInputFloat, dpg.mvInputInt, dpg.mvInputText):
+                    with dpg.theme_component(component):
+                        dpg.add_theme_color(dpg.mvThemeCol_FrameBg, frame)
+                        dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, hovered)
+                        dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, active)
+                        dpg.add_theme_color(dpg.mvThemeCol_Border, border)
+                        dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
+            setattr(self, attr, theme_id)
+        return theme_id
+
+    def _show_input_validation(self, controls: Mapping[str, DpgId], errors: dict[str, str],
+                               message_id: DpgId | None = None) -> bool:
+        """Paints invalid inputs and optionally updates one inline summary."""
+        for key, item_id in controls.items():
+            if dpg.does_item_exist(item_id):
+                dpg.bind_item_theme(
+                    item_id, self._input_validation_theme(invalid=key in errors))
+        if message_id is not None and dpg.does_item_exist(message_id):
+            if errors:
+                dpg.set_value(message_id, "Check input: " + "  ".join(errors.values()))
+                dpg.configure_item(message_id, show=True)
+                dpg.bind_item_theme(message_id, self._theme_stale())
+            else:
+                dpg.set_value(message_id, "")
+                dpg.configure_item(message_id, show=False)
+        return not errors
+
     def _set_status(self, text: str) -> None:
         if dpg.does_item_exist(_STATUS_BAR):
             dpg.set_value(_STATUS_BAR, text)
@@ -747,6 +791,75 @@ class PVTcalcApp(
         count = max(0, len(rows)) if hasattr(rows, "__len__") else ""
         suffix = f" ({count} row(s))" if count != "" else ""
         self._set_status(f"{label} copied to clipboard{suffix}.")
+
+    def _add_table_copy_controls(self, parent: DpgId, columns, rows,
+                                 label: str = "Table") -> None:
+        """Adds lightweight full-table and subset-copy actions above a result table."""
+        with dpg.group(horizontal=True, parent=parent):
+            dpg.add_button(
+                label="Copy table",
+                callback=lambda: self._copy_table(columns, rows, label),
+            )
+            dpg.add_button(
+                label="Copy selection...",
+                callback=lambda: self._open_table_copy_dialog(
+                    columns, rows, label),
+            )
+
+    def _open_table_copy_dialog(self, columns, rows, label: str = "Table") -> None:
+        """Opens an on-demand row/column selector without changing table widgets."""
+        if self._table_copy_win is not None and dpg.does_item_exist(self._table_copy_win):
+            self._close_tracked_modal(self._table_copy_win)
+        labels = list(columns)
+        values = [list(row) for row in rows]
+        try:
+            w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        except Exception:  # DearPyGui has no viewport yet in headless smoke tests.
+            w, h = 960, 700
+        with dpg.window(
+                label=f"Copy selection — {label}", modal=True, no_resize=True,
+                no_collapse=True, width=480, height=430,
+                pos=(max(0, w // 2 - 240), max(0, h // 2 - 215))) as win:
+            self._track_modal(win)
+            self._table_copy_win = win
+            dpg.add_text(
+                f"Choose rows and columns from this {len(values)}-row table. "
+                "The source table remains unchanged.", wrap=440)
+            rows_id = dpg.add_input_text(
+                label="Rows (1-based; blank = all)", width=290,
+                hint="1, 3-5, 9")
+            dpg.add_text("Columns", parent=win)
+            column_ids: dict[int, int] = {}
+            with dpg.child_window(height=220, border=True):
+                for index, column in enumerate(labels):
+                    column_ids[index] = dpg.add_checkbox(
+                        label=str(column), default_value=True)
+            error_id = dpg.add_text("", show=False, wrap=440)
+
+            def close() -> None:
+                if dpg.does_item_exist(win):
+                    self._close_tracked_modal(win)
+                if self._table_copy_win == win:
+                    self._table_copy_win = None
+
+            def copy_selected() -> None:
+                try:
+                    row_indices = parse_row_selection(dpg.get_value(rows_id), len(values))
+                    column_indices = [index for index, item_id in column_ids.items()
+                                      if dpg.get_value(item_id)]
+                    copied_columns, copied_rows = selected_table(
+                        labels, values, row_indices, column_indices)
+                except ValueError as exc:
+                    dpg.set_value(error_id, str(exc))
+                    dpg.configure_item(error_id, show=True)
+                    dpg.bind_item_theme(error_id, self._theme_stale())
+                    return
+                self._copy_table(copied_columns, copied_rows, label)
+                close()
+
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Copy selected", width=120, callback=copy_selected)
+                dpg.add_button(label="Cancel", width=110, callback=close)
 
     # ==================================================================
     #  Сессия

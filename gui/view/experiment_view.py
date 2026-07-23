@@ -5,7 +5,7 @@ import math
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
-from gui.services import clipboard_service
+from gui.services import clipboard_service, input_validation_service
 from gui.services import experiment_service as exp_svc
 from gui.services import lab_data_service as lab_svc
 from gui.view.contracts import ContextBoundView
@@ -16,6 +16,7 @@ class ExperimentViewMixin(ContextBoundView):
     """Рендер и callbacks CCE/DLE/Separator."""
 
     _exp_input_ids: dict[str, dict[str, int]]
+    _exp_validation_message_ids: dict[str, int]
     _exp_chart_holder: dict[str, int]
     _lab_data_holder: dict[str, int]
     _lab_data_controls: dict[str, tuple[int, int, int]]
@@ -36,20 +37,27 @@ class ExperimentViewMixin(ContextBoundView):
         ids: dict = {}
         ids["pressures"] = dpg.add_input_text(
             label="Pressure stages, bar (comma-separated)", width=460, parent=parent,
-            default_value=", ".join(self._g(x) for x in p.get("pressures", [])))
+            default_value=", ".join(self._g(x) for x in p.get("pressures", [])),
+            user_data=nid, callback=self._on_experiment_input_changed)
         with dpg.group(horizontal=True, parent=parent):
             ids["T_c"] = dpg.add_input_float(label="T, C", width=140, step=0,
-                                             default_value=float(p.get("T_c", 100.0)))
+                                             default_value=float(p.get("T_c", 100.0)),
+                                             user_data=nid,
+                                             callback=self._on_experiment_input_changed)
             if meta.get("needs_p_res"):
                 ids["P_res"] = dpg.add_input_float(
                     label="P res, bar", width=140, step=0,
-                    default_value=float(p.get("P_res", 400.0)))
+                    default_value=float(p.get("P_res", 400.0)), user_data=nid,
+                    callback=self._on_experiment_input_changed)
         if meta.get("needs_stage_temps"):
             ids["stage_temps"] = dpg.add_input_text(
                 label="Stage T, C (comma-separated, same count)", width=460,
                 parent=parent,
-                default_value=", ".join(self._g(x) for x in p.get("stage_temps_c", [])))
+                default_value=", ".join(self._g(x) for x in p.get("stage_temps_c", [])),
+                user_data=nid, callback=self._on_experiment_input_changed)
         self._exp_input_ids[nid] = ids
+        self._exp_validation_message_ids[nid] = dpg.add_text(
+            "", parent=parent, show=False, wrap=620)
 
         with dpg.group(horizontal=True, parent=parent):
             if running:
@@ -556,9 +564,8 @@ class ExperimentViewMixin(ContextBoundView):
         allcols = result["columns"]
         idxs = [(c, allcols.index(c)) for c in cols if c in allcols]
         rows = [[self._fmt(row[i]) for _, i in idxs] for row in result["rows"]]
-        dpg.add_button(label="Copy table", parent=parent,
-                       callback=lambda: self._copy_table(
-                           [c for c, _ in idxs], rows, "Experiment results"))
+        self._add_table_copy_controls(
+            parent, [c for c, _ in idxs], rows, "Experiment results")
         render_readonly_table(parent, [c for c, _ in idxs], rows)
 
     def _render_exp_composition(self, result, parent) -> None:
@@ -589,9 +596,8 @@ class ExperimentViewMixin(ContextBoundView):
                 d = st.get(phase)
                 row.append(self._fmt(d.get(name) if isinstance(d, dict) else None))
             rows.append(row)
-        dpg.add_button(label="Copy table", parent=parent,
-                       callback=lambda: self._copy_table(
-                           columns, rows, f"{phase.capitalize()} composition"))
+        self._add_table_copy_controls(
+            parent, columns, rows, f"{phase.capitalize()} composition")
         render_readonly_table(parent, columns, rows)
 
     def _render_exp_chart(self, result, parent, nid) -> None:
@@ -707,24 +713,9 @@ class ExperimentViewMixin(ContextBoundView):
         composition = self._state.active_composition
         if node is None or composition is None:
             return
-        ids = self._exp_input_ids.get(nid, {})
-        try:
-            pressures = self._parse_floats(dpg.get_value(ids["pressures"]))
-            if len(pressures) < 2:
-                raise ValueError("need at least 2 pressure stages")
-            params = dict(node.params)
-            params["pressures"] = pressures
-            params["T_c"] = float(dpg.get_value(ids["T_c"]))
-            if "P_res" in ids:
-                params["P_res"] = float(dpg.get_value(ids["P_res"]))
-            if "stage_temps" in ids:
-                temps = self._parse_floats(dpg.get_value(ids["stage_temps"]))
-                if len(temps) != len(pressures):
-                    raise ValueError("stage T count must match pressure count")
-                params["stage_temps_c"] = temps
-        except (ValueError, KeyError) as exc:
-            self._state.set_node_error(
-                nid, f"Invalid input: {exc}. Correct the fields above and run again.")
+        params = self._validated_experiment_params(nid, node.params.get("kind", "cce"))
+        if params is None:
+            self._set_status("Correct the highlighted experiment inputs before running.")
             return
         self._state.update_node_params(nid, params, notify=False)
         kind = node.params["kind"]
@@ -743,6 +734,28 @@ class ExperimentViewMixin(ContextBoundView):
         self._state.set_node_running(ref)
         self._set_status(f"{kind.upper()} running...")
         self._arm_flash_poll()
+
+    def _validated_experiment_params(self, nid: str, kind: str) -> dict | None:
+        ids = self._exp_input_ids.get(nid, {})
+        if not ids:
+            return None
+        parsed, errors = input_validation_service.validate_experiment_inputs(
+            kind,
+            dpg.get_value(ids["pressures"]),
+            dpg.get_value(ids["T_c"]),
+            dpg.get_value(ids["P_res"]) if "P_res" in ids else None,
+            dpg.get_value(ids["stage_temps"]) if "stage_temps" in ids else None,
+        )
+        if not self._show_input_validation(
+                ids, errors, self._exp_validation_message_ids.get(nid)):
+            return None
+        node = self._state.node_by_id(nid)
+        return {**(node.params if node is not None else {}), **parsed}
+
+    def _on_experiment_input_changed(self, sender, app_data, user_data) -> None:
+        node = self._state.node_by_id(str(user_data))
+        if node is not None:
+            self._validated_experiment_params(str(user_data), node.params.get("kind", "cce"))
 
     @staticmethod
     def _parse_floats(text: str) -> list[float]:

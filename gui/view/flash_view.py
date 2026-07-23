@@ -5,7 +5,7 @@ import math
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeKind, NodeRef, NodeStatus
-from gui.services import comparison_service, flash_service
+from gui.services import comparison_service, flash_service, input_validation_service
 from gui.services import lab_data_service as lab_svc
 from gui.view.contracts import ContextBoundView
 from gui.view.read_only_table import render_readonly_table
@@ -15,6 +15,7 @@ class FlashViewMixin(ContextBoundView):
     """Рендер Flash/Compare и приём завершённых GUI-задач."""
 
     _flash_input_ids: dict[str, tuple[int, int]]
+    _flash_validation_message_ids: dict[str, int]
 
     def _render_flash_tab(self, parent, node) -> None:
         nid = node.node_id
@@ -36,6 +37,8 @@ class FlashViewMixin(ContextBoundView):
             else:
                 dpg.add_button(label="Run flash", user_data=nid,
                                callback=self._on_flash_run)
+        self._flash_validation_message_ids[nid] = dpg.add_text(
+            "", parent=parent, show=False, wrap=620)
 
         if running:
             dpg.add_text("Running flash...", parent=parent)
@@ -80,10 +83,8 @@ class FlashViewMixin(ContextBoundView):
              self._fmt(result.liquid.properties.get(key))]
             for key, label in flash_service.PHASE_PROPERTY_ROWS
         ])
-        dpg.add_button(label="Copy table", parent=parent,
-                       callback=lambda: self._copy_table(
-                           ["Property", "Vapor", "Liquid"], rows,
-                           "Flash results"))
+        self._add_table_copy_controls(
+            parent, ["Property", "Vapor", "Liquid"], rows, "Flash results")
         render_readonly_table(parent, ["Property", "Vapor", "Liquid"], rows,
                               scroll_x=False, freeze_columns=0)
 
@@ -106,10 +107,9 @@ class FlashViewMixin(ContextBoundView):
             x = xi.get(name) if xi else None
             k = (y / x) if (y is not None and x not in (None, 0.0)) else None
             rows.append([name, self._fmt(y), self._fmt(x), self._fmt(k)])
-        dpg.add_button(label="Copy table", parent=parent,
-                       callback=lambda: self._copy_table(
-                           ["Component", "Vapor yi", "Liquid xi", "K = yi/xi"],
-                           rows, "Flash composition"))
+        self._add_table_copy_controls(
+            parent, ["Component", "Vapor yi", "Liquid xi", "K = yi/xi"], rows,
+            "Flash composition")
         render_readonly_table(
             parent, ["Component", "Vapor yi", "Liquid xi", "K = yi/xi"], rows)
 
@@ -274,13 +274,8 @@ class FlashViewMixin(ContextBoundView):
                             parent=tab,
                         )
                         continue
-                    dpg.add_button(
-                        label="Copy table", parent=tab,
-                        callback=lambda _s=None, _a=None, _u=None,
-                        h=headers, r=rows, c=column: self._copy_table(
-                            h, r, f"{c} deviations",
-                        ),
-                    )
+                    self._add_table_copy_controls(
+                        tab, headers, rows, f"{column} deviations")
                     render_readonly_table(tab, headers, rows)
 
     def _compare_col_label(self, ref: NodeRef, node) -> str:
@@ -299,9 +294,8 @@ class FlashViewMixin(ContextBoundView):
                        for member in members]
             for key, label in flash_service.PHASE_PROPERTY_ROWS
         ])
-        dpg.add_button(label="Copy table", parent=parent,
-                       callback=lambda: self._copy_table(
-                           ["Property"] + headers, rows, "Comparison"))
+        self._add_table_copy_controls(
+            parent, ["Property"] + headers, rows, "Comparison")
         render_readonly_table(parent, ["Property"] + headers, rows)
 
     def _compare_k_table(self, members, headers, parent) -> None:
@@ -327,10 +321,9 @@ class FlashViewMixin(ContextBoundView):
                 row.append(self._fmt((y / x) if (y is not None
                                   and x not in (None, 0.0)) else None))
             rows.append(row)
-        dpg.add_button(label="Copy table", parent=parent,
-                       callback=lambda: self._copy_table(
-                           ["Component (K=yi/xi)"] + headers, rows,
-                           "K-value comparison"))
+        self._add_table_copy_controls(
+            parent, ["Component (K=yi/xi)"] + headers, rows,
+            "K-value comparison")
         render_readonly_table(parent, ["Component (K=yi/xi)"] + headers, rows)
 
     def _compare_panels(self, members, headers, parent) -> None:
@@ -349,11 +342,24 @@ class FlashViewMixin(ContextBoundView):
         pid, tid = self._flash_input_ids[nid]
         return dpg.get_value(pid), dpg.get_value(tid)
 
+    def _validate_flash_form(self, nid: str) -> tuple[float, float] | None:
+        p, t = self._flash_pt(nid)
+        pid, tid = self._flash_input_ids[nid]
+        errors = input_validation_service.validate_flash_inputs(p, t)
+        if not self._show_input_validation(
+                {"P": pid, "T": tid}, errors,
+                self._flash_validation_message_ids.get(nid)):
+            return None
+        return p, t
+
     # --- фоновая задача флэша (поток + опрос по кадрам) ------------------
 
     def _on_flash_param(self, sender, app_data, user_data) -> None:
         nid = user_data
-        p, t = self._flash_pt(nid)
+        values = self._validate_flash_form(nid)
+        if values is None:
+            return
+        p, t = values
         self._state.set_flash_params(nid, p, t)
 
     def _on_flash_run(self, sender, app_data, user_data) -> None:
@@ -365,7 +371,11 @@ class FlashViewMixin(ContextBoundView):
         node = self._state.node_by_id(nid)
         if composition is None or node is None:
             return
-        p, t = self._flash_pt(nid)
+        values = self._validate_flash_form(nid)
+        if values is None:
+            self._set_status("Correct the highlighted flash inputs before running.")
+            return
+        p, t = values
         self._state.set_flash_params(nid, p, t)
 
         ref = self._state.node_ref(nid)

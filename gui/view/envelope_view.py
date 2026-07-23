@@ -3,6 +3,7 @@
 import dearpygui.dearpygui as dpg
 
 from gui.app_state import NodeStatus
+from gui.services import input_validation_service
 from gui.services import phase_envelope_service as pe_svc
 from gui.view.contracts import ContextBoundView
 from gui.view.read_only_table import render_readonly_table
@@ -127,9 +128,8 @@ class EnvelopeViewMixin(ContextBoundView):
             dpg.add_text("No data.", parent=parent)
             return
         formatted_rows = [[self._fmt(value) for value in row] for row in rows]
-        dpg.add_button(label="Copy table", parent=parent,
-                       callback=lambda: self._copy_table(
-                           cols, formatted_rows, "Phase envelope data"))
+        self._add_table_copy_controls(
+            parent, cols, formatted_rows, "Phase envelope data")
         render_readonly_table(parent, cols, formatted_rows)
 
     # --- всплывающее окно параметров огибающей ----------------------------
@@ -206,6 +206,7 @@ class EnvelopeViewMixin(ContextBoundView):
             ids["_grid_grp"] = grid_grp
 
             self._env_dialog_ids = ids
+            ids["_validation_message"] = dpg.add_text("", show=False, wrap=340)
             dpg.add_separator()
             tres = params.get("T_res_c")
             if tres is not None:
@@ -244,31 +245,26 @@ class EnvelopeViewMixin(ContextBoundView):
                 else dict(node.params))
         params = dict(base)
         params["method"] = method
-        try:
-            if method == "grid":
-                params["grid_t_max_c"] = float(dpg.get_value(ids["grid_t_max_c"]))
-                params["grid_p_max_bar"] = float(dpg.get_value(ids["grid_p_max_bar"]))
-                params["grid_t_points"] = int(dpg.get_value(ids["grid_t_points"]))
-                params["grid_p_points"] = int(dpg.get_value(ids["grid_p_points"]))
-                if params["grid_t_max_c"] <= 0 or params["grid_p_max_bar"] <= 0:
-                    raise ValueError("T max and P max must be positive")
-                if params["grid_t_points"] < 2 or params["grid_p_points"] < 2:
-                    raise ValueError("need at least 2 grid points per axis")
-            else:
-                params["t_min_c"] = float(dpg.get_value(ids["t_min_c"]))
-                params["t_max_c"] = float(dpg.get_value(ids["t_max_c"]))
-                params["t_step_c"] = float(dpg.get_value(ids["t_step_c"]))
-                params["p_max_bar"] = float(dpg.get_value(ids["p_max_bar"]))
-                if params["t_max_c"] <= params["t_min_c"]:
-                    raise ValueError("T max must be greater than T min")
-                if params["t_step_c"] <= 0:
-                    raise ValueError("T step must be positive")
-                if params["p_max_bar"] <= 0:
-                    raise ValueError("P max must be positive")
-        except (ValueError, KeyError) as exc:
-            self._set_status(
-                f"Invalid phase-envelope input: {exc}. Correct the fields and press Run again.")
+        field_names = (("grid_t_max_c", "grid_p_max_bar", "grid_t_points", "grid_p_points")
+                       if method == "grid" else
+                       ("t_min_c", "t_max_c", "t_step_c", "p_max_bar"))
+        raw_values = {key: dpg.get_value(ids[key]) for key in field_names}
+        errors = input_validation_service.validate_envelope_inputs(method, raw_values)
+        if not self._show_input_validation(
+                {key: ids[key] for key in field_names}, errors,
+                ids.get("_validation_message")):
+            self._set_status("Correct the highlighted phase-envelope inputs before running.")
             return
+        if method == "grid":
+            params["grid_t_max_c"] = float(raw_values["grid_t_max_c"])
+            params["grid_p_max_bar"] = float(raw_values["grid_p_max_bar"])
+            params["grid_t_points"] = int(raw_values["grid_t_points"])
+            params["grid_p_points"] = int(raw_values["grid_p_points"])
+        else:
+            params["t_min_c"] = float(raw_values["t_min_c"])
+            params["t_max_c"] = float(raw_values["t_max_c"])
+            params["t_step_c"] = float(raw_values["t_step_c"])
+            params["p_max_bar"] = float(raw_values["p_max_bar"])
 
         if node_id is None:
             node_id = self._state.new_envelope(params)
