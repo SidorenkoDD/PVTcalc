@@ -49,6 +49,13 @@ class WorkspaceViewMixin(ContextBoundView):
     _lab_data_controls: dict[str, tuple[int, int, int]]
     _lab_catalog_editor: dict | None
     _lab_catalog_modal: int | None
+    _lab_catalog_active_cell: tuple[int, int] | None
+    _lab_catalog_cell_ids: dict[tuple[int, int], int]
+    _lab_catalog_navigation_registry_id: int | None
+    _lab_catalog_cell_theme_id: int | None
+    _lab_catalog_selected_cell_theme_id: int | None
+    _lab_catalog_table_theme_id: int | None
+    _lab_catalog_button_theme_id: int | None
     _modals: list[int]
 
     def _compare_ref(self, model_id: str, node_id: str) -> NodeRef:
@@ -310,10 +317,15 @@ class WorkspaceViewMixin(ContextBoundView):
                                        if "P_res" in data["conditions"] else ""),
                         callback=self._on_catalog_lab_metadata_changed)
             with dpg.group(horizontal=True, parent=win):
-                dpg.add_button(label="Add point", callback=self._on_catalog_lab_add_row)
-                dpg.add_button(label="Remove last", callback=self._on_catalog_lab_remove_row,
-                               enabled=True)
-                dpg.add_button(label="Close", callback=self._on_catalog_lab_cancel)
+                add_button = dpg.add_button(label="Add point",
+                                            callback=self._on_catalog_lab_add_row)
+                remove_button = dpg.add_button(
+                    label="Remove last", callback=self._on_catalog_lab_remove_row,
+                    enabled=True)
+                close_button = dpg.add_button(label="Close",
+                                              callback=self._on_catalog_lab_cancel)
+                for button in (add_button, remove_button, close_button):
+                    dpg.bind_item_theme(button, self._lab_catalog_button_theme())
             dpg.add_text(
                 "The first 10 rows are ready for input. Only complete rows are "
                 "saved and used as measured points.",
@@ -321,12 +333,65 @@ class WorkspaceViewMixin(ContextBoundView):
             )
             data["holder"] = dpg.add_group(parent=win)
             self._render_catalog_lab_table()
+            self._ensure_catalog_lab_navigation_handlers()
+
+    def _lab_catalog_cell_theme(self, *, selected: bool) -> int:
+        attr = ("_lab_catalog_selected_cell_theme_id" if selected
+                else "_lab_catalog_cell_theme_id")
+        theme_id = getattr(self, attr)
+        if theme_id is None:
+            with dpg.theme() as theme_id:
+                with dpg.theme_component(dpg.mvInputText):
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBg,
+                                        (218, 232, 246, 255) if selected
+                                        else (235, 243, 250, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered,
+                                        (209, 226, 242, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive,
+                                        (201, 220, 239, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_Border,
+                                        (112, 145, 177, 255) if selected
+                                        else (177, 196, 214, 255))
+                    dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize,
+                                        2 if selected else 1)
+            setattr(self, attr, theme_id)
+        return theme_id
+
+    def _lab_catalog_table_theme(self) -> int:
+        if self._lab_catalog_table_theme_id is None:
+            with dpg.theme() as theme_id:
+                with dpg.theme_component(dpg.mvTable):
+                    dpg.add_theme_color(dpg.mvThemeCol_TableHeaderBg,
+                                        (205, 221, 237, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_TableBorderStrong,
+                                        (150, 174, 197, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_TableBorderLight,
+                                        (201, 215, 229, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_TableRowBgAlt,
+                                        (227, 237, 247, 110))
+            self._lab_catalog_table_theme_id = theme_id
+        return self._lab_catalog_table_theme_id
+
+    def _lab_catalog_button_theme(self) -> int:
+        if self._lab_catalog_button_theme_id is None:
+            with dpg.theme() as theme_id:
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button, (183, 207, 230, 210))
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                        (164, 194, 223, 235))
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                        (146, 181, 214, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_Border, (132, 164, 194, 255))
+                    dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
+            self._lab_catalog_button_theme_id = theme_id
+        return self._lab_catalog_button_theme_id
 
     def _render_catalog_lab_table(self) -> None:
         data = self._lab_catalog_editor
         if not data or not dpg.does_item_exist(data["holder"]):
             return
         dpg.delete_item(data["holder"], children_only=True)
+        self._lab_catalog_cell_ids = {}
         rows = data["rows"]
         columns = data["columns"]
         if not rows:
@@ -336,6 +401,8 @@ class WorkspaceViewMixin(ContextBoundView):
         with dpg.table(parent=data["holder"], header_row=True, borders_innerH=True,
                        borders_outerH=True, borders_innerV=True, borders_outerV=True,
                        resizable=True, scrollY=True, scrollX=True, height=350):
+            table_id = dpg.last_item()
+            dpg.bind_item_theme(table_id, self._lab_catalog_table_theme())
             dpg.add_table_column(label="#", width_fixed=True, width=35)
             for column in columns:
                 dpg.add_table_column(label=column)
@@ -343,11 +410,102 @@ class WorkspaceViewMixin(ContextBoundView):
                 with dpg.table_row():
                     dpg.add_text(str(row_index + 1))
                     for column_index, value in enumerate(row):
-                        dpg.add_input_text(
+                        cell_id = dpg.add_input_text(
                             default_value="" if value is None else self._g(value),
                             width=115, user_data=(row_index, column_index),
-                            callback=self._on_catalog_lab_cell,
+                            callback=self._on_catalog_lab_cell, on_enter=True,
+                            readonly=True,
                         )
+                        key = (row_index, column_index)
+                        self._lab_catalog_cell_ids[key] = cell_id
+                        dpg.bind_item_theme(
+                            cell_id,
+                            self._lab_catalog_cell_theme(
+                                selected=key == self._lab_catalog_active_cell),
+                        )
+                        with dpg.item_handler_registry() as registry:
+                            dpg.add_item_clicked_handler(
+                                button=dpg.mvMouseButton_Left,
+                                callback=self._on_catalog_lab_cell_click,
+                                user_data=key,
+                            )
+                        dpg.bind_item_handler_registry(cell_id, registry)
+
+    def _ensure_catalog_lab_navigation_handlers(self) -> None:
+        registry = self._lab_catalog_navigation_registry_id
+        if registry is not None and dpg.does_item_exist(registry):
+            return
+        with dpg.handler_registry() as registry:
+            for key, delta in (
+                (dpg.mvKey_Left, (0, -1)),
+                (dpg.mvKey_Right, (0, 1)),
+                (dpg.mvKey_Up, (-1, 0)),
+                (dpg.mvKey_Down, (1, 0)),
+            ):
+                dpg.add_key_press_handler(
+                    key=key, callback=self._on_catalog_lab_arrow_key,
+                    user_data=delta,
+                )
+            dpg.add_key_press_handler(
+                key=dpg.mvKey_Return, callback=self._on_catalog_lab_enter_key,
+            )
+        self._lab_catalog_navigation_registry_id = registry
+
+    def _on_catalog_lab_cell_click(self, sender, app_data, user_data) -> None:
+        data = self._lab_catalog_editor
+        if data is None:
+            return
+        key = (int(user_data[0]), int(user_data[1]))
+        now = time.monotonic()
+        is_double = (data.get("last_click") == key
+                     and now - data.get("last_click_time", 0.0) < 0.4)
+        data["last_click"] = key
+        data["last_click_time"] = now
+        self._select_catalog_lab_cell(*key)
+        if is_double:
+            data["last_click"] = None
+            self._begin_catalog_lab_cell_edit(*key)
+
+    def _select_catalog_lab_cell(self, row: int, column: int) -> None:
+        key = (row, column)
+        if key not in self._lab_catalog_cell_ids:
+            return
+        previous = self._lab_catalog_active_cell
+        if previous in self._lab_catalog_cell_ids:
+            dpg.bind_item_theme(
+                self._lab_catalog_cell_ids[previous],
+                self._lab_catalog_cell_theme(selected=False),
+            )
+        self._lab_catalog_active_cell = key
+        cell_id = self._lab_catalog_cell_ids[key]
+        dpg.bind_item_theme(cell_id, self._lab_catalog_cell_theme(selected=True))
+        dpg.focus_item(cell_id)
+
+    def _begin_catalog_lab_cell_edit(self, row: int, column: int) -> None:
+        data = self._lab_catalog_editor
+        key = (row, column)
+        cell_id = self._lab_catalog_cell_ids.get(key)
+        if data is None or cell_id is None:
+            return
+        data["editing_cell"] = key
+        dpg.configure_item(cell_id, readonly=False)
+        dpg.focus_item(cell_id)
+
+    def _on_catalog_lab_arrow_key(self, sender, app_data, user_data) -> None:
+        data = self._lab_catalog_editor
+        active = self._lab_catalog_active_cell
+        if data is None or active is None or data.get("editing_cell") is not None:
+            return
+        row, column = active
+        d_row, d_column = user_data
+        self._select_catalog_lab_cell(row + d_row, column + d_column)
+
+    def _on_catalog_lab_enter_key(self, sender, app_data, user_data=None) -> None:
+        data = self._lab_catalog_editor
+        active = self._lab_catalog_active_cell
+        if data is None or active is None or data.get("editing_cell") is not None:
+            return
+        self._begin_catalog_lab_cell_edit(*active)
 
     def _on_catalog_lab_add_row(self, sender=None, app_data=None, user_data=None) -> None:
         data = self._lab_catalog_editor
@@ -378,6 +536,10 @@ class WorkspaceViewMixin(ContextBoundView):
             self._set_status("Lab Data values must be finite numbers.")
             return
         data["rows"][row][column] = value
+        data["editing_cell"] = None
+        if dpg.does_item_exist(sender):
+            dpg.configure_item(sender, readonly=True)
+        self._select_catalog_lab_cell(row, column)
         self._autosave_catalog_lab()
 
     def _on_catalog_lab_metadata_changed(self, sender=None, app_data=None,

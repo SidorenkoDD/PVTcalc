@@ -341,6 +341,36 @@ def test_lab_dataset_single_click_selects_and_double_click_opens_editor(tmp_path
         dpg.destroy_context()
 
 
+def test_lab_catalog_cells_navigate_then_edit_with_enter(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        app._on_new_lab_dataset(None, None, ("dle", "project", None))
+
+        app._on_catalog_lab_cell_click(None, None, (0, 0))
+        first = app._lab_catalog_cell_ids[(0, 0)]
+        assert app._lab_catalog_active_cell == (0, 0)
+        assert dpg.get_item_configuration(first)["readonly"] is True
+
+        app._on_catalog_lab_arrow_key(None, None, (0, 1))
+        second = app._lab_catalog_cell_ids[(0, 1)]
+        assert app._lab_catalog_active_cell == (0, 1)
+
+        app._on_catalog_lab_enter_key(None, None)
+        assert dpg.get_item_configuration(second)["readonly"] is False
+        app._on_catalog_lab_cell(second, "1.2", (0, 1))
+        assert dpg.get_item_configuration(second)["readonly"] is True
+        assert app._lab_catalog_editor["rows"][0][1] == 1.2
+    finally:
+        dpg.destroy_context()
+
+
 def test_exit_request_confirms_even_when_all_models_are_saved(monkeypatch):
     state = AppState(ModelRepository(str(MODELS_JSON)))
     app = PVTcalcApp(state, SessionState())
