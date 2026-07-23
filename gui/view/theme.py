@@ -2,7 +2,9 @@
 Светлая глобальная тема приложения.
 
 В DearPyGui нет готового «light»-переключателя (по умолчанию тёмная тема),
-поэтому палитра задаётся явно — по мотивам Dear ImGui `StyleColorsLight`.
+поэтому палитра задаётся явно. За основу взята спокойная серо-голубая
+гамма таблицы LAB DATA: она сохраняет светлую рабочую поверхность и не
+создаёт резких акцентов в формах, дереве и таблицах.
 Цвета сопоставляются с константами `mvThemeCol_*` через `getattr` с
 пропуском отсутствующих (имена некоторых констант различаются между
 версиями DPG — так тема не падает на незнакомом имени).
@@ -14,59 +16,59 @@
 import dearpygui.dearpygui as dpg
 
 # {имя константы mvThemeCol_*: (R, G, B, A)} в диапазоне 0..255.
-# Значения — Dear ImGui StyleColorsLight, переведённые из 0..1.
+# Значения образуют общую спокойную серо-голубую палитру приложения.
 _LIGHT_COLORS: dict[str, tuple[int, int, int, int]] = {
-    "mvThemeCol_Text": (0, 0, 0, 255),
-    "mvThemeCol_TextDisabled": (153, 153, 153, 255),
-    "mvThemeCol_WindowBg": (240, 240, 240, 255),
+    "mvThemeCol_Text": (35, 45, 55, 255),
+    "mvThemeCol_TextDisabled": (120, 133, 145, 255),
+    "mvThemeCol_WindowBg": (232, 238, 244, 255),
     "mvThemeCol_ChildBg": (0, 0, 0, 0),
-    "mvThemeCol_PopupBg": (255, 255, 255, 250),
-    "mvThemeCol_Border": (0, 0, 0, 77),
+    "mvThemeCol_PopupBg": (238, 243, 248, 255),
+    "mvThemeCol_Border": (143, 160, 177, 180),
     "mvThemeCol_BorderShadow": (0, 0, 0, 0),
-    "mvThemeCol_FrameBg": (255, 255, 255, 255),
-    "mvThemeCol_FrameBgHovered": (66, 150, 250, 102),
-    "mvThemeCol_FrameBgActive": (66, 150, 250, 171),
-    "mvThemeCol_TitleBg": (245, 245, 245, 255),
-    "mvThemeCol_TitleBgActive": (209, 209, 209, 255),
-    "mvThemeCol_TitleBgCollapsed": (255, 255, 255, 130),
-    "mvThemeCol_MenuBarBg": (219, 219, 219, 255),
-    "mvThemeCol_ScrollbarBg": (250, 250, 250, 135),
-    "mvThemeCol_ScrollbarGrab": (176, 176, 176, 204),
-    "mvThemeCol_ScrollbarGrabHovered": (125, 125, 125, 204),
-    "mvThemeCol_ScrollbarGrabActive": (125, 125, 125, 255),
-    "mvThemeCol_CheckMark": (66, 150, 250, 255),
-    "mvThemeCol_SliderGrab": (66, 150, 250, 199),
-    "mvThemeCol_SliderGrabActive": (117, 138, 204, 153),
-    "mvThemeCol_Button": (66, 150, 250, 102),
-    "mvThemeCol_ButtonHovered": (66, 150, 250, 255),
-    "mvThemeCol_ButtonActive": (15, 135, 250, 255),
-    "mvThemeCol_Header": (66, 150, 250, 79),
-    "mvThemeCol_HeaderHovered": (66, 150, 250, 204),
-    "mvThemeCol_HeaderActive": (66, 150, 250, 255),
-    "mvThemeCol_Separator": (99, 99, 99, 158),
-    "mvThemeCol_SeparatorHovered": (36, 112, 204, 199),
-    "mvThemeCol_SeparatorActive": (36, 112, 204, 255),
-    "mvThemeCol_ResizeGrip": (89, 89, 89, 43),
-    "mvThemeCol_ResizeGripHovered": (66, 150, 250, 171),
-    "mvThemeCol_ResizeGripActive": (66, 150, 250, 242),
-    "mvThemeCol_Tab": (194, 204, 214, 237),
-    "mvThemeCol_TabHovered": (66, 150, 250, 204),
-    "mvThemeCol_TabActive": (153, 186, 224, 255),
-    "mvThemeCol_TabUnfocused": (235, 237, 240, 252),
-    "mvThemeCol_TabUnfocusedActive": (189, 209, 232, 255),
-    "mvThemeCol_PlotLines": (99, 99, 99, 255),
+    "mvThemeCol_FrameBg": (222, 229, 236, 255),
+    "mvThemeCol_FrameBgHovered": (213, 225, 237, 255),
+    "mvThemeCol_FrameBgActive": (205, 219, 232, 255),
+    "mvThemeCol_TitleBg": (218, 226, 234, 255),
+    "mvThemeCol_TitleBgActive": (194, 207, 219, 255),
+    "mvThemeCol_TitleBgCollapsed": (222, 229, 236, 180),
+    "mvThemeCol_MenuBarBg": (213, 221, 230, 255),
+    "mvThemeCol_ScrollbarBg": (226, 233, 240, 255),
+    "mvThemeCol_ScrollbarGrab": (177, 196, 214, 255),
+    "mvThemeCol_ScrollbarGrabHovered": (143, 160, 177, 255),
+    "mvThemeCol_ScrollbarGrabActive": (112, 145, 177, 255),
+    "mvThemeCol_CheckMark": (112, 145, 177, 255),
+    "mvThemeCol_SliderGrab": (143, 160, 177, 255),
+    "mvThemeCol_SliderGrabActive": (112, 145, 177, 255),
+    "mvThemeCol_Button": (222, 229, 236, 255),
+    "mvThemeCol_ButtonHovered": (213, 225, 237, 255),
+    "mvThemeCol_ButtonActive": (195, 212, 228, 255),
+    "mvThemeCol_Header": (222, 229, 236, 190),
+    "mvThemeCol_HeaderHovered": (213, 225, 237, 255),
+    "mvThemeCol_HeaderActive": (195, 212, 228, 255),
+    "mvThemeCol_Separator": (177, 196, 214, 255),
+    "mvThemeCol_SeparatorHovered": (143, 160, 177, 255),
+    "mvThemeCol_SeparatorActive": (112, 145, 177, 255),
+    "mvThemeCol_ResizeGrip": (177, 196, 214, 120),
+    "mvThemeCol_ResizeGripHovered": (143, 160, 177, 190),
+    "mvThemeCol_ResizeGripActive": (112, 145, 177, 255),
+    "mvThemeCol_Tab": (214, 223, 231, 255),
+    "mvThemeCol_TabHovered": (205, 219, 232, 255),
+    "mvThemeCol_TabActive": (194, 207, 219, 255),
+    "mvThemeCol_TabUnfocused": (226, 233, 240, 255),
+    "mvThemeCol_TabUnfocusedActive": (205, 219, 232, 255),
+    "mvThemeCol_PlotLines": (82, 98, 115, 255),
     "mvThemeCol_PlotLinesHovered": (255, 110, 89, 255),
     "mvThemeCol_PlotHistogram": (230, 179, 0, 255),
     "mvThemeCol_PlotHistogramHovered": (255, 115, 0, 255),
-    "mvThemeCol_TableHeaderBg": (199, 222, 250, 255),
-    "mvThemeCol_TableBorderStrong": (145, 145, 163, 255),
-    "mvThemeCol_TableBorderLight": (173, 173, 189, 255),
-    "mvThemeCol_TableRowBg": (0, 0, 0, 0),
-    "mvThemeCol_TableRowBgAlt": (77, 77, 77, 23),
-    "mvThemeCol_TextSelectedBg": (66, 150, 250, 89),
-    "mvThemeCol_DragDropTarget": (66, 150, 250, 242),
-    "mvThemeCol_NavHighlight": (66, 150, 250, 204),
-    "mvThemeCol_NavWindowingHighlight": (179, 179, 179, 179),
+    "mvThemeCol_TableHeaderBg": (194, 207, 219, 255),
+    "mvThemeCol_TableBorderStrong": (143, 160, 177, 255),
+    "mvThemeCol_TableBorderLight": (190, 202, 214, 255),
+    "mvThemeCol_TableRowBg": (228, 234, 240, 255),
+    "mvThemeCol_TableRowBgAlt": (219, 227, 235, 255),
+    "mvThemeCol_TextSelectedBg": (195, 212, 228, 190),
+    "mvThemeCol_DragDropTarget": (112, 145, 177, 255),
+    "mvThemeCol_NavHighlight": (143, 160, 177, 220),
+    "mvThemeCol_NavWindowingHighlight": (177, 196, 214, 200),
     "mvThemeCol_NavWindowingDimBg": (51, 51, 51, 51),
     "mvThemeCol_ModalWindowDimBg": (51, 51, 51, 89),
 }
@@ -83,15 +85,14 @@ def build_light_theme() -> int:
                 const = getattr(dpg, const_name, None)
                 if const is not None:
                     dpg.add_theme_color(const, rgba, category=dpg.mvThemeCat_Core)
-        # Поля ввода должны читаться как отдельные рабочие поверхности, а не
-        # растворяться в светлом фоне окна. Компонентная тема наследуется всеми
-        # `add_input_text`, включая ручной ввод LAB DATA.
+        # Поля ввода остаются отдельными рабочими поверхностями, но используют
+        # ту же палитру, что кнопки и ячейки таблицы LAB DATA.
         with dpg.theme_component(dpg.mvInputText):
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (224, 239, 255, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, (222, 229, 236, 255))
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered,
-                                (202, 226, 252, 255))
+                                (213, 225, 237, 255))
             dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive,
-                                (189, 218, 250, 255))
-            dpg.add_theme_color(dpg.mvThemeCol_Border, (83, 130, 184, 255))
+                                (205, 219, 232, 255))
+            dpg.add_theme_color(dpg.mvThemeCol_Border, (143, 160, 177, 255))
             dpg.add_theme_style(dpg.mvStyleVar_FrameBorderSize, 1)
     return theme_id
