@@ -183,7 +183,7 @@ class DialogsViewMixin(ContextBoundView):
         if model.dirty:
             self._open_model_report_dirty_dialog(model)
             return
-        self._open_model_report_file_dialog()
+        self._queue_model_report_file_dialog()
 
     def _open_model_report_dirty_dialog(self, model) -> None:
         with dpg.window(label="Unsaved model changes", modal=True, no_collapse=True,
@@ -211,11 +211,18 @@ class DialogsViewMixin(ContextBoundView):
             self._set_status(f"Save failed: {exc}")
             return
         self._close_tracked_modal(user_data)
-        self._open_model_report_file_dialog()
+        self._queue_model_report_file_dialog()
 
     def _on_model_report_export_snapshot(self, sender, app_data, user_data) -> None:
         self._close_tracked_modal(user_data)
-        self._open_model_report_file_dialog()
+        self._queue_model_report_file_dialog()
+
+    def _queue_model_report_file_dialog(self) -> None:
+        """Opens a DPG file dialog only after the preceding modal has closed."""
+        dpg.set_frame_callback(
+            dpg.get_frame_count() + 1,
+            lambda *_args: self._open_model_report_file_dialog(),
+        )
 
     def _open_model_report_file_dialog(self) -> None:
         model = self._state.models.get(self._report_model_id or "")
