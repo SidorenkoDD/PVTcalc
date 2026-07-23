@@ -13,12 +13,18 @@ import json
 import math
 import shutil
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from calc_core.Utils.AtomicFile import atomic_write_json
-from calc_core.Utils.ModelStore import model_store_lock
+from calc_core.Utils.ModelStore import (
+    ModelStoreError,
+    model_store_lock,
+    read_model_store,
+    store_revision,
+)
 
 _SCHEMA_VERSION = 1
 _SCOPES = {"project", "model"}
@@ -144,6 +150,53 @@ def get_dataset(models_db_path: str | Path, project_id: str,
         if dataset["dataset_id"] == dataset_id:
             return dataset
     return None
+
+
+@lru_cache(maxsize=8)
+def _saved_dataset_reference_index(
+    canonical_path: str,
+    revision: tuple[int, int] | None,
+) -> dict[tuple[str, str], frozenset[tuple[str, str]]]:
+    """Builds a cached index for one immutable version of ``models.json``."""
+    del revision  # The revision is intentionally part of the cache key.
+    try:
+        records = read_model_store(canonical_path, missing_ok=True)
+    except (OSError, ModelStoreError):
+        return {}
+    index: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for model_id, record in records.items():
+        project_id = record.get("project_id")
+        if not isinstance(project_id, str) or not project_id:
+            continue
+        stored = record.get("workspace")
+        snapshot = stored.get("snapshot") if isinstance(stored, dict) else None
+        nodes = snapshot.get("nodes") if isinstance(snapshot, dict) else None
+        if not isinstance(nodes, list):
+            continue
+        for raw_node in nodes:
+            if not isinstance(raw_node, dict):
+                continue
+            params = raw_node.get("params")
+            node_id = raw_node.get("node_id")
+            dataset_id = params.get("lab_data_ref") if isinstance(params, dict) else None
+            if isinstance(dataset_id, str) and dataset_id and isinstance(node_id, str) and node_id:
+                index.setdefault((project_id, dataset_id), set()).add((model_id, node_id))
+    return {key: frozenset(value) for key, value in index.items()}
+
+
+def dataset_references(models_db_path: str | Path, project_id: str,
+                       dataset_id: str) -> set[tuple[str, str]]:
+    """Returns saved ``(model_id, node_id)`` references to a catalog dataset.
+
+    The scan is deliberately read-only and limited to workspace snapshots.  It
+    is cached by the file revision, so ordinary tab switches do not reread a
+    potentially large saved workspace.  A missing or temporarily unreadable
+    store is reported as no saved references rather than affecting a calculation
+    or a Lab Data selection.
+    """
+    path = Path(models_db_path).resolve()
+    index = _saved_dataset_reference_index(str(path), store_revision(path))
+    return set(index.get((project_id, dataset_id), ()))
 
 
 def create_dataset(

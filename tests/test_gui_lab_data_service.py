@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from gui.services import lab_data_service as lab_svc
@@ -90,3 +93,25 @@ def test_corrupt_catalog_is_not_overwritten(tmp_path):
         )
 
     assert path.read_text(encoding="utf-8") == "{broken"
+
+
+def test_dataset_references_lists_saved_workspace_nodes(tmp_path):
+    fixture = Path(__file__).parent / "fixtures" / "models.json"
+    db_path = tmp_path / "models.json"
+    records = json.loads(fixture.read_text(encoding="utf-8"))
+    model_ids = list(records)[:2]
+    project_id = "project_a"
+    dataset_id = "lab_shared"
+    for index, model_id in enumerate(model_ids, start=1):
+        records[model_id]["project_id"] = project_id
+        records[model_id]["workspace"] = {
+            "snapshot": {"nodes": [{
+                "node_id": f"exp_{index}",
+                "params": {"lab_data_ref": dataset_id},
+            }]},
+        }
+    db_path.write_text(json.dumps(records), encoding="utf-8")
+
+    assert lab_svc.dataset_references(db_path, project_id, dataset_id) == {
+        (model_ids[0], "exp_1"), (model_ids[1], "exp_2"),
+    }

@@ -1005,6 +1005,41 @@ def test_experiment_lab_data_and_chart_grid_render():
         dpg.destroy_context()
 
 
+def test_linked_lab_data_shows_conditions_and_mismatch_warning(tmp_path):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        state.enter_model(next(iter(state.models)))
+        state.open_node("composition")
+        model = state.active_model
+        assert model is not None
+        dataset = lab_svc.create_dataset(
+            str(db_path), model.project_id, title="DLE reference",
+            experiment_kind="dle", columns=["pressure", "Bo"],
+            rows=[[300.0, 1.2]], conditions={"T_c": 80.0, "P_res": 350.0},
+        )
+        nid = state.new_experiment(
+            "dle", {"pressures": [300.0], "T_c": 90.0, "P_res": 400.0})
+        state.set_lab_data_ref(nid, dataset["dataset_id"])
+        app._render_node_content(nid)
+
+        texts = _text_values(_WORKSPACE)
+        assert any("Dataset conditions: T res = 80 C; P res = 350 bar." in text
+                   for text in texts)
+        assert any("Warning — T res: Lab Data 80 C; calculation 90 C." in text
+                   for text in texts)
+        assert any("Warning — P res: Lab Data 350 bar; calculation 400 bar." in text
+                   for text in texts)
+        assert any("Used by 0 other saved calculation(s)" in text for text in texts)
+    finally:
+        dpg.destroy_context()
+
+
 def test_chart_layout_expands_on_wide_viewport_and_rebuilds_after_resize(monkeypatch):
     state = AppState(ModelRepository(str(MODELS_JSON)))
     app = PVTcalcApp(state, SessionState(window_width=1920, window_height=1080))

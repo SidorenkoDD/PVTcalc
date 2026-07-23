@@ -126,6 +126,56 @@ class ExperimentViewMixin(ContextBoundView):
         except lab_svc.LabDataStoreError:
             return None
 
+    @staticmethod
+    def _lab_condition_value(raw) -> float | None:
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None
+        value = float(raw)
+        return value if math.isfinite(value) else None
+
+    def _render_linked_lab_context(self, node, dataset, parent) -> None:
+        """Shows non-blocking context for a selected project Lab Data set."""
+        conditions = dataset.get("conditions")
+        conditions = conditions if isinstance(conditions, dict) else {}
+        displayed: list[str] = []
+        mismatches: list[str] = []
+        for param, condition_key, label, unit in (
+            ("T_c", "T_c", "T res", "C"),
+            ("P_res", "P_res", "P res", "bar"),
+        ):
+            lab_value = self._lab_condition_value(conditions.get(condition_key))
+            if lab_value is None:
+                continue
+            displayed.append(f"{label} = {self._g(lab_value)} {unit}")
+            calculation_value = self._lab_condition_value(node.params.get(param))
+            if (calculation_value is not None
+                    and not math.isclose(lab_value, calculation_value,
+                                         rel_tol=0.0, abs_tol=1e-6)):
+                mismatches.append(
+                    f"{label}: Lab Data {self._g(lab_value)} {unit}; "
+                    f"calculation {self._g(calculation_value)} {unit}."
+                )
+        if displayed:
+            dpg.add_text("Dataset conditions: " + "; ".join(displayed) + ".",
+                         parent=parent)
+        else:
+            note = dpg.add_text("Dataset conditions are not specified.", parent=parent)
+            dpg.bind_item_theme(note, self._theme_stale())
+        for message in mismatches:
+            warning = dpg.add_text("Warning — " + message, parent=parent, wrap=620)
+            dpg.bind_item_theme(warning, self._theme_stale())
+
+        model = self._state.active_model
+        if model is None:
+            return
+        references = lab_svc.dataset_references(
+            self._state.db_path, model.project_id, dataset["dataset_id"])
+        references.discard((model.model_id, node.node_id))
+        dpg.add_text(
+            f"Used by {len(references)} other saved calculation(s) in this project.",
+            parent=parent,
+        )
+
     def _render_lab_data(self, node, parent) -> None:
         """Сворачиваемый ввод измерений, привязанный к одному Experiment-узлу."""
         columns = self._lab_columns(node)
@@ -158,6 +208,7 @@ class ExperimentViewMixin(ContextBoundView):
                     "(read only).",
                     parent=header,
                 )
+                self._render_linked_lab_context(node, linked, header)
                 dpg.add_button(label="Edit selected Lab Data",
                                user_data=node.node_id,
                                callback=self._on_lab_open_selected,
