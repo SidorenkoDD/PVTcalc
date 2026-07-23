@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,15 @@ def _header(value: object) -> str:
     return _COLUMN_LABELS.get(str(value), str(value))
 
 
+def _cell_value(value: Any) -> Any:
+    """Makes nested workspace parameters safe and readable for Excel cells."""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return value
+
+
 def _safe_sheet_name(base: str, used: set[str]) -> str:
     cleaned = "".join("_" if char in r"[]:*?/\\" else char for char in base).strip()
     cleaned = cleaned[:31] or "Report"
@@ -65,7 +75,7 @@ def _write_table(sheet, start_row: int, columns: list[str], rows: list[list[Any]
         cell.fill = _HEADER_FILL
     for row_index, row in enumerate(rows, start=start_row + 1):
         for column, value in enumerate(row, start=1):
-            sheet.cell(row_index, column, value)
+            sheet.cell(row_index, column, _cell_value(value))
     sheet.freeze_panes = f"A{start_row + 1}"
     sheet.auto_filter.ref = (
         f"A{start_row}:{chr(64 + min(len(columns), 26))}{start_row + len(rows)}"
@@ -93,12 +103,13 @@ def _model_sheet(book: Workbook, model: Model, variant: Variant,
     if comp is None or not include_composition:
         return
     data = comp.composition_data if isinstance(comp.composition_data, dict) else {}
-    property_keys = sorted({key for value in data.values() if isinstance(value, dict)
-                            for key in value if key not in {"name", "Name"}})
+    property_keys = [key for key, value in data.items() if isinstance(value, dict)]
     rows = []
     for name, fraction in comp.composition.items():
-        props = data.get(name, {}) if isinstance(data.get(name), dict) else {}
-        rows.append([name, float(fraction)] + [props.get(key) for key in property_keys])
+        rows.append([name, float(fraction)] + [
+            data[key].get(name) if isinstance(data.get(key), dict) else None
+            for key in property_keys
+        ])
     _write_table(sheet, len(metadata) + 4,
                  ["Component", "Mole fraction"] + [_header(key) for key in property_keys], rows)
 

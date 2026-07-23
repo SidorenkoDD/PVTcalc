@@ -181,11 +181,21 @@ class DialogsViewMixin(ContextBoundView):
             self._close_tracked_modal(self._report_win)
         self._report_win = None
         if model.dirty:
-            self._open_model_report_dirty_dialog(model)
+            self._queue_model_report_dirty_dialog(model.model_id)
             return
         self._queue_model_report_file_dialog()
 
+    def _queue_model_report_dirty_dialog(self, model_id: str) -> None:
+        """Avoids opening a second modal in the frame that closed the selector."""
+        dpg.set_frame_callback(
+            dpg.get_frame_count() + 1,
+            lambda *_args: self._open_model_report_dirty_dialog(
+                self._state.models.get(model_id)),
+        )
+
     def _open_model_report_dirty_dialog(self, model) -> None:
+        if model is None:
+            return
         with dpg.window(label="Unsaved model changes", modal=True, no_collapse=True,
                         width=450, height=170) as win:
             self._track_modal(win)

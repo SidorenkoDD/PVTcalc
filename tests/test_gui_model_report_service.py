@@ -12,14 +12,15 @@ def test_excel_report_has_model_and_selected_experiment_sheets(tmp_path):
     composition = SimpleNamespace(
         composition={"C1": 0.8, "C2": 0.2},
         composition_data={
-            "C1": {"MW": 16.04, "Tc": 190.6},
-            "C2": {"MW": 30.07, "Tc": 305.3},
+            "MW": {"C1": 16.04, "C2": 30.07},
+            "Tc": {"C1": 190.6, "C2": 305.3},
         },
     )
     variant = Variant(variant_id="base", title="Base", composition=composition)
     variant.nodes["exp_1"] = GraphNode(
         node_id="exp_1", kind=NodeKind.EXPERIMENT, title="DLE",
-        status=NodeStatus.FRESH, params={"kind": "dle", "T_c": 80.0},
+        status=NodeStatus.FRESH,
+        params={"kind": "dle", "T_c": 80.0, "pressures": [300.0, 200.0]},
         result={"columns": ["pressure", "Bo"], "rows": [[300.0, 1.2]]},
     )
     model = Model(model_id="fluid_a", title="Fluid A", project_id="project_a",
@@ -36,5 +37,5 @@ def test_excel_report_has_model_and_selected_experiment_sheets(tmp_path):
     assert book.sheetnames == ["Model", "DLE 1"]
     assert book["Model"][1][0].value == "Property"
     assert book["DLE 1"][1][0].value == "Parameter"
-    assert book["DLE 1"][7][0].value == "Pressure, bar"
-    assert book["DLE 1"][8][1].value == 1.2
+    assert book["DLE 1"][8][0].value == "Pressure, bar"
+    assert book["DLE 1"][9][1].value == 1.2
