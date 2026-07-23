@@ -136,6 +136,11 @@ class PVTcalcApp(
         self._export_label: str = "model"
         self._export_fmt: str = "e300"
         self._export_eos: str = "MPR"
+        # Экспорт инженерного Excel-отчёта по корню модели.
+        self._report_model_id: str | None = None
+        self._report_options: dict[str, bool] = {}
+        self._report_ids: dict[str, int] = {}
+        self._report_win: int | None = None
         # окно настроек (константы/условия/критерии сходимости)
         self._settings_win: int | None = None
         self._settings_ids: dict = {}

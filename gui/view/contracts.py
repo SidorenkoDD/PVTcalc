@@ -101,6 +101,10 @@ class ContextBoundView:
     def _on_view_composition(self, sender, app_data, user_data) -> None:
         raise NotImplementedError
 
+    def _on_open_model_report_dialog(self, sender=None, app_data=None,
+                                     user_data=None) -> None:
+        raise NotImplementedError
+
     def _open_envelope_dialog(self, node_id: str | None) -> None:
         raise NotImplementedError
 

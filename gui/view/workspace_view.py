@@ -1182,6 +1182,9 @@ class WorkspaceViewMixin(ContextBoundView):
             dpg.add_menu_item(label="Save model", user_data=model_id,
                               callback=self._on_save_tree_model,
                               enabled=bool(model and model.loaded and model.dirty))
+            dpg.add_menu_item(label="Export Excel report...", user_data=model_id,
+                              callback=self._on_open_model_report_dialog,
+                              enabled=model is not None)
             dpg.add_menu_item(label="Duplicate model...", user_data=model_id,
                               callback=self._on_duplicate_model_confirm)
             dpg.add_menu_item(label="Delete model...", user_data=model_id,

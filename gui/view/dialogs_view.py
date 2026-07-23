@@ -5,6 +5,7 @@ import logging
 import dearpygui.dearpygui as dpg
 
 from gui.services import export_service as exp_out_svc
+from gui.services import model_report_service as report_svc
 from gui.services import settings_service as settings_svc
 from gui.view.contracts import ContextBoundView
 
@@ -21,6 +22,10 @@ class DialogsViewMixin(ContextBoundView):
     _export_eos: str
     _export_ids: dict[str, int]
     _export_win: int | None
+    _report_model_id: str | None
+    _report_options: dict[str, bool]
+    _report_ids: dict[str, int]
+    _report_win: int | None
     _settings_ids: dict[str, int]
     _settings_win: int | None
 
@@ -112,6 +117,140 @@ class DialogsViewMixin(ContextBoundView):
         if self._export_win and dpg.does_item_exist(self._export_win):
             dpg.delete_item(self._export_win)
         self._set_status(f"Exported to {written}")
+
+    # --- инженерный Excel-отчёт ------------------------------------------
+
+    def _on_open_model_report_dialog(self, sender=None, app_data=None, user_data=None) -> None:
+        """Opens report selection for the model root selected in the tree."""
+        model_id = str(user_data)
+        try:
+            self._restore_workspace(model_id)
+            model = self._state.ensure_model_loaded(model_id)
+        except KeyError:
+            self._set_status("Model is no longer available.")
+            return
+        variant = model.variants.get("base")
+        if variant is None:
+            self._set_status("Model workspace is unavailable.")
+            return
+        self._report_model_id = model_id
+        self._report_options = {
+            "composition": True, "flash": True, "dle": True, "cce": True,
+            "separator": True, "envelope": True, "lab_data": True,
+        }
+        w, h = dpg.get_viewport_width(), dpg.get_viewport_height()
+        with dpg.window(label=f"Excel report - {model.title}", modal=True,
+                        no_resize=True, no_collapse=True, width=430, height=380,
+                        pos=(max(0, w // 2 - 215), max(0, h // 2 - 190))) as win:
+            self._track_modal(win)
+            self._report_win = win
+            dpg.add_text("Choose report sections:")
+            ids = {}
+            ids["composition"] = dpg.add_checkbox(
+                label="Composition and component properties", default_value=True)
+            dpg.add_separator()
+            dpg.add_text("Completed calculations")
+            for key, label in (
+                ("flash", "Flash"), ("dle", "DLE"), ("cce", "CCE"),
+                ("separator", "Separator"), ("envelope", "Phase envelope"),
+            ):
+                ids[key] = dpg.add_checkbox(label=label, default_value=True)
+            dpg.add_separator()
+            ids["lab_data"] = dpg.add_checkbox(
+                label="Linked laboratory data on experiment sheets", default_value=True)
+            self._report_ids = ids
+            dpg.add_spacer(height=6)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Choose file & export", width=170,
+                               callback=self._on_model_report_prepare_export)
+                dpg.add_button(label="Cancel", width=100,
+                               callback=lambda: self._close_tracked_modal(win))
+
+    def _on_model_report_prepare_export(self, sender=None, app_data=None,
+                                        user_data=None) -> None:
+        model_id = self._report_model_id
+        model = self._state.models.get(model_id) if model_id else None
+        if model is None:
+            self._set_status("Model is no longer available.")
+            return
+        self._report_options = {
+            key: bool(dpg.get_value(item_id))
+            for key, item_id in self._report_ids.items()
+        }
+        if self._report_win is not None and dpg.does_item_exist(self._report_win):
+            self._close_tracked_modal(self._report_win)
+        self._report_win = None
+        if model.dirty:
+            self._open_model_report_dirty_dialog(model)
+            return
+        self._open_model_report_file_dialog()
+
+    def _open_model_report_dirty_dialog(self, model) -> None:
+        with dpg.window(label="Unsaved model changes", modal=True, no_collapse=True,
+                        width=450, height=170) as win:
+            self._track_modal(win)
+            dpg.add_text(
+                "The report can match the saved model or the current temporary state.",
+                wrap=410,
+            )
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Save & export", width=125, user_data=win,
+                               callback=self._on_model_report_save_and_export)
+                dpg.add_button(label="Export current snapshot", width=155,
+                               user_data=win,
+                               callback=self._on_model_report_export_snapshot)
+                dpg.add_button(label="Cancel", width=80,
+                               callback=lambda: self._close_tracked_modal(win))
+
+    def _on_model_report_save_and_export(self, sender, app_data, user_data) -> None:
+        model_id = self._report_model_id
+        try:
+            self._state.save_model(model_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Could not save model before report export")
+            self._set_status(f"Save failed: {exc}")
+            return
+        self._close_tracked_modal(user_data)
+        self._open_model_report_file_dialog()
+
+    def _on_model_report_export_snapshot(self, sender, app_data, user_data) -> None:
+        self._close_tracked_modal(user_data)
+        self._open_model_report_file_dialog()
+
+    def _open_model_report_file_dialog(self) -> None:
+        model = self._state.models.get(self._report_model_id or "")
+        if model is None:
+            return
+        safe = "".join(char if char.isalnum() or char in "-_" else "_"
+                       for char in model.title) or "model_report"
+        dialog = dpg.add_file_dialog(
+            label=f"Export Excel report - {model.title}", directory_selector=False,
+            show=True, modal=True, width=720, height=440,
+            default_filename=f"{safe}_report",
+            callback=self._on_model_report_file_chosen,
+            cancel_callback=lambda s, a: self._close_tracked_modal(s),
+        )
+        self._track_modal(dialog)
+        dpg.add_file_extension(".xlsx", parent=dialog)
+
+    def _on_model_report_file_chosen(self, sender, app_data) -> None:
+        self._close_tracked_modal(sender)
+        path = (app_data or {}).get("file_path_name") or ""
+        model = self._state.models.get(self._report_model_id or "")
+        variant = model.variants.get("base") if model else None
+        if not path or model is None or variant is None:
+            return
+        try:
+            written = report_svc.export_model_report(
+                path, model, variant, self._state.db_path, self._report_options)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Excel report export failed")
+            self._set_status(f"Report export failed: {exc}")
+            return
+        if self._report_win is not None and dpg.does_item_exist(self._report_win):
+            self._close_tracked_modal(self._report_win)
+        self._report_win = None
+        self._set_status(f"Excel report exported to {written}")
 
     # --- настройки (константы/условия/критерии сходимости) ------------------
 
