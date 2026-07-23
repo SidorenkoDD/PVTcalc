@@ -23,7 +23,7 @@ from gui.calculation_coordinator import CalculationCoordinator
 from gui.session import SessionState, save_session
 from gui.view.composition_view import CompositionViewMixin
 from gui.view.contracts import ViewContext
-from gui.view.dialogs_view import DialogsViewMixin
+from gui.view.dialogs_view import DialogsController
 from gui.view.envelope_view import EnvelopeViewMixin
 from gui.view.experiment_view import ExperimentViewMixin
 from gui.view.flash_view import FlashViewMixin
@@ -57,7 +57,6 @@ class PVTcalcApp(
     FlashViewMixin,
     ExperimentViewMixin,
     EnvelopeViewMixin,
-    DialogsViewMixin,
     WorkspaceViewMixin,
 ):
     """View-контроллер: связывает `AppState` с виджетами DearPyGui."""
@@ -68,6 +67,7 @@ class PVTcalcApp(
             session=session,
             jobs=CalculationCoordinator(),
         )
+        self._dialogs = DialogsController(self._view_context, self)
         # состояние разворота дерева (во View, чтобы переживать перерисовку)
         self._expanded_models: set[str] = set()
         self._expanded_cats: set[str] = set()
@@ -186,6 +186,18 @@ class PVTcalcApp(
         state.subscribe(self._schedule_session_autosave)
 
     # --- жизненный цикл --------------------------------------------------
+
+    # Dialogs are an object controller; thin forwarding methods keep existing
+    # menu/tree callbacks stable while feature views are migrated incrementally.
+    def _on_open_export_dialog(self, sender=None, app_data=None, user_data=None) -> None:
+        self._dialogs._on_open_export_dialog(sender, app_data, user_data)
+
+    def _on_open_settings(self, sender=None, app_data=None, user_data=None) -> None:
+        self._dialogs._on_open_settings(sender, app_data, user_data)
+
+    def _on_open_model_report_dialog(self, sender=None, app_data=None,
+                                     user_data=None) -> None:
+        self._dialogs._on_open_model_report_dialog(sender, app_data, user_data)
 
     def run(self) -> None:
         dpg.create_context()
