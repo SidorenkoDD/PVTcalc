@@ -353,12 +353,12 @@ class WorkspaceViewMixin(ContextBoundView):
             with dpg.theme() as theme_id:
                 with dpg.theme_component(dpg.mvButton):
                     dpg.add_theme_color(dpg.mvThemeCol_Button,
-                                        (218, 232, 246, 255) if selected
-                                        else (235, 243, 250, 255))
+                                        (205, 219, 232, 255) if selected
+                                        else (222, 229, 236, 255))
                     dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
-                                        (209, 226, 242, 255))
+                                        (213, 225, 237, 255))
                     dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
-                                        (201, 220, 239, 255))
+                                        (195, 212, 228, 255))
                     dpg.add_theme_color(dpg.mvThemeCol_Border,
                                         (112, 145, 177, 255) if selected
                                         else (177, 196, 214, 255))
@@ -373,13 +373,15 @@ class WorkspaceViewMixin(ContextBoundView):
             with dpg.theme() as theme_id:
                 with dpg.theme_component(dpg.mvTable):
                     dpg.add_theme_color(dpg.mvThemeCol_TableHeaderBg,
-                                        (205, 221, 237, 255))
+                                        (194, 207, 219, 255))
                     dpg.add_theme_color(dpg.mvThemeCol_TableBorderStrong,
-                                        (150, 174, 197, 255))
+                                        (143, 160, 177, 255))
                     dpg.add_theme_color(dpg.mvThemeCol_TableBorderLight,
-                                        (201, 215, 229, 255))
+                                        (190, 202, 214, 255))
+                    dpg.add_theme_color(dpg.mvThemeCol_TableRowBg,
+                                        (228, 234, 240, 255))
                     dpg.add_theme_color(dpg.mvThemeCol_TableRowBgAlt,
-                                        (227, 237, 247, 110))
+                                        (219, 227, 235, 255))
             self._lab_catalog_table_theme_id = theme_id
         return self._lab_catalog_table_theme_id
 
@@ -424,7 +426,7 @@ class WorkspaceViewMixin(ContextBoundView):
                         key = (row_index, column_index)
                         cell_id = dpg.add_button(
                             label=" " if value is None else self._g(value),
-                            width=115, user_data=key,
+                            width=-1, user_data=key,
                             callback=self._on_catalog_lab_cell_click,
                         )
                         self._lab_catalog_cell_ids[key] = cell_id
