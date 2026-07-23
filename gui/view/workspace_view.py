@@ -13,6 +13,7 @@ from gui.app_state import (
     StateChange,
     StateChangeKind,
 )
+from gui.services import clipboard_service
 from gui.services import experiment_service as exp_svc
 from gui.services import lab_data_service as lab_svc
 from gui.services import project_service as proj_svc
@@ -319,12 +320,14 @@ class WorkspaceViewMixin(ContextBoundView):
             with dpg.group(horizontal=True, parent=win):
                 add_button = dpg.add_button(label="Add point",
                                             callback=self._on_catalog_lab_add_row)
+                paste_button = dpg.add_button(label="Paste from Excel",
+                                              callback=self._on_catalog_lab_paste)
                 remove_button = dpg.add_button(
                     label="Remove last", callback=self._on_catalog_lab_remove_row,
                     enabled=True)
                 close_button = dpg.add_button(label="Close",
                                               callback=self._on_catalog_lab_cancel)
-                for button in (add_button, remove_button, close_button):
+                for button in (add_button, paste_button, remove_button, close_button):
                     dpg.bind_item_theme(button, self._lab_catalog_button_theme())
             dpg.add_text(
                 "The first 10 rows are ready for input. Only complete rows are "
@@ -449,6 +452,9 @@ class WorkspaceViewMixin(ContextBoundView):
             dpg.add_key_press_handler(
                 key=dpg.mvKey_Return, callback=self._on_catalog_lab_enter_key,
             )
+            dpg.add_key_press_handler(
+                key=dpg.mvKey_V, callback=self._on_catalog_lab_ctrl_v,
+            )
         self._lab_catalog_navigation_registry_id = registry
 
     def _on_catalog_lab_cell_click(self, sender, app_data, user_data) -> None:
@@ -521,6 +527,61 @@ class WorkspaceViewMixin(ContextBoundView):
         if data is None or active is None or data.get("editing_cell") is not None:
             return
         self._begin_catalog_lab_cell_edit(*active)
+
+    def _on_catalog_lab_ctrl_v(self, sender, app_data, user_data=None) -> None:
+        """Pastes an Excel range only when the table, rather than Value, is active."""
+        if not (dpg.is_key_down(dpg.mvKey_ModCtrl)
+                or dpg.is_key_down(dpg.mvKey_LControl)
+                or dpg.is_key_down(dpg.mvKey_RControl)):
+            return
+        data = self._lab_catalog_editor
+        if data is None or data.get("editing_cell") is not None:
+            return
+        self._on_catalog_lab_paste()
+
+    def _on_catalog_lab_paste(self, sender=None, app_data=None, user_data=None) -> None:
+        try:
+            text = dpg.get_clipboard_text() or ""
+        except Exception as exc:  # noqa: BLE001 — clipboard can be unavailable
+            self._set_status(f"Could not read clipboard: {exc}")
+            return
+        self._paste_catalog_lab_text(str(text))
+
+    def _paste_catalog_lab_text(self, text: str) -> bool:
+        """Merges an Excel column/table into the selected catalog table cell."""
+        data = self._lab_catalog_editor
+        active = self._lab_catalog_active_cell
+        if data is None or active is None:
+            self._set_status("Select a Lab Data cell before pasting from Excel.")
+            return False
+        if not text.strip():
+            self._set_status("Clipboard is empty. Copy an Excel column or table first.")
+            return False
+        start_row, start_column = active
+        pasted_rows, had_header = clipboard_service.parse_lab_clipboard(
+            text, data["columns"], start_column=start_column)
+        if not pasted_rows:
+            self._set_status("Clipboard has no numeric Lab Data values.")
+            return False
+        while len(data["rows"]) < start_row + len(pasted_rows):
+            data["rows"].append([None] * len(data["columns"]))
+        for offset, pasted in enumerate(pasted_rows):
+            target = data["rows"][start_row + offset]
+            for column, value in enumerate(pasted):
+                if value is not None:
+                    target[column] = value
+        data["editing_cell"] = None
+        editor_id = data.get("cell_editor_id")
+        if editor_id and dpg.does_item_exist(editor_id):
+            dpg.configure_item(editor_id, enabled=False)
+        self._lab_catalog_active_cell = active
+        self._render_catalog_lab_table()
+        self._select_catalog_lab_cell(*active)
+        self._autosave_catalog_lab()
+        header_note = " with header" if had_header else ""
+        self._set_status(
+            f"Pasted {len(pasted_rows)} Lab Data row(s){header_note} from Excel.")
+        return True
 
     def _on_catalog_lab_add_row(self, sender=None, app_data=None, user_data=None) -> None:
         data = self._lab_catalog_editor

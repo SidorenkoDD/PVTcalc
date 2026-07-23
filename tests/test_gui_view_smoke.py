@@ -371,6 +371,29 @@ def test_lab_catalog_cells_navigate_then_edit_with_enter(tmp_path):
         dpg.destroy_context()
 
 
+def test_lab_catalog_pastes_excel_column_into_selected_cell(tmp_path, monkeypatch):
+    db_path = tmp_path / "models.json"
+    shutil.copyfile(MODELS_JSON, db_path)
+    state = AppState(ModelRepository(str(db_path)))
+    app = PVTcalcApp(state, SessionState())
+    dpg.create_context()
+    try:
+        app._build_layout()
+        state.refresh_model_list()
+        app._open_project("KRSNL_PVTSIM")
+        app._on_new_lab_dataset(None, None, ("dle", "project", None))
+        app._select_catalog_lab_cell(2, 0)
+        monkeypatch.setattr(dpg, "get_clipboard_text", lambda: "350\n300\n250")
+
+        app._on_catalog_lab_paste()
+
+        assert [row[0] for row in app._lab_catalog_editor["rows"][2:5]] == [
+            350.0, 300.0, 250.0,
+        ]
+        assert lab_svc.list_datasets(str(db_path), "KRSNL_PVTSIM",
+                                     experiment_kind="dle") == []
+    finally:
+        dpg.destroy_context()
 def test_exit_request_confirms_even_when_all_models_are_saved(monkeypatch):
     state = AppState(ModelRepository(str(MODELS_JSON)))
     app = PVTcalcApp(state, SessionState())
