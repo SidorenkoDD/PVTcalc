@@ -193,23 +193,6 @@ class WorkspaceViewMixin(ContextBoundView):
         if dataset is not None:
             self._open_lab_dataset_editor(dataset)
 
-    def _render_model_lab_data_tree(self, model) -> None:
-        datasets = [dataset for dataset in lab_svc.list_datasets(
-            self._state.db_path, model.project_id, model_id=model.model_id)
-            if dataset["scope"] == "model"]
-        key = f"{model.model_id}:model_lab"
-        expanded = key in self._expanded_cats
-        dpg.add_selectable(
-            label=f"  {'v' if expanded else '>'} Model Lab Data ({len(datasets)})",
-            parent=_MODEL_TREE, user_data=key, callback=self._on_cat_toggle,
-        )
-        if not expanded:
-            return
-        self._render_lab_dataset_groups(
-            datasets, scope="model", model_id=model.model_id, indent="      ",
-            category_prefix=f"{model.model_id}:model_lab",
-        )
-
     def _render_lab_dataset_groups(self, datasets, *, scope: str,
                                    model_id: str | None, indent: str,
                                    category_prefix: str) -> None:
@@ -951,8 +934,6 @@ class WorkspaceViewMixin(ContextBoundView):
                 user_data=(model.model_id, "composition"),
                 callback=self._on_tree_open_node,
             )
-
-        self._render_model_lab_data_tree(model)
 
         # Flash (категория с историей запусков)
         cat_key = f"{model.model_id}:flash"

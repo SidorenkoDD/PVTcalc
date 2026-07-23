@@ -139,14 +139,12 @@ class ExperimentViewMixin(ContextBoundView):
                 try:
                     datasets = lab_svc.list_datasets(
                         self._state.db_path, model.project_id,
-                        experiment_kind=node.params.get("kind"),
-                        model_id=model.model_id)
+                        experiment_kind=node.params.get("kind"))
                 except lab_svc.LabDataStoreError as exc:
                     datasets = []
                     dpg.add_text(str(exc), parent=header)
                 for dataset in datasets:
-                    prefix = "Model" if dataset["scope"] == "model" else "Project"
-                    choices[f"{prefix}: {dataset['title']}"] = dataset["dataset_id"]
+                    choices[dataset["title"]] = dataset["dataset_id"]
             self._lab_source_choices[node.node_id] = choices
             selected = next((label for label, value in choices.items()
                              if linked and value == linked["dataset_id"]),
@@ -165,7 +163,7 @@ class ExperimentViewMixin(ContextBoundView):
                                callback=self._on_lab_open_selected,
                                parent=header)
             else:
-                message = ("Choose a Project or Model Lab Data source in the list above."
+                message = ("Choose a Lab Data source in the list above."
                            if not rows else
                            "Legacy local Lab Data is read only; choose a catalog source.")
                 dpg.add_text(message, parent=header, wrap=620)

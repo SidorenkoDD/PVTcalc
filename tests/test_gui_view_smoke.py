@@ -447,6 +447,7 @@ def test_lab_data_tree_groups_datasets_by_experiment_kind(tmp_path):
         assert "    > CCE (1)" in labels
         assert any("DLE A" in label for label in labels)
         assert not any("?" in label for label in labels if "DLE A" in label)
+        assert not any("Model Lab Data" in label for label in labels)
     finally:
         dpg.destroy_context()
 
