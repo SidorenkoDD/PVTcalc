@@ -409,7 +409,7 @@
   <div class="meta-row">
     <span><strong>Ветка:</strong> gui/phase-0-1-dearpygui</span>
     <span><strong>Источник:</strong> фактические импорты + docs/GUI.md</span>
-    <span><strong>Обновлено:</strong> 2026-07-19</span>
+    <span><strong>Обновлено:</strong> 2026-07-24</span>
   </div>
 </div>
 
@@ -471,7 +471,7 @@
       <div class="layer">
         <div class="layer-label">СЛОЙ 5<span class="name">GUI services</span></div>
         <div class="node-row">
-          <div class="node live"><span class="file">flash / experiment / phase_envelope</span><span class="desc">валидация, deep copy, перевод единиц, JSON-снимок</span></div>
+          <div class="node live"><span class="file">flash / experiment / phase_envelope</span><span class="desc">перевод UI-единиц, orchestration и JSON-снимок; расчёт через публичные фасады</span></div>
           <div class="node"><span class="file">composition / project / model_repository</span><span class="desc">редактирование, импорт, каталог и модели</span></div>
           <div class="node"><span class="file">clipboard / export / settings</span><span class="desc">таблицы, E300, read-only constants</span></div>
         </div>
@@ -484,7 +484,7 @@
           <div class="node live"><span class="file">CompositionalModel</span><span class="desc">composition + result store + sub-facades</span></div>
           <div class="node live"><span class="file">ExperimentsFacade</span><span class="desc">dle / cce / separator → DataFrame</span></div>
           <div class="node live"><span class="file">PhaseEnvelopeFacade</span><span class="desc">bubble / dew / grid / ssm / newton / critical</span></div>
-          <div class="node live"><span class="file">VLE/Flash.py</span><span class="desc">GUI использует напрямую для корректной однофазной ветви</span></div>
+          <div class="node live"><span class="file">CompositionalModel.flash()</span><span class="desc">единый одно-/двухфазный контракт; внутри вызывает VLE/Flash.py</span></div>
         </div>
       </div>
       <div class="layer-arrow">▲ использует</div>
@@ -520,7 +520,7 @@
       </div>
     </div>
   </div>
-  <p class="sheet-foot">Архитектурное исключение: <code>flash_service</code> вызывает <code>VLE.Flash</code> напрямую, потому что текущий <code>CompositionalModel.flash()</code> не является полным одно-/двухфазным контрактом. Это отдельная задача R2.1 в ROADMAP.md.</p>
+  <p class="sheet-foot">Граница GUI↔ядро: сервисы переводят UI-единицы и сериализуют результат, а расчёт Flash проходит через <code>CompositionalModel.flash()</code>. Публичный фасад изолирует состав, валидирует P/T и возвращает типизированный <code>FlashResult</code>; низкоуровневый <code>VLE.Flash</code> остаётся внутренним алгоритмом.</p>
 </section>
 
 <!-- ===================== SHEET 2 ===================== -->
@@ -769,7 +769,7 @@
 </section>
 
 <footer class="colophon">
-  PVTcalc · gui + calc_core — карта сверена с кодом и документацией, 2026-07-21
+  PVTcalc · gui + calc_core — карта сверена с кодом и документацией, 2026-07-24
 </footer>
 
 </body>
