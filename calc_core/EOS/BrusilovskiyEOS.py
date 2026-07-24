@@ -122,6 +122,7 @@ class BrusilovskiyEOS(EOS):
             dtype=np.float64,
             count=self._nc
         )
+
         self._cpen = np.fromiter(
             (comp_data['peneloux_correction'][c] for c in self._components),
             dtype=np.float64,

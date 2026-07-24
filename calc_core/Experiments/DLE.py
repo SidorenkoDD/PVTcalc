@@ -215,7 +215,7 @@ class DLE:
         # 4. Обнуление выше p_sat и на последней ступени
         gas_vol_stc_arr = np.where(p_arr >= p_sat, 0.0, gas_vol_stc_arr)
         # gas_vol_stc_arr[-1] = 0.0
-
+        print(gas_vol_stc_arr)
         # 5. Кумулятивная сумма и инверсия (векторизованно)
         cumulative_sum = np.cumsum(gas_vol_stc_arr)
         gas_stc_acc_reverted = cumulative_sum[-1] - cumulative_sum
